@@ -1,5 +1,5 @@
 from mininet.net import Mininet
-from mininet.node import OVSController
+from mininet.node import Controller
 from mininet.link import TCLink
 from mininet.log import setLogLevel
 
@@ -7,7 +7,7 @@ from mininet.log import setLogLevel
 def create_network():
 
     net = Mininet(
-        controller=OVSController,
+        controller=Controller,
         link=TCLink
     )
 
