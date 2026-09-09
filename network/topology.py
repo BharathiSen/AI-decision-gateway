@@ -1,5 +1,5 @@
 from mininet.net import Mininet
-from mininet.node import Controller
+from mininet.node import OVSController
 from mininet.link import TCLink
 from mininet.log import setLogLevel
 from mininet.cli import CLI
