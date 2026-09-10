@@ -46,8 +46,12 @@ def create_network():
 
     net = Mininet(controller=None, link=TCLink)
 
-    hostA = net.addHost("hostA")
-    hostB = net.addHost("hostB")
+    # ip=None (not omitted) is required here: Mininet.addHost() auto-assigns
+    # a default 10.0.0.x/8 IP into the node's params when 'ip' is omitted
+    # entirely, and that default gets re-applied (clobbering the real IP
+    # set below via addLink) when net.start() calls each host's config().
+    hostA = net.addHost("hostA", ip=None)
+    hostB = net.addHost("hostB", ip=None)
 
     r1 = net.addHost("r1", cls=LinuxRouter, ip=None)
     r2 = net.addHost("r2", cls=LinuxRouter, ip=None)

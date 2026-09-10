@@ -1,10 +1,10 @@
 """
-Runtime fault injection for the Phase 1 network: congestion, latency,
-packet loss, and primary/backup link failure.
+Runtime fault injection: congestion, latency, packet loss, and primary/backup link failure.
 
 Each method mutates the already-running Mininet network in place, so a
 telemetry collector polling the network afterwards observes the actual
 new state -- nothing here writes to a telemetry file directly.
+
 """
 
 try:

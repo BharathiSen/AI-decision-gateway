@@ -2,10 +2,7 @@
 Live telemetry / topology collector.
 
 collect_current_state() re-reads the actual running network every time
-it is called -- it never returns a cached or static snapshot. This is
-the minimum needed to satisfy Phase 1's success condition (the network
-state can genuinely be observed from Python); Phase 2 formalizes and
-extends this into the full telemetry pipeline.
+it is called -- it never returns a cached or static snapshot.
 """
 
 import re
