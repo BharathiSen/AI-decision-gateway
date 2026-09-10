@@ -1,0 +1,13 @@
+# Phase 1 (network emulation) runs entirely on the Mininet Python API,
+# which ships with the system-wide Mininet install and is NOT installed
+# via pip. In the Ubuntu VM, if Mininet isn't already installed:
+#
+#   git clone https://github.com/mininet/mininet
+#   mininet/util/install.sh -a
+#
+# This must be run with the VM's system Python (not a virtualenv),
+# since the mininet package is installed system-wide alongside
+# Open vSwitch.
+#
+# Nothing else is required for Phase 1. Later phases (crypto signing,
+# the AI decision agent, etc.) will add their own dependencies here.

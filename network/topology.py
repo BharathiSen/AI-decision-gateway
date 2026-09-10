@@ -1,84 +1,152 @@
+"""
+Phase 1 network topology: a dynamic emulated network with a primary and
+backup path between two hosts, built from real Linux routers so the
+network state (routing tables, interface status, link conditions) is
+something a telemetry collector can actually observe -- not simulated.
+
+                    r2
+                  /    \\
+    hostA -- r1              r4 -- hostB
+                  \\    /
+                    r3
+
+Primary path : hostA -> r1 -> r2 -> r4 -> hostB
+Backup path  : hostA -> r1 -> r3 -> r4 -> hostB
+
+Run standalone for manual poking around:
+
+    sudo python3 network/topology.py
+
+Or via the full Phase 1 CLI (recommended, adds fault-injection commands):
+
+    sudo python3 main.py
+"""
+
 from mininet.net import Mininet
-from mininet.node import OVSController
+from mininet.node import Node
 from mininet.link import TCLink
-from mininet.log import setLogLevel
+from mininet.log import setLogLevel, info
 from mininet.cli import CLI
+
+try:
+    from network import controller as ctl
+except ImportError:
+    import controller as ctl
+
+
+BASELINE_LINK_PARAMS = dict(bw=10, delay="5ms", loss=0)
+
+
+class LinuxRouter(Node):
+    """A Mininet Node with IP forwarding enabled -- a real L3 router."""
+
+    def config(self, **params):
+        super(LinuxRouter, self).config(**params)
+        self.cmd("sysctl -w net.ipv4.ip_forward=1")
+
+    def terminate(self):
+        self.cmd("sysctl -w net.ipv4.ip_forward=0")
+        super(LinuxRouter, self).terminate()
 
 
 def create_network():
+    """Build and start the Phase 1 emulated network.
 
-    net = Mininet(
-        controller=Controller,
-        link=TCLink
+    Returns {"net": <Mininet>, "links": {name: <Link>}} so other modules
+    (fault injector, controller, telemetry collector) can reference each
+    hop by name instead of re-discovering topology internals.
+    """
+
+    net = Mininet(controller=None, link=TCLink)
+
+    hostA = net.addHost("hostA")
+    hostB = net.addHost("hostB")
+
+    r1 = net.addHost("r1", cls=LinuxRouter, ip=None)
+    r2 = net.addHost("r2", cls=LinuxRouter, ip=None)
+    r3 = net.addHost("r3", cls=LinuxRouter, ip=None)
+    r4 = net.addHost("r4", cls=LinuxRouter, ip=None)
+
+    links = {}
+
+    links["hostA-r1"] = net.addLink(
+        hostA, r1,
+        intfName1="hostA-eth0", intfName2="r1-eth0",
+        params1={"ip": "10.0.1.10/24"},
+        params2={"ip": "10.0.1.1/24"},
+        **BASELINE_LINK_PARAMS,
     )
 
-    # Controller
-    net.addController("c0")
-
-    # Hosts
-    h1 = net.addHost("h1", ip="10.0.0.1/24")
-    h2 = net.addHost("h2", ip="10.0.0.2/24")
-
-    # Switches
-    s1 = net.addSwitch("s1")
-    s2 = net.addSwitch("s2")
-    s3 = net.addSwitch("s3")
-    s4 = net.addSwitch("s4")
-
-    # Host connections
-    net.addLink(h1, s1)
-    net.addLink(s4, h2)
-
-    # PRIMARY PATH
-    # h1 -> s1 -> s2 -> s4 -> h2
-
-    net.addLink(
-        s1, s2,
-        bw=10,
-        delay="5ms",
-        loss=0
+    links["r1-r2"] = net.addLink(
+        r1, r2,
+        intfName1="r1-eth1", intfName2="r2-eth0",
+        params1={"ip": "10.0.12.1/24"},
+        params2={"ip": "10.0.12.2/24"},
+        **BASELINE_LINK_PARAMS,
     )
 
-    net.addLink(
-        s2, s4,
-        bw=10,
-        delay="5ms",
-        loss=0
+    links["r1-r3"] = net.addLink(
+        r1, r3,
+        intfName1="r1-eth2", intfName2="r3-eth0",
+        params1={"ip": "10.0.13.1/24"},
+        params2={"ip": "10.0.13.2/24"},
+        **BASELINE_LINK_PARAMS,
     )
 
-    # BACKUP PATH
-    # h1 -> s1 -> s3 -> s4 -> h2
-
-    net.addLink(
-        s1, s3,
-        bw=10,
-        delay="5ms",
-        loss=0
+    links["r2-r4"] = net.addLink(
+        r2, r4,
+        intfName1="r2-eth1", intfName2="r4-eth0",
+        params1={"ip": "10.0.24.1/24"},
+        params2={"ip": "10.0.24.2/24"},
+        **BASELINE_LINK_PARAMS,
     )
 
-    net.addLink(
-        s3, s4,
-        bw=10,
-        delay="5ms",
-        loss=0
+    links["r3-r4"] = net.addLink(
+        r3, r4,
+        intfName1="r3-eth1", intfName2="r4-eth1",
+        params1={"ip": "10.0.34.1/24"},
+        params2={"ip": "10.0.34.2/24"},
+        **BASELINE_LINK_PARAMS,
     )
 
-    # Start network
+    links["r4-hostB"] = net.addLink(
+        r4, hostB,
+        intfName1="r4-eth2", intfName2="hostB-eth0",
+        params1={"ip": "10.0.4.1/24"},
+        params2={"ip": "10.0.4.10/24"},
+        **BASELINE_LINK_PARAMS,
+    )
+
     net.start()
 
-    return net
+    hostA.cmd("ip route add default via 10.0.1.1")
+    hostB.cmd("ip route add default via 10.0.4.1")
+
+    # r2 and r3 each sit on exactly one path, so they just need routes
+    # back to both edge LANs.
+    r2.cmd("ip route add 10.0.1.0/24 via 10.0.12.1 dev r2-eth0")
+    r2.cmd("ip route add 10.0.4.0/24 via 10.0.24.2 dev r2-eth1")
+
+    r3.cmd("ip route add 10.0.1.0/24 via 10.0.13.1 dev r3-eth0")
+    r3.cmd("ip route add 10.0.4.0/24 via 10.0.34.2 dev r3-eth1")
+
+    # r1/r4 are where path selection actually happens. Start on primary.
+    ctl.set_active_path(net, "primary")
+
+    return {"net": net, "links": links}
 
 
 if __name__ == "__main__":
-
     setLogLevel("info")
 
-    net = create_network()
+    state = create_network()
+    net = state["net"]
 
-    print("\nNetwork started successfully!")
+    info("\n*** Phase 1 network is up.\n")
+    info("*** Primary path: hostA -> r1 -> r2 -> r4 -> hostB\n")
+    info("*** Backup path : hostA -> r1 -> r3 -> r4 -> hostB\n")
+    info("*** (Run 'sudo python3 main.py' instead for fault-injection commands.)\n\n")
 
-    # Open Mininet CLI
     CLI(net)
 
-    # Stop network when CLI exits
     net.stop()
