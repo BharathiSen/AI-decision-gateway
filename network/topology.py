@@ -1,25 +1,12 @@
 """
-Phase 1 network topology: a dynamic emulated network with a primary and
-backup path between two hosts, built from real Linux routers so the
-network state (routing tables, interface status, link conditions) is
-something a telemetry collector can actually observe -- not simulated.
-
-                    r2
-                  /    \\
-    hostA -- r1              r4 -- hostB
-                  \\    /
-                    r3
 
 Primary path : hostA -> r1 -> r2 -> r4 -> hostB
 Backup path  : hostA -> r1 -> r3 -> r4 -> hostB
 
-Run standalone for manual poking around:
+Run standalone for manual poking around: sudo python3 network/topology.py
 
-    sudo python3 network/topology.py
+For poking failures with commands: sudo python3 main.py
 
-Or via the full Phase 1 CLI (recommended, adds fault-injection commands):
-
-    sudo python3 main.py
 """
 
 from mininet.net import Mininet
