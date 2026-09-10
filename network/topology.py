@@ -37,7 +37,7 @@ class LinuxRouter(Node):
 
 
 def create_network():
-    """Build and start the Phase 1 emulated network.
+    """Build and start the emulated network.
 
     Returns {"net": <Mininet>, "links": {name: <Link>}} so other modules
     (fault injector, controller, telemetry collector) can reference each
@@ -148,7 +148,7 @@ if __name__ == "__main__":
     state = create_network()
     net = state["net"]
 
-    info("\n*** Phase 1 network is up.\n")
+    info("\n*** Network is up.\n")
     info("*** Primary path: hostA -> r1 -> r2 -> r4 -> hostB\n")
     info("*** Backup path : hostA -> r1 -> r3 -> r4 -> hostB\n")
     info("*** (Run 'sudo python3 main.py' instead for fault-injection commands.)\n\n")
