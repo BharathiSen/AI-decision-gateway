@@ -72,7 +72,7 @@ def create_network():
     links["hostA-r1"] = net.addLink(
         hostA, r1,
         intfName1="hostA-eth0", intfName2="r1-eth0",
-        params1={"ip": "10.0.1.10/24"},
+        params1={"ip": "10.0.1.2/24"},
         params2={"ip": "10.0.1.1/24"},
         **BASELINE_LINK_PARAMS,
     )
@@ -113,11 +113,26 @@ def create_network():
         r4, hostB,
         intfName1="r4-eth2", intfName2="hostB-eth0",
         params1={"ip": "10.0.4.1/24"},
-        params2={"ip": "10.0.4.10/24"},
+        params2={"ip": "10.0.4.2/24"},
         **BASELINE_LINK_PARAMS,
     )
 
     net.start()
+
+    # IP forwarding is already enabled per-router via LinuxRouter.config()
+    # above, but that relies on Mininet's build()/configDefault() dispatch
+    # actually invoking it. Set it explicitly here too so it's impossible
+    # to miss when auditing/debugging, and disable reverse-path filtering:
+    # r1 and r4 are each multi-homed (two router-facing links), and Linux's
+    # strict rp_filter can silently drop forwarded packets on a multi-homed
+    # node even when routing and ip_forward are both correct.
+    for router in (r1, r2, r3, r4):
+        router.cmd("sysctl -w net.ipv4.ip_forward=1")
+        router.cmd("sysctl -w net.ipv4.conf.all.rp_filter=0")
+        router.cmd("sysctl -w net.ipv4.conf.default.rp_filter=0")
+        for intf in router.intfList():
+            if intf.name != "lo":
+                router.cmd(f"sysctl -w net.ipv4.conf.{intf.name}.rp_filter=0")
 
     hostA.cmd("ip route add default via 10.0.1.1")
     hostB.cmd("ip route add default via 10.0.4.1")
