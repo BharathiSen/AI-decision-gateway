@@ -1,5 +1,4 @@
 """
-
 Primary path : hostA -> r1 -> r2 -> r4 -> hostB
 Backup path  : hostA -> r1 -> r3 -> r4 -> hostB
 
