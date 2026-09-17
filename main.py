@@ -18,6 +18,7 @@ Extra CLI commands (on top of the usual Mininet ones like pingall):
     fail_backup                   bring down the backup path (r1-r3)
     restore <link|all>            reset one link, or every link, to baseline
     reroute <primary|backup>      switch the active hostA<->hostB path
+    propose                       ask the AI agent to propose one action (never executes it)
 """
 
 import json
@@ -29,6 +30,7 @@ from network.topology import create_network
 from network.fault_injector import FaultInjector
 from network import controller as ctl
 from telemetry.collector import collect_current_state
+from agent.decision_agent import propose_decision
 
 
 class GatewayCLI(CLI):
@@ -87,6 +89,16 @@ class GatewayCLI(CLI):
         ctl.set_active_path(self.mn, path)
         print(f"active path is now: {ctl.get_active_path(self.mn)}")
 
+    def do_propose(self, _line):
+        "Ask the AI decision agent to propose one action for the current network state. It only proposes -- nothing here executes it."
+        state = collect_current_state(self.mn, self.links)
+        try:
+            decision = propose_decision(state)
+        except Exception as exc:
+            print(f"decision agent error: {exc}")
+            return
+        print(json.dumps(decision, indent=2))
+
 
 def main():
     setLogLevel("info")
@@ -99,7 +111,7 @@ def main():
     info("*** Primary path: hostA -> r1 -> r2 -> r4 -> hostB\n")
     info("*** Backup path : hostA -> r1 -> r3 -> r4 -> hostB\n")
     info("*** Extra commands: status, congestion, latency, packet_loss, "
-         "fail_primary, fail_backup, restore, reroute\n\n")
+         "fail_primary, fail_backup, restore, reroute, propose\n\n")
 
     GatewayCLI(net, links, injector)
 

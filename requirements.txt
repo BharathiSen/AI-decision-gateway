@@ -9,5 +9,13 @@
 # since the mininet package is installed system-wide alongside
 # Open vSwitch.
 #
-# Nothing else is required for Phase 1. Later phases (crypto signing,
-# the AI decision agent, etc.) will add their own dependencies here.
+# Nothing else is required for Phase 1/2.
+#
+# Phase 3 (the AI decision agent) needs the Anthropic SDK and a real
+# API key in the environment (ANTHROPIC_API_KEY). Unlike Phase 1/2,
+# this has no dependency on Mininet/Linux and can run anywhere Python
+# and this package are installed.
+anthropic
+
+# Later phases (crypto signing, etc.) will add their own dependencies
+# here.
