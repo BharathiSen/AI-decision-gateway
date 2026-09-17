@@ -63,8 +63,38 @@ class FaultInjector:
         return {"restored": link_name}
 
     def reset_all(self):
-        """Clear every fault and put the network back on the primary path."""
+        """Clear every fault and restore the complete network state."""
+
         for name in ALL_LINKS:
             self.restore_link(name)
+
+        # Restore static routes that depend on links which may have
+        # disappeared when those interfaces were brought down.
+        r2 = self.net.get("r2")
+        r3 = self.net.get("r3")
+
+        r2.cmd(
+            "ip route replace 10.0.1.0/24 "
+            "via 10.0.12.1 dev r2-eth0"
+        )
+        r2.cmd(
+            "ip route replace 10.0.4.0/24 "
+            "via 10.0.24.2 dev r2-eth1"
+        )
+
+        r3.cmd(
+            "ip route replace 10.0.1.0/24 "
+            "via 10.0.13.1 dev r3-eth0"
+        )
+        r3.cmd(
+            "ip route replace 10.0.4.0/24 "
+            "via 10.0.34.2 dev r3-eth1"
+        )
+
+        # Restore the selected primary path on r1 and r4.
         ctl.set_active_path(self.net, "primary")
-        return {"reset": ALL_LINKS, "active_path": "primary"}
+
+        return {
+            "reset": ALL_LINKS,
+            "active_path": "primary"
+        }
