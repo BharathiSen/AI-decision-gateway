@@ -1,8 +1,8 @@
 """
 AI decision agent.
 
-propose_decision() sends an LLM (OpenAI) the current network state
-(telemetry + topology, as returned by
+propose_decision() sends an LLM (via OpenRouter) the current network
+state (telemetry + topology, as returned by
 telemetry.collector.collect_current_state()), the action types the
 agent is allowed to choose from, and policy context, and returns the
 model's single proposed action as a plain dict:
@@ -21,13 +21,18 @@ allowed to execute).
 """
 
 import json
+import os
 
 from openai import OpenAI
 
-# Swap this if your account doesn't have access to this exact model --
-# any OpenAI chat model that supports response_format json_schema
-# (strict mode) works here unchanged.
-MODEL = "gpt-4o-mini"
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+# OpenRouter model slugs are "<provider>/<model>". Swap this for any
+# model your OpenRouter account has access to -- structured-output
+# support (response_format json_schema, strict mode) depends on the
+# underlying model OpenRouter routes to, not on OpenRouter itself, so
+# stick to models OpenRouter lists as supporting it if you change this.
+MODEL = "openai/gpt-4o-mini"
 
 DEFAULT_ALLOWED_ACTIONS = ["reroute_traffic", "no_action"]
 
@@ -100,8 +105,9 @@ def propose_decision(
     policy_context: dict describing operator policy/constraints
         (defaults to DEFAULT_POLICY_CONTEXT).
     target: identifier for the traffic flow this decision concerns.
-    client: an openai.OpenAI() instance to reuse; created fresh if
-        omitted (reads the API key from the OPENAI_API_KEY env var).
+    client: an openai.OpenAI() instance pointed at OpenRouter to reuse;
+        created fresh if omitted, reading the API key from the
+        OPENROUTER_API_KEY env var.
 
     Returns a plain dict: {"action", "target", "proposed_path", "reason"}.
     Raises ValueError if the model's chosen action somehow isn't one of
@@ -110,7 +116,10 @@ def propose_decision(
     """
     allowed_actions = list(allowed_actions or DEFAULT_ALLOWED_ACTIONS)
     policy_context = policy_context or DEFAULT_POLICY_CONTEXT
-    client = client or OpenAI()
+    client = client or OpenAI(
+        base_url=OPENROUTER_BASE_URL,
+        api_key=os.environ.get("OPENROUTER_API_KEY"),
+    )
 
     user_payload = {
         "current_network_state": network_state,
