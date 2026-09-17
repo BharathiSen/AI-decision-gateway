@@ -1,11 +1,11 @@
 """
-Network control API for the Phase 1 emulated network.
+Network control API for the emulated network.
 
 This is the single place that knows how to read and change the state of
 the running Mininet network: which path (primary/backup) is currently
 active, whether a link is up or down, and its current latency/loss/
-bandwidth. Fault injection, telemetry collection, and (in later phases)
-the verified-decision controller all go through here instead of poking
+bandwidth. Fault injection, telemetry collection, and the verified-
+decision controller (once built) all go through here instead of poking
 Mininet objects directly.
 """
 
@@ -44,9 +44,9 @@ def get_link(net, link_name, links=None):
 
 def set_active_path(net, path):
     """Point r1/r4's route to the far LAN at either the primary or
-    backup next hop. This is the single 'reroute traffic' primitive
-    later phases (the AI agent's proposed action, executed only after
-    verification) will call.
+    backup next hop. This is the single 'reroute traffic' primitive the
+    AI agent's proposed action will call, once it has been independently
+    verified.
     """
     if path not in ("primary", "backup"):
         raise ValueError("path must be 'primary' or 'backup'")

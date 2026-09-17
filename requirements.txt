@@ -1,6 +1,6 @@
-# Phase 1 (network emulation) runs entirely on the Mininet Python API,
-# which ships with the system-wide Mininet install and is NOT installed
-# via pip. In the Ubuntu VM, if Mininet isn't already installed:
+# Network emulation runs entirely on the Mininet Python API, which
+# ships with the system-wide Mininet install and is NOT installed via
+# pip. In the Ubuntu VM, if Mininet isn't already installed:
 #
 #   git clone https://github.com/mininet/mininet
 #   mininet/util/install.sh -a
@@ -9,16 +9,16 @@
 # since the mininet package is installed system-wide alongside
 # Open vSwitch.
 #
-# Nothing else is required for Phase 1/2.
+# Nothing else is required for the network/telemetry layer.
 #
-# Phase 3 (the AI decision agent) calls OpenRouter (an OpenAI-API-
-# compatible gateway) via the OpenAI SDK, pointed at OpenRouter's
-# base_url. Needs a real key in the environment (OPENROUTER_API_KEY).
-# Unlike Phase 1/2, this has no dependency on Mininet/Linux and can run
-# anywhere Python and this package are installed. It also loads its
-# policy context from policy/policy.yaml, hence pyyaml.
+# The AI decision agent calls OpenRouter (an OpenAI-API-compatible
+# gateway) via the OpenAI SDK, pointed at OpenRouter's base_url. Needs
+# a real key in the environment (OPENROUTER_API_KEY). Unlike the
+# network/telemetry layer, this has no dependency on Mininet/Linux and
+# can run anywhere Python and this package are installed. It also
+# loads its policy context from policy/policy.yaml, hence pyyaml.
 openai
 pyyaml
 
-# Later phases (crypto signing, etc.) will add their own dependencies
-# here.
+# Future components (crypto signing, etc.) will add their own
+# dependencies here.

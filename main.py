@@ -1,5 +1,5 @@
 """
-Phase 1 entry point: build the emulated network, then drop into an
+Entry point: build the emulated network, then drop into an
 interactive Mininet CLI extended with commands for triggering each
 fault scenario and inspecting the live network state.
 
@@ -34,7 +34,7 @@ from agent.decision_agent import propose_decision
 
 
 class GatewayCLI(CLI):
-    """Mininet CLI extended with Phase 1 fault-injection commands."""
+    """Mininet CLI extended with fault-injection commands."""
 
     def __init__(self, net, links, injector, *args, **kwargs):
         self.links = links
@@ -107,7 +107,7 @@ def main():
     net, links = state["net"], state["links"]
     injector = FaultInjector(net, links)
 
-    info("\n*** Phase 1 network is up.\n")
+    info("\n*** Network is up.\n")
     info("*** Primary path: hostA -> r1 -> r2 -> r4 -> hostB\n")
     info("*** Backup path : hostA -> r1 -> r3 -> r4 -> hostB\n")
     info("*** Extra commands: status, congestion, latency, packet_loss, "
