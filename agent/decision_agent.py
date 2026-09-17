@@ -9,15 +9,9 @@ model's single proposed action as a plain dict:
 
     {"action": ..., "target": ..., "proposed_path": [...], "reason": ...}
 
-No confidence score -- that's deliberate, per the Phase 3 spec.
-
 Important rule: this module can only PROPOSE. It has no import of, and
 no access to, anything that can change the network (network.controller,
-network.fault_injector) -- that access is deliberately absent so "the
-AI cannot execute" is structural, not just a docstring promise. Whether
-a proposal is ever carried out is for later phases to decide (evidence,
-signing, independent verification, and only then a controller that is
-allowed to execute).
+network.fault_injector).
 """
 
 import json
@@ -27,19 +21,12 @@ from openai import OpenAI
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
-# OpenRouter model slugs are "<provider>/<model>". Swap this for any
-# model your OpenRouter account has access to -- structured-output
-# support (response_format json_schema, strict mode) depends on the
-# underlying model OpenRouter routes to, not on OpenRouter itself, so
-# stick to models OpenRouter lists as supporting it if you change this.
 MODEL = "openai/gpt-4o-mini"
 
 DEFAULT_ALLOWED_ACTIONS = ["reroute_traffic", "no_action"]
 
-# Router names here match the real Mininet node names (network/topology.py),
-# not the capitalized "R1"/"R2" illustration in docs/phases.md, so a
-# proposed_path can be handed straight to network.controller.set_active_path()
-# without a translation step.
+# Router names here match the real Mininet node names (network/topology.py)
+
 DEFAULT_POLICY_CONTEXT = {
     "primary_path": ["r1", "r2", "r4"],
     "backup_path": ["r1", "r3", "r4"],
