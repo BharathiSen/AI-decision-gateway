@@ -69,19 +69,34 @@ def get_active_path(net):
     return "none"
 
 
+def _intf_is_up(intf):
+    """Read the kernel's own link-state for one interface via sysfs,
+    rather than Mininet's isUp()/ifconfig() helpers -- those shell out
+    to the legacy net-tools `ifconfig` binary, which recent Ubuntu
+    releases don't install by default. If it's missing, isUp() silently
+    reports "down" forever (no error, no crash -- it just never finds
+    the string "UP" in an "ifconfig: command not found" message), which
+    would make every link look permanently down in telemetry even after
+    a real restore. /sys/class/net/<intf>/operstate has no such
+    dependency: it's the kernel's own state, always present.
+    """
+    operstate = intf.node.cmd(f"cat /sys/class/net/{intf.name}/operstate").strip()
+    return operstate == "up"
+
+
 def is_link_up(link):
     """True if both ends of a link report their interface as up."""
-    return link.intf1.isUp() and link.intf2.isUp()
+    return _intf_is_up(link.intf1) and _intf_is_up(link.intf2)
 
 
 def link_down(link):
-    link.intf1.ifconfig("down")
-    link.intf2.ifconfig("down")
+    link.intf1.node.cmd(f"ip link set dev {link.intf1.name} down")
+    link.intf2.node.cmd(f"ip link set dev {link.intf2.name} down")
 
 
 def link_up(link):
-    link.intf1.ifconfig("up")
-    link.intf2.ifconfig("up")
+    link.intf1.node.cmd(f"ip link set dev {link.intf1.name} up")
+    link.intf2.node.cmd(f"ip link set dev {link.intf2.name} up")
 
 
 def configure_link(link, bw=None, delay=None, loss=None):
