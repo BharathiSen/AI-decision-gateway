@@ -1,8 +1,11 @@
 """
-propose_decision() sends Claude the current network state (telemetry +
-topology, as returned by telemetry.collector.collect_current_state()),
-the action types the agent is allowed to choose from, and policy
-context, and returns Claude's single proposed action as a plain dict:
+AI decision agent.
+
+propose_decision() sends an LLM (OpenAI) the current network state
+(telemetry + topology, as returned by
+telemetry.collector.collect_current_state()), the action types the
+agent is allowed to choose from, and policy context, and returns the
+model's single proposed action as a plain dict:
 
     {"action": ..., "target": ..., "proposed_path": [...], "reason": ...}
 
@@ -19,9 +22,12 @@ allowed to execute).
 
 import json
 
-import anthropic
+from openai import OpenAI
 
-MODEL = "claude-opus-5"
+# Swap this if your account doesn't have access to this exact model --
+# any OpenAI chat model that supports response_format json_schema
+# (strict mode) works here unchanged.
+MODEL = "gpt-4o-mini"
 
 DEFAULT_ALLOWED_ACTIONS = ["reroute_traffic", "no_action"]
 
@@ -84,7 +90,7 @@ def propose_decision(
     target="HostA_to_HostB",
     client=None,
 ):
-    """Ask Claude to propose one action for the given network state.
+    """Ask the LLM to propose one action for the given network state.
 
     network_state: the dict returned by
         telemetry.collector.collect_current_state() -- current
@@ -94,8 +100,8 @@ def propose_decision(
     policy_context: dict describing operator policy/constraints
         (defaults to DEFAULT_POLICY_CONTEXT).
     target: identifier for the traffic flow this decision concerns.
-    client: an anthropic.Anthropic() instance to reuse; created fresh
-        if omitted.
+    client: an openai.OpenAI() instance to reuse; created fresh if
+        omitted (reads the API key from the OPENAI_API_KEY env var).
 
     Returns a plain dict: {"action", "target", "proposed_path", "reason"}.
     Raises ValueError if the model's chosen action somehow isn't one of
@@ -104,7 +110,7 @@ def propose_decision(
     """
     allowed_actions = list(allowed_actions or DEFAULT_ALLOWED_ACTIONS)
     policy_context = policy_context or DEFAULT_POLICY_CONTEXT
-    client = client or anthropic.Anthropic()
+    client = client or OpenAI()
 
     user_payload = {
         "current_network_state": network_state,
@@ -113,18 +119,23 @@ def propose_decision(
         "target": target,
     }
 
-    response = client.messages.create(
+    response = client.chat.completions.create(
         model=MODEL,
-        max_tokens=1024,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": json.dumps(user_payload, indent=2)}],
-        output_config={
-            "format": {"type": "json_schema", "schema": _build_schema(allowed_actions)}
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": json.dumps(user_payload, indent=2)},
+        ],
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "network_decision",
+                "strict": True,
+                "schema": _build_schema(allowed_actions),
+            },
         },
     )
 
-    text = next(b.text for b in response.content if b.type == "text")
-    decision = json.loads(text)
+    decision = json.loads(response.choices[0].message.content)
 
     if decision["action"] not in allowed_actions:
         raise ValueError(

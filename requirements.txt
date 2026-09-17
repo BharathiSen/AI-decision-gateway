@@ -11,11 +11,11 @@
 #
 # Nothing else is required for Phase 1/2.
 #
-# Phase 3 (the AI decision agent) needs the Anthropic SDK and a real
-# API key in the environment (ANTHROPIC_API_KEY). Unlike Phase 1/2,
-# this has no dependency on Mininet/Linux and can run anywhere Python
-# and this package are installed.
-anthropic
+# Phase 3 (the AI decision agent) needs the OpenAI SDK and a real API
+# key in the environment (OPENAI_API_KEY). Unlike Phase 1/2, this has
+# no dependency on Mininet/Linux and can run anywhere Python and this
+# package are installed.
+openai
 
 # Later phases (crypto signing, etc.) will add their own dependencies
 # here.
