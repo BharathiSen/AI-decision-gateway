@@ -15,8 +15,10 @@
 # compatible gateway) via the OpenAI SDK, pointed at OpenRouter's
 # base_url. Needs a real key in the environment (OPENROUTER_API_KEY).
 # Unlike Phase 1/2, this has no dependency on Mininet/Linux and can run
-# anywhere Python and this package are installed.
+# anywhere Python and this package are installed. It also loads its
+# policy context from policy/policy.yaml, hence pyyaml.
 openai
+pyyaml
 
 # Later phases (crypto signing, etc.) will add their own dependencies
 # here.

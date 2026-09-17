@@ -16,7 +16,9 @@ network.fault_injector).
 
 import json
 import os
+from pathlib import Path
 
+import yaml
 from openai import OpenAI
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -25,24 +27,16 @@ MODEL = "openai/gpt-4o-mini"
 
 DEFAULT_ALLOWED_ACTIONS = ["reroute_traffic", "no_action"]
 
-# Router names here match the real Mininet node names (network/topology.py)
+# Policy context now lives in policy/policy.yaml (sibling of this file's
+# package), not as a literal here, so it can be edited without touching
+# code. Router names in it match the real Mininet node names
+# (network/topology.py), not the capitalized "R1"/"R2" illustration in
+# docs/phases.md, so a proposed_path can be handed straight to
+# network.controller.set_active_path() without a translation step.
+_POLICY_PATH = Path(__file__).resolve().parent.parent / "policy" / "policy.yaml"
 
-DEFAULT_POLICY_CONTEXT = {
-    "primary_path": ["r1", "r2", "r4"],
-    "backup_path": ["r1", "r3", "r4"],
-    "rules": [
-        "Only reroute hostA<->hostB traffic between the pre-approved "
-        "primary path (r1-r2-r4) and backup path (r1-r3-r4). No other "
-        "path is permitted.",
-        "Propose reroute_traffic only when telemetry shows the "
-        "currently active path is degraded or down (packet loss, high "
-        "latency, or a link that is administratively down) and the "
-        "other path is currently healthy.",
-        "Propose no_action when the active path is healthy, or when "
-        "neither path is currently usable (rerouting to an equally "
-        "broken path helps nobody).",
-    ],
-}
+with open(_POLICY_PATH, "r") as _f:
+    DEFAULT_POLICY_CONTEXT = yaml.safe_load(_f)
 
 SYSTEM_PROMPT = """You are a network-reliability decision agent for a small \
 dual-path network: hostA -- r1 -- {r2 or r3} -- r4 -- hostB.
