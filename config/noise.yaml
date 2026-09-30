@@ -1,0 +1,29 @@
+version: 1
+
+noise_levels:
+  - id: N0
+    description: No intentional background noise
+    background_traffic:
+      enabled: false
+    jitter:
+      enabled: false
+
+  - id: N1
+    description: Moderate background load and jitter
+    background_traffic:
+      enabled: true
+      rate_mbit: 2
+    jitter:
+      enabled: true
+      delay_ms: 10
+      variation_ms: 5
+
+  - id: N2
+    description: High background load and jitter
+    background_traffic:
+      enabled: true
+      rate_mbit: 5
+    jitter:
+      enabled: true
+      delay_ms: 30
+      variation_ms: 15

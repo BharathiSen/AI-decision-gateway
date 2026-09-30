@@ -1,0 +1,23 @@
+version: 1
+
+compounds:
+  - id: C1
+    description: Packet loss on primary path and access-link failure
+    components: [F3, F11]
+    split: development
+    injection_order: [F3, F11]
+    cleanup_order: [F11, F3]
+
+  - id: C2
+    description: Primary queue congestion with backup link failure
+    components: [F6, F12]
+    split: development
+    injection_order: [F6, F12]
+    cleanup_order: [F12, F6]
+
+  - id: C3
+    description: Packet loss and congestion on primary path
+    components: [F3, F6]
+    split: development
+    injection_order: [F3, F6]
+    cleanup_order: [F6, F3]

@@ -1,0 +1,207 @@
+version: 1
+
+faults:
+  # Healthy baseline
+  - id: H0
+    description: Healthy network with no injected fault
+    split: baseline
+    injection:
+      type: none
+    target: null
+    params: {}
+    cleanup:
+      type: none
+    initial_acceptable_actions: [NO_ACTION]
+
+  # Single faults
+  - id: F1
+    description: Primary R2-R4 link failure
+    split: development
+    injection:
+      type: link_down
+    target:
+      link: primary_r2_r4
+    params: {}
+    cleanup:
+      type: link_up
+    initial_acceptable_actions: [REROUTE]
+
+  - id: F2
+    description: R1-R2 link failure
+    split: development
+    injection:
+      type: link_down
+    target:
+      link: primary_r1_r2
+    params: {}
+    cleanup:
+      type: link_up
+    initial_acceptable_actions: [REROUTE]
+
+  - id: F3
+    description: Packet loss on R2-R4
+    split: development
+    injection:
+      type: netem_loss
+    target:
+      link: primary_r2_r4
+      direction: r2_to_r4
+    params:
+      loss_percent: [5, 20]
+    cleanup:
+      type: qdisc_reset
+    initial_acceptable_actions: [REROUTE]
+
+  - id: F4
+    description: Packet corruption at R2 egress
+    split: development
+    injection:
+      type: netem_corrupt
+    target:
+      link: primary_r2_r4
+      direction: r2_to_r4
+    params:
+      corrupt_percent: [1, 5]
+    cleanup:
+      type: qdisc_reset
+    initial_acceptable_actions: [REROUTE]
+
+  - id: F5
+    description: High latency on R2-R4
+    split: development
+    injection:
+      type: netem_delay
+    target:
+      link: primary_r2_r4
+      direction: r2_to_r4
+    params:
+      delay_ms: [100, 200]
+    cleanup:
+      type: qdisc_reset
+    initial_acceptable_actions: [REROUTE]
+
+  - id: F6
+    description: Queue congestion on R2-R4
+    split: development
+    injection:
+      type: tbf_congestion
+    target:
+      link: primary_r2_r4
+      direction: r2_to_r4
+    params:
+      rate_mbit: [1, 5]
+      background_traffic: true
+    cleanup:
+      type: traffic_and_qdisc_reset
+    initial_acceptable_actions: [REROUTE]
+
+  - id: F7
+    description: Congestion on R1 egress
+    split: development
+    injection:
+      type: tbf_congestion
+    target:
+      link: primary_r1_r2
+      direction: r1_to_r2
+    params:
+      rate_mbit: [1, 5]
+      background_traffic: true
+    cleanup:
+      type: traffic_and_qdisc_reset
+    initial_acceptable_actions: [REROUTE]
+
+  - id: F8
+    description: Intermittent R2-R4 link failure
+    split: development
+    injection:
+      type: link_flap
+    target:
+      link: primary_r2_r4
+    params:
+      interval_seconds: [2, 5]
+      cycles: 3
+    cleanup:
+      type: stop_flap_and_link_up
+    initial_acceptable_actions: [REROUTE]
+
+  - id: F9
+    description: Blackhole route for destination prefix at R2
+    split: development
+    injection:
+      type: blackhole_route
+    target:
+      node: r2
+      destination: 10.0.4.0/24
+    params: {}
+    cleanup:
+      type: delete_injected_route
+    initial_acceptable_actions: [REROUTE]
+
+  - id: F10
+    description: TCP port ACL drop at R4
+    split: development
+    injection:
+      type: acl_drop
+    target:
+      node: r4
+      direction: forward
+      protocol: tcp
+      port: 5201
+    params: {}
+    cleanup:
+      type: remove_injected_acl
+    initial_acceptable_actions: [REROUTE]
+
+  - id: F11
+    description: Loss on R4-hostB access link
+    split: development
+    injection:
+      type: netem_loss
+    target:
+      link: destination_access
+      direction: r4_to_hostB
+    params:
+      loss_percent: [5, 20]
+    cleanup:
+      type: qdisc_reset
+    initial_acceptable_actions: [NO_ACTION, REROUTE]
+
+  - id: F12
+    description: Backup R3-R4 link failure with primary healthy
+    split: development
+    injection:
+      type: link_down
+    target:
+      link: backup_r3_r4
+    params: {}
+    cleanup:
+      type: link_up
+    initial_acceptable_actions: [NO_ACTION]
+
+  # Unseen faults: never use for tuning or calibration
+  - id: U1
+    description: MTU mismatch on R2-R4
+    split: held_out
+    injection:
+      type: mtu_mismatch
+    target:
+      link: primary_r2_r4
+    params:
+      mtu_bytes: [576, 1200]
+    cleanup:
+      type: restore_mtu
+    initial_acceptable_actions: [REROUTE]
+
+  - id: U2
+    description: One-direction packet loss from R4 to R2
+    split: held_out
+    injection:
+      type: netem_loss
+    target:
+      link: primary_r2_r4
+      direction: r4_to_r2
+    params:
+      loss_percent: [5, 20]
+    cleanup:
+      type: qdisc_reset
+    initial_acceptable_actions: [REROUTE]
