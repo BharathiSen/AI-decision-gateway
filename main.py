@@ -41,6 +41,21 @@ class GatewayCLI(CLI):
         self.injector = injector
         CLI.__init__(self, net, *args, **kwargs)
 
+    def onecmd(self, line):
+        """Run one CLI command, catching anything it raises.
+
+        cmd.Cmd's own onecmd() doesn't catch exceptions, so an unhandled
+        one (e.g. a typo'd link name) would otherwise propagate all the
+        way up through cmdloop() and kill the whole process -- taking
+        the live Mininet network down with it. A typo should print an
+        error, not end the session.
+        """
+        try:
+            return CLI.onecmd(self, line)
+        except Exception as exc:
+            print(f"error: {exc}")
+            return False
+
     def do_status(self, _line):
         "Print the live network state (nodes, links, metrics) as JSON."
         state = collect_current_state(self.mn, self.links)

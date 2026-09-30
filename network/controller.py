@@ -34,7 +34,14 @@ def get_link(net, link_name, links=None):
     if links is not None and link_name in links:
         return links[link_name]
 
-    a, b = link_name.split("-")
+    parts = link_name.split("-")
+    if len(parts) != 2:
+        raise ValueError(
+            f"{link_name!r} isn't a valid link name -- expected the form "
+            f"'node1-node2', e.g. 'r1-r2'"
+        )
+
+    a, b = parts
     node_a, node_b = net.get(a), net.get(b)
     found = net.linksBetween(node_a, node_b)
     if not found:
