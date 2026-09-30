@@ -19,11 +19,6 @@ try:
 except ImportError:
     import controller as ctl
 
-try:
-    from network.interfaces import build_interface_map
-except ImportError:
-    from interfaces import build_interface_map
-
 
 BASELINE_LINK_PARAMS = dict(bw=10, delay="5ms", loss=0)
 
@@ -155,14 +150,6 @@ def create_network():
 
     # r1/r4 are where path selection actually happens. Start on primary.
     ctl.set_active_path(net, "primary")
-
-    # --- TEMPORARY: verify build_interface_map() against this real,
-    # running topology. Remove this block once you've confirmed the
-    # printed interface names look right. ---
-    interface_map = build_interface_map(net)
-    for link, endpoints in interface_map.items():
-        print(f"{link}: {endpoints}")
-    # --- end temporary verification ---
 
     return {"net": net, "links": links}
 
