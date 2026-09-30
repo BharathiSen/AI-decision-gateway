@@ -70,8 +70,10 @@ class FaultInjector:
 
         # Restore static routes that depend on links which may have
         # disappeared when those interfaces were brought down.
+        r1 = self.net.get("r1")
         r2 = self.net.get("r2")
         r3 = self.net.get("r3")
+        r4 = self.net.get("r4")
 
         r2.cmd(
             "ip route replace 10.0.1.0/24 "
@@ -90,6 +92,17 @@ class FaultInjector:
             "ip route replace 10.0.4.0/24 "
             "via 10.0.34.2 dev r3-eth1"
         )
+
+        # Same diagnostic-only routes added in topology.py, re-applied
+        # here for the same reason as the edge-LAN routes above -- so
+        # `pingall` still shows every node reachable after a fault
+        # cycle, not just on a fresh boot.
+        r1.cmd("ip route replace 10.0.24.0/24 via 10.0.12.2 dev r1-eth1")
+        r2.cmd("ip route replace 10.0.13.0/24 via 10.0.12.1 dev r2-eth0")
+        r3.cmd("ip route replace 10.0.12.0/24 via 10.0.13.1 dev r3-eth0")
+        r3.cmd("ip route replace 10.0.24.0/24 via 10.0.34.2 dev r3-eth1")
+        r4.cmd("ip route replace 10.0.12.0/24 via 10.0.24.1 dev r4-eth0")
+        r4.cmd("ip route replace 10.0.13.0/24 via 10.0.34.1 dev r4-eth1")
 
         # Restore the selected primary path on r1 and r4.
         ctl.set_active_path(self.net, "primary")

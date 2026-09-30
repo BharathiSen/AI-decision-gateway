@@ -135,6 +135,19 @@ def create_network():
     r3.cmd("ip route add 10.0.1.0/24 via 10.0.13.1 dev r3-eth0")
     r3.cmd("ip route add 10.0.4.0/24 via 10.0.34.2 dev r3-eth1")
 
+    # Nothing above this point is needed for hostA<->hostB traffic --
+    # routers only ever needed the two edge LANs. These extra routes
+    # exist purely so every router's *own* default-interface subnet
+    # (the transit link it was never otherwise told about) is reachable
+    # too, so diagnostics like `pingall` see a fully connected network
+    # instead of "expected" gaps to addresses nothing actually uses.
+    r1.cmd("ip route add 10.0.24.0/24 via 10.0.12.2 dev r1-eth1")
+    r2.cmd("ip route add 10.0.13.0/24 via 10.0.12.1 dev r2-eth0")
+    r3.cmd("ip route add 10.0.12.0/24 via 10.0.13.1 dev r3-eth0")
+    r3.cmd("ip route add 10.0.24.0/24 via 10.0.34.2 dev r3-eth1")
+    r4.cmd("ip route add 10.0.12.0/24 via 10.0.24.1 dev r4-eth0")
+    r4.cmd("ip route add 10.0.13.0/24 via 10.0.34.1 dev r4-eth1")
+
     # r1/r4 are where path selection actually happens. Start on primary.
     ctl.set_active_path(net, "primary")
 
