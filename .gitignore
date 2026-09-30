@@ -1,3 +1,6 @@
 /*docs
 
 .vscode/settings.json
+
+__pycache__/
+*.pyc
