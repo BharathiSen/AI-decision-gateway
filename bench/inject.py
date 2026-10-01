@@ -172,6 +172,27 @@ def _intf_obj(net, link_name, node):
     raise RuntimeError(f"{link_name}/{node}: interface {intf_name} not found on node")
 
 
+def _check_tc_result(link_name, node, intf_name, result):
+    """TCIntf.config() does NOT raise when a tc command fails -- verified
+    against Mininet's actual source: it only does
+    `for output in tcoutputs: if output != '': error(...)`, a log line,
+    never an exception. That means a failed rebuild command (e.g. from
+    a malformed value) can leave an interface silently half-configured
+    -- the root cause of the F6 bug this exists to catch: cleanup
+    appeared to run, but the qdisc it was supposed to rebuild was never
+    actually created, because the prior `tc qdisc del ... root` had
+    already succeeded while the rebuild silently failed.
+    """
+    if not result:
+        return
+    for output in result.get("tcoutputs", []):
+        if output:
+            raise RuntimeError(
+                f"{link_name}/{node} ({intf_name}): tc command failed "
+                f"during configure_one_end(): {output.strip()}"
+            )
+
+
 def configure_one_end(net, link_name, node, bw=None, delay=None, loss=None):
     """Apply tc bandwidth/delay/loss to only one node's interface on a
     link, via Mininet's own TCIntf.config() (so qdisc replacement stays
@@ -186,7 +207,8 @@ def configure_one_end(net, link_name, node, bw=None, delay=None, loss=None):
         params["delay"] = delay
     if loss is not None:
         params["loss"] = loss
-    intf.config(**params)
+    result = intf.config(**params)
+    _check_tc_result(link_name, node, intf.name, result)
     return {"link": link_name, "node": node, "interface": intf.name, **params}
 
 
@@ -538,6 +560,19 @@ def inject(net, fault_id, params=None, seed=None):
     elif injection == "tbf_congestion":
         link_name = target["link"]
         from_node, _, to_node = target["direction"].partition("_to_")
+        # Diagnostic only -- NOT used for cleanup below. A prior version
+        # of this branch used _capture_link_params()'s regex-parsed
+        # result for cleanup instead of the topology's known baseline;
+        # that's the confirmed root cause of F6 leaving the qdisc empty
+        # on reset (see investigation notes): the parsed value fed a
+        # malformed tc command, TCIntf.config() silently logs tc
+        # failures instead of raising (confirmed against its source),
+        # and the preceding `qdisc del` had already succeeded -- so the
+        # interface was left with nothing. Keeping the capture here only
+        # so params_not_captured/pre_injection_params stay informative;
+        # restoration itself uses reset_one_end()'s hardcoded
+        # ctl.BASELINE_LINK_PARAMS, the same values a direct
+        # configure_one_end() call already proved work.
         original, guessed = _capture_link_params(net, link_name, from_node)
         configure_one_end(net, link_name, from_node, bw=resolved["rate_mbit"])
 
@@ -556,7 +591,7 @@ def inject(net, fault_id, params=None, seed=None):
         # registered lambda closes over by reference, so appending to
         # it below still affects what that already-stored cleanup does
         # when it's eventually called -- no re-registration needed.
-        cleanups = [lambda: configure_one_end(net, link_name, from_node, **original)]
+        cleanups = [lambda: reset_one_end(net, link_name, from_node)]
         correlation_id = f"{fault_id}-{uuid.uuid4().hex[:8]}"
         _ACTIVE[correlation_id] = {
             "cleanup": lambda: [c() for c in cleanups],

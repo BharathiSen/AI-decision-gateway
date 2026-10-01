@@ -25,12 +25,22 @@ from bench import inject as inj
 # ---------------------------------------------------------------------------
 
 class FakeIntf:
+    """fail_tc, when set, makes config() mimic a REAL TCIntf.config()
+    that ran a tc command which failed -- i.e. it does NOT raise (that's
+    the whole point: Mininet's own source confirms it never raises on a
+    failed tc command), it just returns a result dict whose tcoutputs
+    contains the error text, exactly like the real thing does.
+    """
     def __init__(self, name):
         self.name = name
         self.config_calls = []
+        self.fail_tc = None
 
     def config(self, **kw):
         self.config_calls.append(kw)
+        if self.fail_tc:
+            return {"tcoutputs": [self.fail_tc], "parent": " parent 5:1 "}
+        return {"tcoutputs": [""], "parent": " parent 5:1 "}
 
 
 class FakeNode:
@@ -330,6 +340,105 @@ def test_fix4_unparseable_state_falls_back_and_says_so():
 
 
 # ---------------------------------------------------------------------------
+# F6 investigation: reset() was leaving the qdisc empty instead of
+# restoring 10Mbit htb + 5ms netem. Root cause: cleanup used
+# _capture_link_params()'s regex-parsed result (never verified against
+# real tc output) instead of the topology's known baseline; a bad
+# parsed value fed a malformed tc command, and TCIntf.config() -- per
+# its actual source -- never raises on a failed tc command, just logs
+# it, so the preceding `qdisc del` succeeded while the rebuild silently
+# failed, leaving nothing behind.
+# ---------------------------------------------------------------------------
+
+def test_f6_reset_restores_baseline_qdisc_not_empty():
+    """The actual regression test requested: inject F6, reset it, and
+    confirm the interface is told to go back to exactly 10Mbit/5ms/0%
+    -- not left empty, and not whatever a tc-output parse happened to
+    produce.
+    """
+    reset_module_state()
+    # Deliberately give the interface tc output that would mislead the
+    # old (now-removed) capture-based cleanup if it were still in use --
+    # proving the fix no longer depends on this at all for restoration.
+    net = FakeNet(node_kwargs={
+        "r2": {
+            "tc_class_out": "class htb 5:1 root prio 0 rate 999Mbit ceil 999Mbit burst 15Kb",
+            "tc_qdisc_out": "qdisc netem 10: parent 5:1 limit 1000 delay 9999.0ms loss 87%",
+        },
+    })
+    r2_eth1 = [i for i in net.get("r2").intfList() if i.name == "r2-eth1"][0]
+
+    cid = inj.inject(net, "F6", seed=1, params={"rate_mbit": 2, "background_traffic": False})
+    check(
+        "F6 injection applies the throttled bandwidth",
+        r2_eth1.config_calls[-1] == {"bw": 2},
+    )
+
+    result = inj.reset(cid)
+    restored = r2_eth1.config_calls[-1]
+
+    check(
+        "F6 FIX: reset() restores the topology's real baseline (10Mbit/5ms/0%), "
+        "NOT the misleading tc output (999Mbit/9999ms/87%) and NOT empty",
+        restored == dict(inj.ctl.BASELINE_LINK_PARAMS),
+        f"got {restored}",
+    )
+    check(
+        "connectivity proxy: the restored config matches a healthy link "
+        "(bw/delay/loss all present and non-degenerate) -- NOTE: this "
+        "confirms what configure_one_end() was told to apply, not that "
+        "a real kernel applied it; that still needs the Mininet VM",
+        restored.get("bw", 0) > 0 and restored.get("delay") and restored.get("loss") == 0,
+    )
+    check("reset() completed normally (not already_reset)", result["already_reset"] is False)
+
+
+def test_f6_cleanup_no_longer_calls_capture_based_restore():
+    """Confirm the fix structurally, not just by outcome: F6's cleanup
+    must come from reset_one_end() (ctl.BASELINE_LINK_PARAMS), not from
+    configure_one_end(**original) built off parsed tc output.
+    """
+    reset_module_state()
+    net = FakeNet()
+    with mock.patch.object(inj, "reset_one_end", wraps=inj.reset_one_end) as spy:
+        cid = inj.inject(net, "F6", seed=1, params={"rate_mbit": 2, "background_traffic": False})
+        inj.reset(cid)
+    check("F6 FIX: cleanup goes through reset_one_end(), the proven baseline path", spy.called)
+
+
+def test_configure_one_end_raises_on_silent_tc_failure():
+    """Change 1: a tc command that fails (per real TCIntf.config()'s own
+    behavior -- it logs, never raises) must now surface as an exception
+    from configure_one_end(), instead of looking like success.
+    """
+    reset_module_state()
+    net = FakeNet()
+    r2_eth1 = [i for i in net.get("r2").intfList() if i.name == "r2-eth1"][0]
+    r2_eth1.fail_tc = "RTNETLINK answers: Invalid argument"
+
+    try:
+        inj.configure_one_end(net, "primary_r2_r4", "r2", bw=5, delay="5ms", loss=0)
+        check("CHANGE 1: configure_one_end() raises when the underlying tc command failed", False)
+    except RuntimeError as e:
+        check(
+            "CHANGE 1: configure_one_end() raises when the underlying tc command failed",
+            True,
+        )
+        check("the raised error includes the real tc failure text", "Invalid argument" in str(e))
+
+
+def test_configure_one_end_still_succeeds_normally():
+    """The new check must not false-positive on a normal, successful call."""
+    reset_module_state()
+    net = FakeNet()
+    try:
+        result = inj.configure_one_end(net, "primary_r2_r4", "r2", bw=10, delay="5ms", loss=0)
+        check("CHANGE 1: a genuinely successful configure_one_end() still returns normally", result["bw"] == 10)
+    except Exception as e:
+        check("CHANGE 1: a genuinely successful configure_one_end() still returns normally", False, str(e))
+
+
+# ---------------------------------------------------------------------------
 
 def main():
     tests = [
@@ -344,6 +453,10 @@ def main():
         test_fix3_valid_faults_still_load,
         test_fix4_non_baseline_settings_are_captured_and_restored,
         test_fix4_unparseable_state_falls_back_and_says_so,
+        test_f6_reset_restores_baseline_qdisc_not_empty,
+        test_f6_cleanup_no_longer_calls_capture_based_restore,
+        test_configure_one_end_raises_on_silent_tc_failure,
+        test_configure_one_end_still_succeeds_normally,
     ]
     for t in tests:
         print(f"\n--- {t.__name__} ---")
