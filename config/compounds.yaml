@@ -21,3 +21,17 @@ compounds:
     split: development
     injection_order: [F3, F6]
     cleanup_order: [F6, F3]
+
+  - id: C4
+    description: Held-out combination of primary loss and access-link loss
+    components: [F3, F11]
+    split: held_out
+    injection_order: [F3, F11]
+    cleanup_order: [F11, F3]
+
+  - id: C5
+    description: Held-out combination of congestion and backup link down
+    components: [F6, F12]
+    split: held_out
+    injection_order: [F6, F12]
+    cleanup_order: [F12, F6]

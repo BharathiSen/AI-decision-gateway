@@ -1,0 +1,10 @@
+{
+  "pilot": {
+    "note": "Run sudo python3 bench/run_pilot.py --episodes 500 on Mininet VM",
+    "episodes": 0
+  },
+  "experiments": {
+    "count": 0,
+    "methods": {}
+  }
+}

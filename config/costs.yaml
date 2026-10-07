@@ -1,0 +1,31 @@
+version: 1
+
+# Approximate wall-clock seconds and relative traffic weight per test.
+tests:
+  T1_e2e_ping:
+    time_seconds: 2.5
+    traffic_weight: 0.1
+  T2_hop_ping:
+    time_seconds: 3.0
+    traffic_weight: 0.2
+  T4_mtu:
+    time_seconds: 2.0
+    traffic_weight: 0.05
+  T5_if_errors:
+    time_seconds: 0.5
+    traffic_weight: 0.0
+  T6_queue_stats:
+    time_seconds: 0.5
+    traffic_weight: 0.0
+  T7_route_check:
+    time_seconds: 1.0
+    traffic_weight: 0.0
+  T8_tcp_vs_ping:
+    time_seconds: 4.0
+    traffic_weight: 0.3
+  T9_oneway_loss:
+    time_seconds: 5.0
+    traffic_weight: 0.2
+  T10_speed:
+    time_seconds: 8.0
+    traffic_weight: 1.0

@@ -25,7 +25,18 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 MODEL = "openai/gpt-4o-mini"
 
-DEFAULT_ALLOWED_ACTIONS = ["reroute_traffic", "no_action"]
+DEFAULT_ALLOWED_ACTIONS = ["REROUTE", "DO_NOTHING", "ESCALATE"]
+DEFAULT_OAM_CATALOG = [
+    "T1_e2e_ping",
+    "T2_hop_ping",
+    "T4_mtu",
+    "T5_if_errors",
+    "T6_queue_stats",
+    "T7_route_check",
+    "T8_tcp_vs_ping",
+    "T9_oneway_loss",
+    "T10_speed",
+]
 
 # Policy context now lives in policy/policy.yaml (sibling of this file's
 # package), not as a literal here, so it can be edited without touching
@@ -54,6 +65,13 @@ the action involves one) the concrete router path using the real node \
 names given to you, and give a short, factual reason grounded in the \
 telemetry."""
 
+PREDICTION_SYSTEM_PROMPT = SYSTEM_PROMPT + """
+
+Also return up to five candidate causes. For each cause, predict how \
+named OAM tests from oam_test_catalog would read if that cause were true \
+(use test_id and a short expected field). You still do not execute \
+anything or choose which tests the gate runs."""
+
 
 def _build_schema(allowed_actions):
     return {
@@ -67,6 +85,31 @@ def _build_schema(allowed_actions):
         "required": ["action", "target", "proposed_path", "reason"],
         "additionalProperties": False,
     }
+
+
+def _build_prediction_schema(allowed_actions):
+    pred = {
+        "type": "object",
+        "properties": {
+            "test_id": {"type": "string"},
+            "expected": {"type": "string"},
+        },
+        "required": ["test_id", "expected"],
+        "additionalProperties": False,
+    }
+    cause = {
+        "type": "object",
+        "properties": {
+            "cause_id": {"type": "string"},
+            "predicted_tests": {"type": "array", "items": pred, "maxItems": 8},
+        },
+        "required": ["cause_id", "predicted_tests"],
+        "additionalProperties": False,
+    }
+    base = _build_schema(allowed_actions)
+    base["properties"]["causes"] = {"type": "array", "items": cause, "maxItems": 5}
+    base["required"].append("causes")
+    return base
 
 
 def propose_decision(
@@ -133,4 +176,58 @@ def propose_decision(
             f"expected one of {allowed_actions}"
         )
 
+    return decision
+
+
+def propose_with_predictions(
+    network_state,
+    allowed_actions=None,
+    policy_context=None,
+    oam_test_catalog=None,
+    target="HostA_to_HostB",
+    stress_mode=None,
+    ticket_text=None,
+    client=None,
+):
+    """Phase 8: fix proposal plus structured OAM predictions per cause."""
+    from agent.validate import validate_proposal
+
+    allowed_actions = list(allowed_actions or DEFAULT_ALLOWED_ACTIONS)
+    oam_test_catalog = oam_test_catalog or DEFAULT_OAM_CATALOG
+    policy_context = policy_context or DEFAULT_POLICY_CONTEXT
+    client = client or OpenAI(
+        base_url=OPENROUTER_BASE_URL,
+        api_key=os.environ.get("OPENROUTER_API_KEY"),
+    )
+
+    user_payload = {
+        "current_network_state": network_state,
+        "allowed_action_types": allowed_actions,
+        "policy_context": policy_context,
+        "oam_test_catalog": oam_test_catalog,
+        "target": target,
+        "stress_mode": stress_mode,
+        "ticket_text": ticket_text,
+    }
+
+    response = client.chat.completions.create(
+        model=MODEL,
+        messages=[
+            {"role": "system", "content": PREDICTION_SYSTEM_PROMPT},
+            {"role": "user", "content": json.dumps(user_payload, indent=2)},
+        ],
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "network_decision_with_predictions",
+                "strict": True,
+                "schema": _build_prediction_schema(allowed_actions),
+            },
+        },
+    )
+
+    decision = json.loads(response.choices[0].message.content)
+    ok, errors = validate_proposal(decision, allowed_actions=allowed_actions)
+    if not ok:
+        raise ValueError(f"invalid agent output: {errors}")
     return decision

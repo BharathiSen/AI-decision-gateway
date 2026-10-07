@@ -125,7 +125,7 @@ def test_dispatch_coverage():
     net = FakeNet()
     ok = True
     for fid in sorted(inj._FAULTS):
-        if fid in ("F8", "H0"):
+        if fid in ("H0",):
             continue
         try:
             before = set(inj._ACTIVE)
@@ -136,7 +136,7 @@ def test_dispatch_coverage():
         except Exception as e:
             print(f"    {fid} raised unexpectedly: {e}")
             ok = False
-    check("all 13 non-trivial fault types dispatch and register exactly one _ACTIVE entry", ok)
+    check("all non-H0 fault types dispatch and register exactly one _ACTIVE entry", ok)
     result = inj.reset_all(net)
     check("reset_all() clears everything dispatch_coverage created", len(inj._ACTIVE) == 0)
     check("reset_all() reports no errors on a clean run", result["errors"] == [])
@@ -145,11 +145,10 @@ def test_dispatch_coverage():
 def test_f8_and_unknown_id_fail_safely():
     reset_module_state()
     net = FakeNet()
-    try:
-        inj.inject(net, "F8")
-        check("F8 raises NotImplementedError", False)
-    except NotImplementedError:
-        check("F8 raises NotImplementedError", True)
+    cid = inj.inject(net, "F8", seed=1, params={"interval_seconds": 0.01, "cycles": 1})
+    check("F8 registers an active injection", cid in inj._ACTIVE)
+    inj.reset(cid)
+    check("F8 reset clears _ACTIVE", len(inj._ACTIVE) == 0)
 
     try:
         inj.inject(net, "NOPE")
@@ -287,7 +286,7 @@ def test_fix3_malformed_fault_definitions_rejected():
 def test_fix3_valid_faults_still_load():
     # The real, shipped faults.yaml -- must be unaffected by the new check.
     by_id = inj._load_faults()
-    check("FIX 3: the real config/faults.yaml still loads all 15 faults", len(by_id) == 15)
+    check("FIX 3: the real config/faults.yaml still loads all 18 faults", len(by_id) == 18)
     check("FIX 3: H0 (target: null, injection: none) still loads", "H0" in by_id)
 
 

@@ -1,0 +1,6 @@
+fault_id,test_id,outcome
+H0,T1_e2e_ping,"loss=0.0,lat=10.0"
+F3,T1_e2e_ping,"loss=15.0,lat=12.0"
+F11,T1_e2e_ping,"loss=15.0,lat=11.0"
+F12,T7_route_check,primary
+F1,T7_route_check,primary

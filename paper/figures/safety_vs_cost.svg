@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="320">
+<text x="20" y="20" font-size="14">Safety vs test cost (placeholder)</text>
+<circle cx="60" cy="280" r="6" fill="#333"/>
+<text x="40" y="300" font-size="10">B5</text>
+<circle cx="160" cy="280" r="6" fill="#333"/>
+<text x="140" y="300" font-size="10">gate_v0</text>
+</svg>

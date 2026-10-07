@@ -19,6 +19,7 @@ allowed_injections = {
     "none", "link_down", "netem_loss", "netem_corrupt",
     "netem_delay", "tbf_congestion", "link_flap",
     "blackhole_route", "acl_drop", "mtu_mismatch",
+    "netem_reorder_dup", "wrong_return_route",
 }
 
 allowed_cleanup = {
@@ -31,7 +32,7 @@ allowed_cleanup = {
 ids = [f["id"] for f in faults]
 assert len(ids) == len(set(ids)), "Duplicate fault IDs"
 
-expected = {"H0", *[f"F{i}" for i in range(1, 13)], "U1", "U2"}
+expected = {"H0", *[f"F{i}" for i in range(1, 13)], "U1", "U2", "U3", "U4", "U5"}
 assert set(ids) == expected, "Missing or unexpected fault IDs"
 
 for fault in faults:
@@ -77,8 +78,13 @@ for compound in compounds:
 assert len(noise) == 3
 assert len({n["id"] for n in noise}) == len(noise)
 
-assert next(f for f in faults if f["id"] == "U1")["split"] == "held_out"
-assert next(f for f in faults if f["id"] == "U2")["split"] == "held_out"
+for uid in ("U1", "U2", "U3", "U4", "U5"):
+    assert next(f for f in faults if f["id"] == uid)["split"] == "held_out"
+
+for compound in compounds:
+    assert compound.get("split") in {"development", "held_out"}, (
+        f"{compound['id']}: invalid split"
+    )
 
 print(f"Validated {len(faults)} faults")
 print(f"Validated {len(compounds)} compound scenarios")

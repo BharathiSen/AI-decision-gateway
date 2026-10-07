@@ -1,0 +1,10 @@
+[
+  {
+    "fault_a": "F3",
+    "fault_b": "F4",
+    "different_fixes": false,
+    "separating_tests": [],
+    "inseparable": true,
+    "note": "Regenerate with bench/build_observability_matrix.py on VM"
+  }
+]

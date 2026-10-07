@@ -300,6 +300,35 @@ def _first_node(link_name):
 # Raw tc for what TCIntf genuinely can't do: corruption (F4)
 # ---------------------------------------------------------------------------
 
+def _inject_reorder_dup(net, link_name, node, reorder_percent, duplicate_percent):
+    """netem reorder/duplicate — raw tc (not in TCIntf.config())."""
+    intf = _intf_obj(net, link_name, node)
+    node_obj = net.get(node)
+    node_obj.cmd(f"tc qdisc del dev {intf.name} root 2>/dev/null")
+    node_obj.cmd(
+        f"tc qdisc replace dev {intf.name} root netem "
+        f"reorder {reorder_percent}% 50% duplicate {duplicate_percent}%"
+    )
+    return {"link": link_name, "node": node, "interface": intf.name}
+
+
+def _inject_wrong_return_route(net, node, destination, wrong_via, wrong_dev):
+    node_obj = net.get(node)
+    original = node_obj.cmd(f"ip route show {destination}").strip()
+    node_obj.cmd(
+        f"ip route replace {destination} via {wrong_via} dev {wrong_dev}"
+    )
+    return original
+
+
+def _cleanup_wrong_return_route(net, node, destination, original_route):
+    node_obj = net.get(node)
+    if original_route:
+        node_obj.cmd(f"ip route replace {original_route}")
+    else:
+        node_obj.cmd(f"ip route del {destination} 2>/dev/null")
+
+
 def _inject_corrupt(net, link_name, node, corrupt_percent):
     """netem 'corrupt' has no equivalent in TCIntf.config() (confirmed
     against Mininet's actual source -- its parameter list is bw, delay,
@@ -405,6 +434,7 @@ _ALLOWED_INJECTIONS = {
     "none", "link_down", "netem_loss", "netem_corrupt",
     "netem_delay", "tbf_congestion", "link_flap",
     "blackhole_route", "acl_drop", "mtu_mismatch",
+    "netem_reorder_dup", "wrong_return_route",
 }
 
 # Required target.* fields per injection type, checked at load time so
@@ -423,6 +453,8 @@ _REQUIRED_TARGET_KEYS = {
     "blackhole_route": ["node", "destination"],
     "acl_drop": ["node", "protocol", "port"],
     "mtu_mismatch": ["link"],
+    "netem_reorder_dup": ["link", "direction"],
+    "wrong_return_route": ["node", "destination", "wrong_via", "wrong_dev"],
 }
 
 
@@ -605,9 +637,57 @@ def inject(net, fault_id, params=None, seed=None):
         return correlation_id
 
     elif injection == "link_flap":
-        raise NotImplementedError(
-            f"{fault_id}: link_flap requires bench/flap.py, which hasn't been built yet"
+        try:
+            from bench import flap as flap_mod
+        except ImportError:
+            import flap as flap_mod
+
+        link_name = target["link"]
+        node = target.get("node") or _first_node(link_name)
+        flap_id = flap_mod.start_link_flap(
+            net,
+            link_name,
+            node=node,
+            interval_seconds=resolved.get("interval_seconds", 2),
+            cycles=resolved.get("cycles", 3),
         )
+        cleanup_fn = lambda: (
+            flap_mod.stop_flap(flap_id),
+            link_up_one_end(net, link_name, node),
+        )
+        details.update(node=node, flap_id=flap_id)
+
+    elif injection == "netem_reorder_dup":
+        link_name = target["link"]
+        from_node = _direction_from_node(target)
+        original, guessed = _capture_link_params(net, link_name, from_node)
+        _inject_reorder_dup(
+            net,
+            link_name,
+            from_node,
+            resolved["reorder_percent"],
+            resolved["duplicate_percent"],
+        )
+        cleanup_fn = lambda: configure_one_end(net, link_name, from_node, **original)
+        details["node"] = from_node
+        details["pre_injection_params"] = original
+        if guessed:
+            details["params_not_captured"] = guessed
+
+    elif injection == "wrong_return_route":
+        node = target["node"]
+        destination = target["destination"]
+        original = _inject_wrong_return_route(
+            net,
+            node,
+            destination,
+            target["wrong_via"],
+            target["wrong_dev"],
+        )
+        cleanup_fn = lambda: _cleanup_wrong_return_route(
+            net, node, destination, original
+        )
+        details.update(node=node, destination=destination)
 
     elif injection == "blackhole_route":
         node, destination = target["node"], target["destination"]
@@ -680,6 +760,39 @@ def _restore_routing(net):
     ctl.set_active_path(net, "primary")
 
 
+def _load_compounds():
+    with (_CONFIG_DIR / "compounds.yaml").open() as f:
+        return {c["id"]: c for c in yaml.safe_load(f)["compounds"]}
+
+
+_COMPOUNDS = _load_compounds()
+
+
+def inject_compound(net, compound_id, seed=None):
+    """Inject a compound scenario; returns list of correlation_ids."""
+    if compound_id not in _COMPOUNDS:
+        raise ValueError(
+            f"Unknown compound id {compound_id!r}; known: {sorted(_COMPOUNDS)}"
+        )
+    spec = _COMPOUNDS[compound_id]
+    cids = []
+    for fault_id in spec["injection_order"]:
+        cids.append(inject(net, fault_id, seed=seed))
+    return {"compound_id": compound_id, "correlation_ids": cids}
+
+
+def reset_compound(net, compound_id, correlation_ids):
+    """Reset compound faults in reverse cleanup order."""
+    spec = _COMPOUNDS[compound_id]
+    cleared = []
+    cid_by_fault = dict(zip(spec["injection_order"], correlation_ids))
+    for fault_id in spec["cleanup_order"]:
+        cid = cid_by_fault.get(fault_id)
+        if cid:
+            cleared.append(reset(cid))
+    return cleared
+
+
 def reset_all(net):
     """Undo every currently active injection, restore routing, and
     verify the network is actually healthy again with a real ping --
@@ -695,6 +808,12 @@ def reset_all(net):
     every entry after it and never reaching the routing/ping check at
     all.
     """
+    try:
+        from bench import flap as flap_mod
+    except ImportError:
+        import flap as flap_mod
+    flap_mod.stop_all_flaps(net)
+
     cleared = []
     errors = []
     for cid in list(_ACTIVE):

@@ -1,0 +1,43 @@
+version: 1
+
+# Populated by bench/calibrate_healthy.py from healthy runs.
+# Placeholder defaults until calibration on the Mininet VM.
+by_noise_level:
+  N0:
+    T1_e2e_ping:
+      max_loss_percent: 5.0
+      max_latency_ms: 50.0
+    T2_hop_ping:
+      max_loss_percent: 10.0
+      max_latency_ms: 80.0
+    T8_tcp_vs_ping:
+      tcp_must_succeed: true
+    T10_speed:
+      min_mbit: 1.0
+  N1:
+    T1_e2e_ping:
+      max_loss_percent: 10.0
+      max_latency_ms: 120.0
+    T2_hop_ping:
+      max_loss_percent: 15.0
+      max_latency_ms: 150.0
+    T8_tcp_vs_ping:
+      tcp_must_succeed: true
+    T10_speed:
+      min_mbit: 0.5
+  N2:
+    T1_e2e_ping:
+      max_loss_percent: 20.0
+      max_latency_ms: 200.0
+    T2_hop_ping:
+      max_loss_percent: 25.0
+      max_latency_ms: 250.0
+    T8_tcp_vs_ping:
+      tcp_must_succeed: false
+    T10_speed:
+      min_mbit: 0.2
+
+calibration:
+  healthy_runs_target: 200
+  false_alarm_rate_target: 0.05
+  notes: "Re-run bench/calibrate_healthy.py on VM to replace placeholders."

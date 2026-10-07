@@ -1,0 +1,69 @@
+version: 1
+
+# Ground truth: which fix restores traffic for each fault under primary-first routing.
+# Derived from fault semantics; refine with bench/build_observability_matrix.py on VM.
+
+faults:
+  H0:
+    correct: [DO_NOTHING]
+  F1:
+    correct: [REROUTE]
+    reroute_path: backup
+  F2:
+    correct: [REROUTE]
+    reroute_path: backup
+  F3:
+    correct: [REROUTE]
+    reroute_path: backup
+  F4:
+    correct: [REROUTE]
+    reroute_path: backup
+  F5:
+    correct: [REROUTE]
+    reroute_path: backup
+  F6:
+    correct: [REROUTE]
+    reroute_path: backup
+  F7:
+    correct: [REROUTE]
+    reroute_path: backup
+  F8:
+    correct: [REROUTE]
+    reroute_path: backup
+  F9:
+    correct: [REROUTE]
+    reroute_path: backup
+  F10:
+    correct: [DO_NOTHING, ESCALATE]
+    notes: "ACL on iperf port; reroute does not help"
+  F11:
+    correct: [DO_NOTHING, ESCALATE]
+    notes: "Last-mile loss; reroute harmful or useless"
+  F12:
+    correct: [DO_NOTHING]
+    notes: "Backup down; reroute breaks traffic"
+  U1:
+    correct: [REROUTE, ESCALATE]
+  U2:
+    correct: [REROUTE]
+    reroute_path: backup
+  U3:
+    correct: [REROUTE]
+    reroute_path: backup
+  U4:
+    correct: [DO_NOTHING]
+  U5:
+    correct: [REROUTE, ESCALATE]
+    reroute_path: backup
+
+compounds:
+  C1:
+    correct: [DO_NOTHING, ESCALATE]
+  C2:
+    correct: [DO_NOTHING]
+  C3:
+    correct: [REROUTE]
+  C4:
+    correct: [DO_NOTHING, ESCALATE]
+  C5:
+    correct: [DO_NOTHING]

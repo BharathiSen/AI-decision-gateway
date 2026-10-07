@@ -108,7 +108,10 @@ class GatewayCLI(CLI):
         "Ask the AI decision agent to propose one action for the current network state. It only proposes -- nothing here executes it."
         state = collect_current_state(self.mn, self.links)
         try:
-            decision = propose_decision(state)
+            decision = propose_decision(
+                state,
+                allowed_actions=["REROUTE", "DO_NOTHING", "ESCALATE"],
+            )
         except Exception as exc:
             print(f"decision agent error: {exc}")
             return
