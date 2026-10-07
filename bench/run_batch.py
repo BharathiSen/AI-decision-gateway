@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from network.topology import create_network
 from bench.run_episode import run_episode, save_episode, EPISODE_DIR
 from bench import inject as inj
+from bench.mininet_util import mn_cleanup, ensure_iperf3_server
 
 STATE_FILE = EPISODE_DIR / "_batch_state.json"
 
@@ -46,8 +47,10 @@ def main():
     state = _load_state() if args.resume else {"completed": 0, "episode_ids": []}
     faults = [f for f in inj._FAULTS if f != "H0"] + ["H0"]
 
+    mn_cleanup()
     topo = create_network()
     net, links = topo["net"], topo["links"]
+    ensure_iperf3_server(net)
     rng = random.Random(args.seed)
 
     try:
@@ -69,6 +72,7 @@ def main():
     finally:
         inj.reset_all(net)
         net.stop()
+        mn_cleanup()
 
     print(f"Done. {state['completed']} episodes in {EPISODE_DIR}")
 

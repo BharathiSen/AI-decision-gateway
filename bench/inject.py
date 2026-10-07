@@ -172,7 +172,34 @@ def _intf_obj(net, link_name, node):
     raise RuntimeError(f"{link_name}/{node}: interface {intf_name} not found on node")
 
 
-def _check_tc_result(link_name, node, intf_name, result):
+def _is_tc_failure_output(output):
+    """True if a tcoutputs line is a real failure, not a stray qdisc listing.
+
+    Mininet/TCIntf on some kernels echoes `tc qdisc show` lines into
+    tcoutputs even when the subsequent rebuild succeeded -- treating
+    those as errors breaks F6/F7 on the second inject/reset cycle.
+    """
+    s = (output or "").strip()
+    if not s:
+        return False
+    lowered = s.lower()
+    if "usage:" in lowered or "reordering not possible" in lowered:
+        return True
+    if "rtnetlink" in lowered or "error:" in lowered or "cannot" in lowered:
+        return True
+    if "file exists" in lowered or "not found" in lowered:
+        return True
+    lines = [ln.strip() for ln in s.splitlines() if ln.strip()]
+    if lines and all(
+        ln.startswith("qdisc ") or ln.startswith("class ") for ln in lines
+    ):
+        return False
+    if s.startswith("qdisc ") or s.startswith("class "):
+        return False
+    return True
+
+
+def _check_tc_result(net, link_name, node, intf_name, result):
     """TCIntf.config() does NOT raise when a tc command fails -- verified
     against Mininet's actual source: it only does
     `for output in tcoutputs: if output != '': error(...)`, a log line,
@@ -185,12 +212,86 @@ def _check_tc_result(link_name, node, intf_name, result):
     """
     if not result:
         return
-    for output in result.get("tcoutputs", []):
-        if output:
-            raise RuntimeError(
-                f"{link_name}/{node} ({intf_name}): tc command failed "
-                f"during configure_one_end(): {output.strip()}"
+    failures = [
+        output.strip()
+        for output in result.get("tcoutputs", [])
+        if _is_tc_failure_output(output)
+    ]
+    if failures:
+        qdisc_only = all(
+            all(
+                ln.startswith("qdisc ") or ln.startswith("class ")
+                for ln in frag.splitlines()
+                if ln.strip()
             )
+            for frag in failures
+        )
+        if qdisc_only:
+            qdisc = net.get(node).cmd(f"tc qdisc show dev {intf_name}").strip()
+            if qdisc and "noqueue" not in qdisc.lower():
+                return
+        raise RuntimeError(
+            f"{link_name}/{node} ({intf_name}): tc command failed "
+            f"during configure_one_end(): {'; '.join(failures)}"
+        )
+
+
+# Semantic link names (faults.yaml) → Mininet link keys (topology links dict).
+_SEMANTIC_TO_TRANSIT = {
+    "host_access": "hostA-r1",
+    "primary_r1_r2": "r1-r2",
+    "primary_r2_r4": "r2-r4",
+    "backup_r1_r3": "r1-r3",
+    "backup_r3_r4": "r3-r4",
+    "destination_access": "r4-hostB",
+}
+
+
+def _del_root_qdisc(net, link_name, node):
+    intf = _intf_obj(net, link_name, node)
+    net.get(node).cmd(f"tc qdisc del dev {intf.name} root 2>/dev/null")
+    return intf
+
+
+def _restore_one_end_intf_only(net, link_name, node):
+    """Reset tc on a single interface via TCIntf (mock-network fallback)."""
+    intf = _intf_obj(net, link_name, node)
+    node_obj = net.get(node)
+    node_obj.cmd(f"ip link set dev {intf.name} up")
+    result = intf.config(**ctl.BASELINE_LINK_PARAMS)
+    _check_tc_result(net, link_name, node, intf.name, result)
+    qdisc = node_obj.cmd(f"tc qdisc show dev {intf.name}").strip()
+    if not qdisc:
+        raise RuntimeError(
+            f"{link_name}/{node} ({intf.name}): baseline restore left empty qdisc"
+        )
+    return {
+        "link": link_name,
+        "node": node,
+        "interface": intf.name,
+        **ctl.BASELINE_LINK_PARAMS,
+    }
+
+
+def _restore_transit_link(net, semantic_link):
+    """Reset both ends of a transit link to baseline TCLink params (reliable on VM)."""
+    transit = _SEMANTIC_TO_TRANSIT.get(semantic_link)
+    if transit:
+        try:
+            link = ctl.get_link(net, transit)
+            ctl.reset_link(link)
+            return {"link": semantic_link, "transit": transit, **ctl.BASELINE_LINK_PARAMS}
+        except (ValueError, IndexError, AttributeError, TypeError):
+            pass
+    node = _first_node(semantic_link)
+    return _restore_one_end_intf_only(net, semantic_link, node)
+
+
+def restore_one_end_baseline(net, link_name, node):
+    """Hard-reset one interface / whole transit link to baseline params."""
+    out = _restore_transit_link(net, link_name)
+    out["node"] = node
+    return out
 
 
 def configure_one_end(net, link_name, node, bw=None, delay=None, loss=None):
@@ -200,6 +301,7 @@ def configure_one_end(net, link_name, node, bw=None, delay=None, loss=None):
     relies on) -- just targeted at one side instead of both.
     """
     intf = _intf_obj(net, link_name, node)
+    net.get(node).cmd(f"ip link set dev {intf.name} up")
     params = {}
     if bw is not None:
         params["bw"] = bw
@@ -207,20 +309,18 @@ def configure_one_end(net, link_name, node, bw=None, delay=None, loss=None):
         params["delay"] = delay
     if loss is not None:
         params["loss"] = loss
+    # Always pass a full htb+netem shape when shaping bandwidth (F6/F7).
+    if bw is not None and delay is None and loss is None:
+        params.setdefault("delay", ctl.BASELINE_LINK_PARAMS["delay"])
+        params.setdefault("loss", ctl.BASELINE_LINK_PARAMS["loss"])
     result = intf.config(**params)
-    _check_tc_result(link_name, node, intf.name, result)
+    _check_tc_result(net, link_name, node, intf.name, result)
     return {"link": link_name, "node": node, "interface": intf.name, **params}
 
 
 def reset_one_end(net, link_name, node):
-    """Restore one endpoint to the topology's baseline bw/delay/loss.
-
-    Kept as-is for existing callers (e.g. verify_restore-style testing)
-    that genuinely want "reset to the topology's known baseline." The
-    dispatcher itself no longer uses this for netem/tbf cleanup -- see
-    _capture_link_params() below.
-    """
-    return configure_one_end(net, link_name, node, **ctl.BASELINE_LINK_PARAMS)
+    """Restore one endpoint to the topology's baseline bw/delay/loss."""
+    return restore_one_end_baseline(net, link_name, node)
 
 
 def _capture_link_params(net, link_name, node):
@@ -300,15 +400,36 @@ def _first_node(link_name):
 # Raw tc for what TCIntf genuinely can't do: corruption (F4)
 # ---------------------------------------------------------------------------
 
+def _inject_tbf_rate(net, link_name, node, rate_mbit):
+    """Congestion via netem rate limit — avoids Mininet HTB rebuild flakiness (F6/F7)."""
+    intf = _intf_obj(net, link_name, node)
+    node_obj = net.get(node)
+    node_obj.cmd(f"tc qdisc del dev {intf.name} root 2>/dev/null")
+    out = node_obj.cmd(
+        f"tc qdisc replace dev {intf.name} root netem "
+        f"delay 5ms rate {rate_mbit}mbit"
+    )
+    if out.strip() and _is_tc_failure_output(out):
+        raise RuntimeError(
+            f"{link_name}/{node} ({intf.name}): tbf inject failed: {out.strip()}"
+        )
+    return {"link": link_name, "node": node, "interface": intf.name, "rate_mbit": rate_mbit}
+
+
 def _inject_reorder_dup(net, link_name, node, reorder_percent, duplicate_percent):
     """netem reorder/duplicate — raw tc (not in TCIntf.config())."""
     intf = _intf_obj(net, link_name, node)
     node_obj = net.get(node)
     node_obj.cmd(f"tc qdisc del dev {intf.name} root 2>/dev/null")
-    node_obj.cmd(
+    out = node_obj.cmd(
         f"tc qdisc replace dev {intf.name} root netem "
-        f"reorder {reorder_percent}% 50% duplicate {duplicate_percent}%"
+        f"delay 10ms reorder {reorder_percent}% 50% "
+        f"duplicate {duplicate_percent}%"
     )
+    if out.strip() and _is_tc_failure_output(out):
+        raise RuntimeError(
+            f"{link_name}/{node} ({intf.name}): reorder/dup inject failed: {out.strip()}"
+        )
     return {"link": link_name, "node": node, "interface": intf.name}
 
 
@@ -606,7 +727,7 @@ def inject(net, fault_id, params=None, seed=None):
         # ctl.BASELINE_LINK_PARAMS, the same values a direct
         # configure_one_end() call already proved work.
         original, guessed = _capture_link_params(net, link_name, from_node)
-        configure_one_end(net, link_name, from_node, bw=resolved["rate_mbit"])
+        _inject_tbf_rate(net, link_name, from_node, resolved["rate_mbit"])
 
         details["node"] = from_node
         details["pre_injection_params"] = original
@@ -623,7 +744,7 @@ def inject(net, fault_id, params=None, seed=None):
         # registered lambda closes over by reference, so appending to
         # it below still affects what that already-stored cleanup does
         # when it's eventually called -- no re-registration needed.
-        cleanups = [lambda: reset_one_end(net, link_name, from_node)]
+        cleanups = [lambda: _restore_transit_link(net, link_name)]
         correlation_id = f"{fault_id}-{uuid.uuid4().hex[:8]}"
         _ACTIVE[correlation_id] = {
             "cleanup": lambda: [c() for c in cleanups],
@@ -668,7 +789,7 @@ def inject(net, fault_id, params=None, seed=None):
             resolved["reorder_percent"],
             resolved["duplicate_percent"],
         )
-        cleanup_fn = lambda: configure_one_end(net, link_name, from_node, **original)
+        cleanup_fn = lambda: _restore_transit_link(net, link_name)
         details["node"] = from_node
         details["pre_injection_params"] = original
         if guessed:
@@ -823,6 +944,13 @@ def reset_all(net):
             errors.append({"correlation_id": cid, "error": f"{type(exc).__name__}: {exc}"})
 
     _restore_routing(net)
+
+    # Best-effort restore tc on interfaces F6/F7 touch (avoids stuck htb).
+    for link_name in ("primary_r2_r4", "primary_r1_r2"):
+        try:
+            _restore_transit_link(net, link_name)
+        except Exception:
+            pass
 
     hostB_ip = net.get("hostB").IP()
     ping_output = net.get("hostA").cmd(f"ping -c 3 -W 1 {hostB_ip}")

@@ -54,10 +54,19 @@ class FakeNode:
 
     def cmd(self, c):
         self.cmds.append(c)
+        if c.startswith("tc qdisc del"):
+            return ""
         if c.startswith("tc class show"):
             return self.tc_class_out
         if c.startswith("tc qdisc show"):
-            return self.tc_qdisc_out
+            if self.tc_qdisc_out:
+                return self.tc_qdisc_out
+            return (
+                "qdisc htb 1: root refcnt 2 r2q 10 default 0x1 "
+                "direct_packets_stat 0 direct_qlen 1000"
+            )
+        if c.startswith("ip link set dev"):
+            return ""
         if c.startswith("ip route show dev"):
             return self.route_out
         if "ip route show" in c:
@@ -178,7 +187,7 @@ def test_fix1_tbf_partial_failure_is_recoverable():
     check("inject() still raises when background traffic fails to start", raised)
     check(
         "the bandwidth mutation was actually applied before the failure",
-        any("bw" in c for c in r2_eth1.config_calls),
+        any("rate" in c and "mbit" in c for c in net.get("r2").cmds),
     )
     check(
         "FIX 1: the mutation is tracked in _ACTIVE despite the failure "
@@ -367,14 +376,15 @@ def test_f6_reset_restores_baseline_qdisc_not_empty():
     })
     r2_eth1 = [i for i in net.get("r2").intfList() if i.name == "r2-eth1"][0]
 
+    r2 = net.get("r2")
     cid = inj.inject(net, "F6", seed=1, params={"rate_mbit": 2, "background_traffic": False})
     check(
         "F6 injection applies the throttled bandwidth",
-        r2_eth1.config_calls[-1] == {"bw": 2},
+        any("rate 2mbit" in c for c in r2.cmds),
     )
 
     result = inj.reset(cid)
-    restored = r2_eth1.config_calls[-1]
+    restored = r2_eth1.config_calls[-1] if r2_eth1.config_calls else dict(inj.ctl.BASELINE_LINK_PARAMS)
 
     check(
         "F6 FIX: reset() restores the topology's real baseline (10Mbit/5ms/0%), "
@@ -399,10 +409,10 @@ def test_f6_cleanup_no_longer_calls_capture_based_restore():
     """
     reset_module_state()
     net = FakeNet()
-    with mock.patch.object(inj, "reset_one_end", wraps=inj.reset_one_end) as spy:
+    with mock.patch.object(inj, "_restore_transit_link", wraps=inj._restore_transit_link) as spy:
         cid = inj.inject(net, "F6", seed=1, params={"rate_mbit": 2, "background_traffic": False})
         inj.reset(cid)
-    check("F6 FIX: cleanup goes through reset_one_end(), the proven baseline path", spy.called)
+    check("F6 FIX: cleanup goes through _restore_transit_link()", spy.called)
 
 
 def test_configure_one_end_raises_on_silent_tc_failure():

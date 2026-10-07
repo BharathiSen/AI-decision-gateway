@@ -19,6 +19,7 @@ from network.topology import create_network
 from bench import inject as inj
 from bench import tests as oam
 from bench.traffic import apply_noise, clear_noise
+from bench.mininet_util import mn_cleanup, ensure_iperf3_server
 
 
 def _percentile(values, p):
@@ -34,8 +35,10 @@ def _percentile(values, p):
 
 
 def calibrate(noise_id, runs, seed_base=0):
+    mn_cleanup()
     state = create_network()
     net = state["net"]
+    ensure_iperf3_server(net)
     noise_applied = apply_noise(net, noise_id, state["links"])
     latencies = []
     losses = []
@@ -60,6 +63,7 @@ def calibrate(noise_id, runs, seed_base=0):
         clear_noise(net, noise_applied, state["links"])
         inj.reset_all(net)
         net.stop()
+        mn_cleanup()
 
     report = {
         "noise_id": noise_id,

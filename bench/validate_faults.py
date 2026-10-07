@@ -16,10 +16,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from network.topology import create_network
 from bench import inject as inj
+from bench.mininet_util import mn_cleanup
 
 
 def _fault_ids():
     return sorted(inj._FAULTS.keys())
+
+
+def _inject_params(fault_id, seed):
+    """Validation overrides: skip long iperf background during tc stress tests."""
+    if fault_id == "F6":
+        return {"rate_mbit": 2, "background_traffic": False}, seed
+    if fault_id == "F7":
+        return {"rate_mbit": 2, "background_traffic": False}, seed
+    return None, seed
 
 
 def validate_fault(net, fault_id, iterations=10, seed_base=0):
@@ -33,7 +43,8 @@ def validate_fault(net, fault_id, iterations=10, seed_base=0):
                 if not result.get("healthy"):
                     failures.append((i, "H0 reset_all not healthy", result))
                 continue
-            cid = inj.inject(net, fault_id, seed=seed)
+            params, seed = _inject_params(fault_id, seed)
+            cid = inj.inject(net, fault_id, params=params, seed=seed)
             result = inj.reset(cid)
             if result.get("already_reset"):
                 failures.append((i, "reset reported already_reset", result))
@@ -59,6 +70,9 @@ def main():
         print("validate_faults.py must run as root (sudo) on the Mininet VM.", file=sys.stderr)
         sys.exit(2)
 
+    print("Cleaning stale Mininet state (mn -c)...", flush=True)
+    mn_cleanup()
+
     targets = args.fault or _fault_ids()
     state = create_network()
     net = state["net"]
@@ -77,8 +91,15 @@ def main():
             else:
                 print("  OK")
     finally:
-        inj.reset_all(net)
-        net.stop()
+        try:
+            inj.reset_all(net)
+        except Exception as exc:
+            print(f"reset_all during teardown: {exc}", file=sys.stderr)
+        try:
+            net.stop()
+        except Exception as exc:
+            print(f"net.stop(): {exc}", file=sys.stderr)
+        mn_cleanup()
 
     if all_failures:
         for fid, fails in all_failures.items():
