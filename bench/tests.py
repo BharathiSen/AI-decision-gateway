@@ -160,16 +160,23 @@ def T9_oneway_loss(net):
     }
 
 
+def _parse_mbit(output):
+    """iperf3 bitrate in Mbit/s. Accepts Kbits, Mbits, and Gbits."""
+    matches = re.findall(r"([\d.]+)\s*([KMG])bits/sec", output or "")
+    if not matches:
+        return None
+    value, unit = matches[-1]
+    scale = {"K": 1e-3, "M": 1.0, "G": 1e3}[unit]
+    return float(value) * scale
+
+
 def T10_speed(net, duration=3):
     t0 = time.monotonic()
     hostB = net.get("hostB").IP()
     out = net.get("hostA").cmd(
         f"timeout 20 iperf3 -c {hostB} -t {duration} --connect-timeout 2000"
     )
-    mbit = None
-    m = re.search(r"([\d.]+)\s+Mbits/sec", out)
-    if m:
-        mbit = float(m.group(1))
+    mbit = _parse_mbit(out)
     return {
         "test_id": "T10_speed",
         "mbit_per_sec": mbit,

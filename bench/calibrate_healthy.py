@@ -88,9 +88,10 @@ def update_thresholds_yaml(noise_id, report):
         "max_loss_percent": max(5.0, (report.get("T1_loss_p95") or 5) * 1.1),
         "max_latency_ms": max(50.0, (report.get("T1_latency_p95") or 50) * 1.1),
     }
-    level["T10_speed"] = {
-        "min_mbit": max(0.1, (report.get("T10_speed_p05") or 1.0) * 0.9),
-    }
+    if report.get("T10_speed_p05") is not None:
+        level["T10_speed"] = {
+            "min_mbit": max(0.1, report["T10_speed_p05"] * 0.9),
+        }
     doc.setdefault("calibration", {})["last_run"] = report
     with path.open("w") as f:
         yaml.safe_dump(doc, f, sort_keys=False)
