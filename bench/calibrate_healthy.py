@@ -19,7 +19,7 @@ from network.topology import create_network
 from bench import inject as inj
 from bench import tests as oam
 from bench.traffic import apply_noise, clear_noise
-from bench.mininet_util import mn_cleanup, ensure_iperf3_server
+from bench.mininet_util import mn_cleanup, ensure_iperf3_server, recover_net
 
 
 def _percentile(values, p):
@@ -49,8 +49,13 @@ def calibrate(noise_id, runs, seed_base=0):
     try:
         for i in range(runs):
             print(f"  run {i + 1}/{runs} ...", flush=True)
-            inj.reset_all(net)
-            bundle = oam.run_all(net)
+            try:
+                inj.reset_all(net)
+                bundle = oam.run_all(net)
+            except UnicodeDecodeError as exc:
+                print(f"  run {i + 1}/{runs} skipped after binary shell output: {exc}", flush=True)
+                recover_net(net)
+                continue
             print(f"  run {i + 1}/{runs} done", flush=True)
             for r in bundle["results"]:
                 if r["test_id"] == "T1_e2e_ping":
@@ -63,9 +68,19 @@ def calibrate(noise_id, runs, seed_base=0):
             if alarms:
                 false_alarms += 1
     finally:
-        clear_noise(net, noise_applied, state["links"])
-        inj.reset_all(net)
-        net.stop()
+        recover_net(net)
+        try:
+            clear_noise(net, noise_applied, state["links"])
+        except Exception as exc:
+            print(f"clear_noise failed: {exc}", flush=True)
+        try:
+            inj.reset_all(net)
+        except Exception as exc:
+            print(f"reset_all failed: {exc}", flush=True)
+        try:
+            net.stop()
+        except Exception as exc:
+            print(f"net.stop failed: {exc}", flush=True)
         mn_cleanup()
 
     report = {

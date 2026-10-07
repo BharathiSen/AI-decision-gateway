@@ -135,8 +135,10 @@ def T8_tcp_vs_ping(net):
     t0 = time.monotonic()
     ping = T1_e2e_ping(net, count=5, interval=0.2)
     hostB = net.get("hostB").IP()
+    # Write-only connect. nc would print iperf3's binary handshake, and
+    # Mininet's UTF-8 shell decoder crashes on the leading 0xff byte.
     tcp_out = net.get("hostA").cmd(
-        f"timeout 5 bash -c 'echo | nc -w 3 {hostB} 5201' 2>&1; echo exit:$?"
+        f"timeout 5 bash -c 'echo >/dev/tcp/{hostB}/5201' >/dev/null 2>&1; echo exit:$?"
     )
     tcp_ok = "exit:0" in tcp_out or "succeeded" in tcp_out.lower()
     return {

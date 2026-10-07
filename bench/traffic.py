@@ -48,6 +48,11 @@ def apply_noise(net, noise_id, links=None):
 
 def clear_noise(net, applied, links=None):
     """Undo apply_noise side effects."""
+    try:
+        from bench.mininet_util import recover_net
+    except ImportError:
+        from mininet_util import recover_net
+    recover_net(net)
     pid = applied.get("background_pid")
     if pid:
         net.get("hostA").cmd(f"kill {pid} 2>/dev/null")
