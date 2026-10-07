@@ -12,9 +12,9 @@ def mn_cleanup():
 
 
 def ensure_iperf3_server(net, host="hostB"):
-    """Start iperf3 in server mode if not already listening (for T10 / F6)."""
+    """Start iperf3 in the background. Do not use -D: Mininet cmd() waits on the pty and hangs."""
     node = net.get(host)
-    check = node.cmd("pgrep -x iperf3 || true").strip()
-    if check:
-        return
-    node.cmd("iperf3 -s -D 2>/dev/null")
+    node.cmd(
+        "sh -c 'pgrep -f \"iperf3 -s\" >/dev/null || "
+        "iperf3 -s > /tmp/iperf3_server.log 2>&1 & echo $!'"
+    )

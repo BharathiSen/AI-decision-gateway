@@ -7,7 +7,6 @@ executes the full battery (T10 last).
 
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -66,14 +65,8 @@ def _hop_ping(net, src, dst_ip, count=10, interval=0.2):
 def T2_hop_ping(net, path="primary"):
     t0 = time.monotonic()
     hops = HOPS if path == "primary" else HOPS_BACKUP
-    results = []
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        futs = [
-            pool.submit(_hop_ping, net, src, dst_ip)
-            for src, _node, dst_ip in hops
-        ]
-        for fut in as_completed(futs):
-            results.append(fut.result())
+    # Sequential: Mininet node.cmd() deadlocks if called from several threads.
+    results = [_hop_ping(net, src, dst_ip) for src, _node, dst_ip in hops]
     return {
         "test_id": "T2_hop_ping",
         "path": path,
@@ -171,7 +164,7 @@ def T10_speed(net, duration=3):
     t0 = time.monotonic()
     hostB = net.get("hostB").IP()
     out = net.get("hostA").cmd(
-        f"iperf3 -c {hostB} -t {duration} -J 2>/dev/null || iperf3 -c {hostB} -t {duration}"
+        f"timeout 20 iperf3 -c {hostB} -t {duration} --connect-timeout 2000"
     )
     mbit = None
     m = re.search(r"([\d.]+)\s+Mbits/sec", out)

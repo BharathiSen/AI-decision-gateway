@@ -45,10 +45,13 @@ def calibrate(noise_id, runs, seed_base=0):
     speeds = []
     false_alarms = 0
 
+    print(f"Calibrating {noise_id}: {runs} healthy runs (each run is a full OAM pass).", flush=True)
     try:
         for i in range(runs):
+            print(f"  run {i + 1}/{runs} ...", flush=True)
             inj.reset_all(net)
             bundle = oam.run_all(net)
+            print(f"  run {i + 1}/{runs} done", flush=True)
             for r in bundle["results"]:
                 if r["test_id"] == "T1_e2e_ping":
                     if r.get("latency_ms") is not None:
