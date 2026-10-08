@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from network.topology import create_network
 from bench import inject as inj
 from bench import tests as oam
+from bench.mininet_util import recover_net
 
 RESULTS = Path(__file__).resolve().parent.parent / "results"
 
@@ -54,14 +55,29 @@ def main():
 
     try:
         for fid in fault_ids:
-            inj.reset_all(net)
-            cid = inj.inject(net, fid, seed=42)
-            bundle = oam.run_all(net)
-            sig = _signature([r for r in bundle["results"]])
-            for tid, val in sig.items():
-                rows.append({"fault_id": fid, "test_id": tid, "outcome": val})
-            inj.reset(cid)
-            inj.reset_all(net)
+            print(f"fault {fid} ...", flush=True)
+            cid = None
+            try:
+                inj.reset_all(net)
+                cid = inj.inject(net, fid, seed=42)
+                bundle = oam.run_all(net)
+                sig = _signature([r for r in bundle["results"]])
+                for tid, val in sig.items():
+                    rows.append({"fault_id": fid, "test_id": tid, "outcome": val})
+                print(f"fault {fid} done", flush=True)
+            except Exception as exc:
+                print(f"fault {fid} FAILED: {exc}", flush=True)
+                recover_net(net)
+            finally:
+                if cid:
+                    try:
+                        inj.reset(cid)
+                    except Exception:
+                        recover_net(net)
+                try:
+                    inj.reset_all(net)
+                except Exception:
+                    recover_net(net)
     finally:
         inj.reset_all(net)
         net.stop()

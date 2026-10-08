@@ -17,6 +17,11 @@ try:
 except ImportError:
     import controller as ctl
 
+try:
+    from bench.mininet_util import run_in_node
+except ImportError:
+    from mininet_util import run_in_node
+
 HOPS = [
     ("hostA", "r1", "10.0.1.1"),
     ("r1", "r2", "10.0.12.2"),
@@ -43,10 +48,16 @@ def _parse_ping(output):
     }
 
 
+def _counter(text):
+    nums = re.findall(r"\d+", text or "")
+    return int(nums[-1]) if nums else 0
+
+
 def T1_e2e_ping(net, count=10, interval=0.2):
     t0 = time.monotonic()
-    out = net.get("hostA").cmd(
-        f"ping -c {count} -i {interval} -W 1 {net.get('hostB').IP()}"
+    out = run_in_node(
+        net.get("hostA"),
+        f"ping -c {count} -i {interval} -W 1 {net.get('hostB').IP()}",
     )
     parsed = _parse_ping(out)
     parsed["connectivity"] = parsed["packet_loss_percent"] < 100.0
@@ -55,7 +66,7 @@ def T1_e2e_ping(net, count=10, interval=0.2):
 
 
 def _hop_ping(net, src, dst_ip, count=10, interval=0.2):
-    out = net.get(src).cmd(f"ping -c {count} -i {interval} -W 1 {dst_ip}")
+    out = run_in_node(net.get(src), f"ping -c {count} -i {interval} -W 1 {dst_ip}")
     p = _parse_ping(out)
     p["src"] = src
     p["dst_ip"] = dst_ip
@@ -78,9 +89,7 @@ def T2_hop_ping(net, path="primary"):
 def T4_mtu(net):
     t0 = time.monotonic()
     hostB = net.get("hostB").IP()
-    out = net.get("hostA").cmd(
-        f"ping -c 3 -M do -s 1400 -W 2 {hostB}"
-    )
+    out = run_in_node(net.get("hostA"), f"ping -c 3 -M do -s 1400 -W 2 {hostB}")
     ok = "0% packet loss" in out or "1 received" in out
     return {
         "test_id": "T4_mtu",
@@ -98,9 +107,9 @@ def T5_if_errors(net):
         for intf in node.intfList():
             if intf.name == "lo":
                 continue
-            rx = node.cmd(f"cat /sys/class/net/{intf.name}/statistics/rx_errors").strip()
-            tx = node.cmd(f"cat /sys/class/net/{intf.name}/statistics/tx_errors").strip()
-            stats[f"{name}/{intf.name}"] = {"rx_errors": int(rx or 0), "tx_errors": int(tx or 0)}
+            rx = run_in_node(node, f"cat /sys/class/net/{intf.name}/statistics/rx_errors")
+            tx = run_in_node(node, f"cat /sys/class/net/{intf.name}/statistics/tx_errors")
+            stats[f"{name}/{intf.name}"] = {"rx_errors": _counter(rx), "tx_errors": _counter(tx)}
     return {"test_id": "T5_if_errors", "interfaces": stats, "duration_seconds": time.monotonic() - t0}
 
 
@@ -112,16 +121,21 @@ def T6_queue_stats(net):
         for intf in node.intfList():
             if intf.name == "lo":
                 continue
-            qdisc = node.cmd(f"tc -s qdisc show dev {intf.name}")
+            qdisc = run_in_node(node, f"tc -s qdisc show dev {intf.name}")
             queues[f"{name}/{intf.name}"] = qdisc.strip()
     return {"test_id": "T6_queue_stats", "queues": queues, "duration_seconds": time.monotonic() - t0}
 
 
 def T7_route_check(net):
     t0 = time.monotonic()
-    r1 = net.get("r1").cmd("ip route show 10.0.4.0/24").strip()
-    r4 = net.get("r4").cmd("ip route show 10.0.1.0/24").strip()
-    active = ctl.get_active_path(net)
+    r1 = run_in_node(net.get("r1"), "ip route show 10.0.4.0/24").strip()
+    r4 = run_in_node(net.get("r4"), "ip route show 10.0.1.0/24").strip()
+    if "10.0.12.2" in r1:
+        active = "primary"
+    elif "10.0.13.2" in r1:
+        active = "backup"
+    else:
+        active = ctl.get_active_path(net)
     return {
         "test_id": "T7_route_check",
         "r1_to_dest": r1,
@@ -137,8 +151,9 @@ def T8_tcp_vs_ping(net):
     hostB = net.get("hostB").IP()
     # Write-only connect. nc would print iperf3's binary handshake, and
     # Mininet's UTF-8 shell decoder crashes on the leading 0xff byte.
-    tcp_out = net.get("hostA").cmd(
-        f"timeout 5 bash -c 'echo >/dev/tcp/{hostB}/5201' >/dev/null 2>&1; echo exit:$?"
+    tcp_out = run_in_node(
+        net.get("hostA"),
+        f"timeout 5 bash -c 'echo >/dev/tcp/{hostB}/5201' >/dev/null 2>&1; echo exit:$?",
     )
     tcp_ok = "exit:0" in tcp_out or "succeeded" in tcp_out.lower()
     return {
@@ -175,8 +190,9 @@ def _parse_mbit(output):
 def T10_speed(net, duration=3):
     t0 = time.monotonic()
     hostB = net.get("hostB").IP()
-    out = net.get("hostA").cmd(
-        f"timeout 20 iperf3 -c {hostB} -t {duration} --connect-timeout 2000"
+    out = run_in_node(
+        net.get("hostA"),
+        f"timeout 20 iperf3 -c {hostB} -t {duration} --connect-timeout 2000",
     )
     mbit = _parse_mbit(out)
     return {

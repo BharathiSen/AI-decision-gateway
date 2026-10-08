@@ -2,8 +2,11 @@
 
 import codecs
 import os
+import shlex
 import shutil
 import subprocess
+import uuid
+from pathlib import Path
 
 
 def recover_shell(node):
@@ -39,6 +42,31 @@ def recover_shell(node):
             fcntl.fcntl(fd, fcntl.F_SETFL, flags)
     except Exception:
         pass
+
+
+def run_in_node(node, command):
+    """Run a command and return its output from a file, not the Mininet PTY.
+
+    node.cmd() sometimes returns leftover output from the previous command
+    (a ping still in the shell buffer). The command's own stdout is written
+    to /tmp and read from the host, which shares that directory with the node.
+    """
+    path = Path(f"/tmp/adg-{node.name}-{uuid.uuid4().hex}.out")
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    recover_shell(node)
+    quoted = shlex.quote(command)
+    try:
+        node.cmd(f"bash -c {quoted} > {path} 2>&1")
+    except UnicodeDecodeError:
+        recover_shell(node)
+        node.cmd(f"bash -c {quoted} > {path} 2>&1")
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
 
 
 def recover_net(net, names=("hostA", "hostB", "r1", "r2", "r3", "r4")):
