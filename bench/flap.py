@@ -9,11 +9,25 @@ import threading
 import time
 
 try:
-    from bench.inject import link_down_one_end, link_up_one_end, _first_node
+    from bench.inject import link_up_one_end, _first_node
+    from network.interfaces import get_interface
 except ImportError:
-    from inject import link_down_one_end, link_up_one_end, _first_node
+    from inject import link_up_one_end, _first_node
+    from interfaces import get_interface
 
 _ACTIVE_FLAPS = {}
+
+
+def _set_admin(net, link_name, node, state):
+    """Bring one interface up or down without node.cmd().
+
+    The flap loop runs on a background thread while OAM tests use the
+    Mininet shell. node.cmd() from both at once raises AssertionError.
+    popen() uses the network namespace directly and leaves the shell alone.
+    """
+    intf = get_interface(link_name, node)
+    proc = net.get(node).popen(["ip", "link", "set", "dev", intf, state])
+    proc.wait(timeout=10)
 
 
 def start_link_flap(net, link_name, node=None, interval_seconds=2.0, cycles=3):
@@ -26,13 +40,13 @@ def start_link_flap(net, link_name, node=None, interval_seconds=2.0, cycles=3):
         for _ in range(int(cycles)):
             if stop_event.is_set():
                 break
-            link_down_one_end(net, link_name, node)
+            _set_admin(net, link_name, node, "down")
             if stop_event.wait(timeout=float(interval_seconds)):
                 break
-            link_up_one_end(net, link_name, node)
+            _set_admin(net, link_name, node, "up")
             if stop_event.wait(timeout=float(interval_seconds)):
                 break
-        link_up_one_end(net, link_name, node)
+        _set_admin(net, link_name, node, "up")
 
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()
