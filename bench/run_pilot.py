@@ -1,9 +1,10 @@
 """
-Phase 9 pilot runner (replay-friendly metrics without requiring live LLM).
+Phase 9 pilot runner.
 
-Uses heuristic agent stub when OPENROUTER_API_KEY is unset.
+Uses the OpenRouter agent when OPENROUTER_API_KEY is set. Otherwise it
+uses a local stub and says so at startup.
 
-    sudo python3 bench/run_pilot.py --episodes 50
+    sudo --preserve-env=OPENROUTER_API_KEY python3 bench/run_pilot.py --episodes 5
 """
 
 import argparse
@@ -62,6 +63,14 @@ def _stub_proposal(snapshot, fault_id):
     }
 
 
+def _propose(snapshot, fault_id, use_model):
+    if not use_model:
+        return _stub_proposal(snapshot, fault_id), "stub"
+    from agent.decision_agent import propose_with_predictions
+
+    return propose_with_predictions(snapshot), "model"
+
+
 def _is_wrong(proposal, fault_id):
     action = proposal.get("action", "").replace("reroute_traffic", "REROUTE").replace("no_action", "DO_NOTHING")
     return action not in _correct_set(fault_id)
@@ -79,8 +88,15 @@ def main():
 
     rng = random.Random(args.seed)
     faults = [f for f in inj._FAULTS]
+    use_model = bool(os.environ.get("OPENROUTER_API_KEY"))
+    print(
+        "agent: OpenRouter model" if use_model else "agent: local stub (OPENROUTER_API_KEY is not set)",
+        flush=True,
+    )
     stats = {
         "episodes": args.episodes,
+        "agent": "model" if use_model else "stub",
+        "model_errors": 0,
         "wrong_proposals": 0,
         "gate_v0_unsafe": 0,
         "b5_unsafe": 0,
@@ -95,8 +111,15 @@ def main():
     try:
         for i in range(args.episodes):
             fault_id = "H0" if rng.random() < 0.3 else rng.choice([f for f in faults if f != "H0"])
+            print(f"episode {i + 1}/{args.episodes} fault {fault_id} ...", flush=True)
             record = run_episode(net, links, fault_id=fault_id, seed=rng.randint(0, 2**20), run_oam=True)
-            proposal = _stub_proposal(record["network_snapshot"], fault_id)
+            try:
+                proposal, source = _propose(record["network_snapshot"], fault_id, use_model)
+            except Exception as exc:
+                stats["model_errors"] += 1
+                print(f"  model error: {exc}", flush=True)
+                continue
+            print(f"  {source} proposed {proposal.get('action')}", flush=True)
             if fault_id != "H0" and _is_wrong(proposal, fault_id):
                 stats["wrong_proposals"] += 1
 
