@@ -2,7 +2,7 @@
 
 Research prototype for **prediction-informed OAM gating** of LLM-proposed network fixes. An AI agent **proposes** remediation; an independent **gate** verifies proposals with operations/administration/maintenance (OAM) tests and structured predictions; **control** applies allowed changes only on an emulated network.
 
-Paper track: *Prediction-Informed OAM Gates for LLM-Proposed Network Remediation* — see [`paper/outline.md`](paper/outline.md).
+Paper track: *Prediction-Informed OAM Gates for LLM-Proposed Network Remediation*.
 
 ## Architecture
 
@@ -29,7 +29,7 @@ Telemetry ──► LLM agent (propose only) ──► Gate (verify) ──► C
 | [`config/`](config/) | Fault catalog, costs, thresholds, ground-truth correct fixes |
 | [`policy/`](policy/) | Operator policy context for the LLM |
 | [`results/`](results/) | Pilot metrics, episodes, calibration, observability matrix |
-| [`paper/`](paper/) | Outline and figure generation |
+| [`paper/`](paper/) | Figure generation from saved results |
 
 ## Requirements
 
@@ -106,7 +106,7 @@ python bench/run_experiments.py --episodes-dir results/episodes
 
 ## Agent contract
 
-See [`agent/prompt.md`](agent/prompt.md). The model returns one action plus optional **cause-level test predictions**; the gate chooses which OAM tests to run, not the agent.
+The model prompt is `SYSTEM_PROMPT` in `agent/decision_agent.py`. It returns one action plus optional cause-level test predictions; the gate chooses which OAM tests to run, not the agent.
 
 ## Environment variables
 
@@ -116,4 +116,4 @@ See [`agent/prompt.md`](agent/prompt.md). The model returns one action plus opti
 
 ## License / release
 
-Intended for reproducibility alongside the paper submission (code, configs, saved episodes). See [`paper/outline.md`](paper/outline.md) release notes.
+Intended for reproducibility alongside the paper submission (code, configs, saved episodes).
