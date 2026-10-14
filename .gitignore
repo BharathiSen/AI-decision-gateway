@@ -4,3 +4,10 @@
 
 __pycache__/
 *.pyc
+
+roadmap
+roadmap.md
+
+
+
+results/episodes/*.json 

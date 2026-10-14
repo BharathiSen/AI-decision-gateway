@@ -1,4 +1,29 @@
 {
-  "note": "Run sudo python3 bench/run_pilot.py --episodes 500 on Mininet VM",
-  "episodes": 0
+  "episodes": 500,
+  "environment": "offline_simulation",
+  "agent": "stub",
+  "seed": 1,
+  "model_errors": 0,
+  "wrong_proposals": 77,
+  "wrong_proposals_non_h0": 77,
+  "h0_episodes": 144,
+  "gate_v0_unsafe": 77,
+  "b5_unsafe": 0,
+  "gate_v0_escalate": 0,
+  "b5_escalate": 356,
+  "gate_v0_cost": 1750.0,
+  "b5_cost": 1750.0,
+  "generated_at": "2026-10-14T06:07:23.834638+00:00",
+  "note": "Simulated from observability matrix + stub agent. Run scripts/finish_evaluation.py --mode live on a Mininet VM for paper numbers.",
+  "wrong_rate": 0.154,
+  "gate_v0_unsafe_rate": 0.154,
+  "b5_unsafe_rate": 0.0,
+  "gate_v0_escalation_rate": 0.0,
+  "b5_escalation_rate": 0.712,
+  "go_nogo": {
+    "wrong_rate_non_h0": 0.21629213483146068,
+    "unsafe_rate_delta_pp": 15.4,
+    "recommendation": "inconclusive_or_collect_more",
+    "criteria_doc": "results/pilot_criteria.md"
+  }
 }

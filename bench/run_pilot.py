@@ -19,7 +19,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from network.topology import create_network
-from bench.run_episode import run_episode
+from bench.run_episode import run_episode, save_episode
 from bench import inject as inj
 from bench import tests as oam
 from gate.decide import decide
@@ -80,6 +80,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--episodes", type=int, default=50)
     parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument("--save-episodes", action="store_true", help="Write results/episodes/*.json for replay")
     args = parser.parse_args()
 
     if os.geteuid() != 0:
@@ -95,11 +96,17 @@ def main():
     )
     stats = {
         "episodes": args.episodes,
+        "environment": "mininet_live",
         "agent": "model" if use_model else "stub",
+        "seed": args.seed,
         "model_errors": 0,
         "wrong_proposals": 0,
+        "wrong_proposals_non_h0": 0,
+        "h0_episodes": 0,
         "gate_v0_unsafe": 0,
         "b5_unsafe": 0,
+        "gate_v0_escalate": 0,
+        "b5_escalate": 0,
         "gate_v0_cost": 0.0,
         "b5_cost": 0.0,
     }
@@ -111,6 +118,8 @@ def main():
     try:
         for i in range(args.episodes):
             fault_id = "H0" if rng.random() < 0.3 else rng.choice([f for f in faults if f != "H0"])
+            if fault_id == "H0":
+                stats["h0_episodes"] += 1
             print(f"episode {i + 1}/{args.episodes} fault {fault_id} ...", flush=True)
             record = run_episode(net, links, fault_id=fault_id, seed=rng.randint(0, 2**20), run_oam=True)
             try:
@@ -122,6 +131,7 @@ def main():
             print(f"  {source} proposed {proposal.get('action')}", flush=True)
             if fault_id != "H0" and _is_wrong(proposal, fault_id):
                 stats["wrong_proposals"] += 1
+                stats["wrong_proposals_non_h0"] += 1
 
             oam_results = record["oam"]["results"]
             g = decide(net, proposal, record["network_snapshot"], oam_results, mode="pilot_v0", run_missing_tests=False)
@@ -131,6 +141,15 @@ def main():
                 stats["gate_v0_unsafe"] += 1
             if b["decision"] == "allow" and _is_wrong(proposal, fault_id):
                 stats["b5_unsafe"] += 1
+            if g["decision"] == "escalate":
+                stats["gate_v0_escalate"] += 1
+            if b["decision"] == "escalate":
+                stats["b5_escalate"] += 1
+
+            record["agent_proposal"] = proposal
+            record["gate_decision"] = g
+            if args.save_episodes:
+                save_episode(record)
 
             for tid in g["tests_run"]:
                 for k, v in costs.items():
@@ -150,9 +169,26 @@ def main():
     stats["wrong_rate"] = stats["wrong_proposals"] / n
     stats["gate_v0_unsafe_rate"] = stats["gate_v0_unsafe"] / n
     stats["b5_unsafe_rate"] = stats["b5_unsafe"] / n
+    stats["gate_v0_escalation_rate"] = stats["gate_v0_escalate"] / n
+    stats["b5_escalation_rate"] = stats["b5_escalate"] / n
+    from datetime import datetime, timezone
+
+    stats["generated_at"] = datetime.now(timezone.utc).isoformat()
+    from bench.offline_evaluation import _evaluate_go_nogo
+
+    stats["go_nogo"] = _evaluate_go_nogo(stats)
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "summary.json").write_text(json.dumps(stats, indent=2), encoding="utf-8")
     print(json.dumps(stats, indent=2))
+
+    if args.save_episodes:
+        from bench.run_experiments import aggregate
+
+        summary = aggregate(ROOT / "results" / "episodes")
+        (ROOT / "results" / "experiment_summary.json").write_text(
+            json.dumps(summary, indent=2), encoding="utf-8"
+        )
+        print("Wrote results/experiment_summary.json from saved episodes")
 
 
 if __name__ == "__main__":

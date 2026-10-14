@@ -13,7 +13,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from baselines.ablations import gate_full, gate_no_discrimination
+from baselines.ablations import gate_full, gate_no_predictions
 from baselines.b5_adaptive import decide_b5
 from gate.decide import decide
 
@@ -46,13 +46,13 @@ def replay_episode(record, net=None):
     snap = record.get("network_snapshot") or {}
     fault_id = record.get("fault_id", "H0")
 
-    methods = {}
-    if net:
-        methods["gate_full"] = gate_full(net, proposal, snap, oam, run_missing_tests=False)
-        methods["gate_v0"] = decide(net, proposal, snap, oam, mode="pilot_v0", run_missing_tests=False)
-        methods["B5"] = decide_b5(net, proposal, snap, oam, fault_id, run_tests=False)
-    else:
-        methods["replay_only"] = {"decision": "n/a", "fault_id": fault_id}
+    # net is only required when replay must run live OAM; saved episodes replay offline.
+    methods = {
+        "gate_full": gate_full(net, proposal, snap, oam, run_missing_tests=False),
+        "gate_v0": decide(net, proposal, snap, oam, mode="pilot_v0", run_missing_tests=False),
+        "gate_no_predictions": gate_no_predictions(net, proposal, snap, oam, run_missing_tests=False),
+        "B5": decide_b5(net, proposal, snap, oam, fault_id, run_tests=False),
+    }
 
     wrong = _wrong(proposal, fault_id)
     for name, out in methods.items():

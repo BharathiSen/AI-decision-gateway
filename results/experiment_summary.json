@@ -1,4 +1,27 @@
 {
-  "count": 0,
-  "methods": {}
+  "count": 500,
+  "methods": {
+    "gate_full": {
+      "false_allow": 0,
+      "total": 500,
+      "false_allow_rate": 0.0
+    },
+    "gate_v0": {
+      "false_allow": 77,
+      "total": 500,
+      "false_allow_rate": 0.154
+    },
+    "gate_no_predictions": {
+      "false_allow": 0,
+      "total": 500,
+      "false_allow_rate": 0.0
+    },
+    "B5": {
+      "false_allow": 0,
+      "total": 500,
+      "false_allow_rate": 0.0
+    }
+  },
+  "environment": "offline_simulation",
+  "episode_count": 500
 }
