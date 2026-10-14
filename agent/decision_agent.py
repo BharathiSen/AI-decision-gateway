@@ -168,13 +168,16 @@ def propose_decision(
         },
     )
 
-    decision = json.loads(response.choices[0].message.content)
+    from agent.validate import validate_proposal
 
-    if decision["action"] not in allowed_actions:
-        raise ValueError(
-            f"model proposed disallowed action {decision['action']!r}, "
-            f"expected one of {allowed_actions}"
-        )
+    try:
+        decision = json.loads(response.choices[0].message.content)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid agent output: malformed JSON: {exc}") from exc
+
+    ok, errors = validate_proposal(decision, allowed_actions=allowed_actions)
+    if not ok:
+        raise ValueError(f"invalid agent output: {errors}")
 
     return decision
 
@@ -226,7 +229,10 @@ def propose_with_predictions(
         },
     )
 
-    decision = json.loads(response.choices[0].message.content)
+    try:
+        decision = json.loads(response.choices[0].message.content)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid agent output: malformed JSON: {exc}") from exc
     ok, errors = validate_proposal(decision, allowed_actions=allowed_actions)
     if not ok:
         raise ValueError(f"invalid agent output: {errors}")

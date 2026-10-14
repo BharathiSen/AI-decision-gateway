@@ -25,18 +25,9 @@ RESULTS = Path(__file__).resolve().parent.parent / "results"
 
 def _signature(test_results):
     """Compact outcome signature per test for discrimination."""
-    sig = {}
-    for r in test_results:
-        tid = r["test_id"]
-        if tid == "T1_e2e_ping":
-            sig[tid] = f"loss={r.get('packet_loss_percent')},lat={r.get('latency_ms')}"
-        elif tid == "T7_route_check":
-            sig[tid] = r.get("active_path")
-        elif tid == "T10_speed":
-            sig[tid] = r.get("mbit_per_sec")
-        else:
-            sig[tid] = "ok"
-    return sig
+    from bench.outcomes import signature
+
+    return signature(test_results)
 
 
 def load_correct_fixes():

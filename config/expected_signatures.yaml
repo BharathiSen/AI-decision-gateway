@@ -1,0 +1,118 @@
+version: 1
+
+# How each catalog fault should change graded OAM outcomes relative to H0.
+# required: the VM verifier fails if none of differs_from_healthy moved.
+# Flap faults are timing-sensitive, so they are recorded but not required.
+# pairs: faults that need different fixes and must not share a signature
+# on every listed test.
+
+faults:
+  H0:
+    differs_from_healthy: []
+    required: false
+  F1:
+    differs_from_healthy: [T1_e2e_ping, T2_hop_ping]
+    required: true
+    notes: "R2-R4 link down. T1 down; primary r2-r4 hop down."
+  F2:
+    differs_from_healthy: [T1_e2e_ping, T2_hop_ping]
+    required: true
+    notes: "R1-R2 link down."
+  F3:
+    differs_from_healthy: [T1_e2e_ping, T2_hop_ping]
+    required: true
+    notes: "Forward loss on R2-R4. T1 loss; primary r2-r4 hop loss."
+  F4:
+    differs_from_healthy: [T5_if_errors]
+    required: true
+    notes: "Corruption shows up as interface errors, unlike plain loss."
+  F5:
+    differs_from_healthy: [T1_e2e_ping, T2_hop_ping]
+    required: true
+    notes: "Delay grades as latency/delay, not loss."
+  F6:
+    differs_from_healthy: [T6_queue_stats, T10_speed]
+    required: true
+    notes: "Queue congestion on R2-R4. Drops/backlog or a slow iperf."
+  F7:
+    differs_from_healthy: [T6_queue_stats, T10_speed]
+    required: true
+    notes: "Congestion on R1 egress toward R2."
+  F8:
+    differs_from_healthy: [T1_e2e_ping, T2_hop_ping]
+    required: false
+    notes: "Link flap may be up at the moment the battery is sampled."
+  F9:
+    differs_from_healthy: [T7_route_check]
+    required: true
+    notes: "Blackhole at R2. T7 reads blackhole; the R2-R4 hop itself stays up."
+  F10:
+    differs_from_healthy: [T8_tcp_vs_ping]
+    required: true
+    notes: "TCP port drop. Ping stays ok; TCP to 5201 fails."
+  F11:
+    differs_from_healthy: [T1_e2e_ping, T2_hop_ping]
+    required: true
+    notes: "Last-mile loss. The degraded hop is r4-hostB, not r2-r4."
+  F12:
+    differs_from_healthy: [T2_hop_ping]
+    required: true
+    notes: "Backup R3-R4 down. Primary T1 stays ok; backup hop is down."
+  U1:
+    differs_from_healthy: [T4_mtu]
+    required: true
+    notes: "MTU mismatch fails the DF ping. Small ping can still succeed."
+  U2:
+    differs_from_healthy: [T9_oneway_loss]
+    required: true
+    notes: "Reverse loss grades as b2a_loss, unlike forward loss."
+  U3:
+    differs_from_healthy: [T1_e2e_ping]
+    required: false
+    notes: "Reorder and duplication often leave ping within healthy thresholds."
+  U4:
+    differs_from_healthy: [T2_hop_ping]
+    required: false
+    notes: "Backup flap is timing-sensitive and the primary path stays up."
+  U5:
+    differs_from_healthy: [T7_route_check]
+    required: true
+    notes: "Wrong return route at R4 grades as return_mismatch."
+
+pairs:
+  - fault_a: F3
+    fault_b: F11
+    separating_tests: [T2_hop_ping]
+    notes: "Primary-path loss versus last-mile loss."
+  - fault_a: F1
+    fault_b: F9
+    separating_tests: [T7_route_check]
+    notes: "Link down versus blackhole."
+  - fault_a: H0
+    fault_b: F10
+    separating_tests: [T8_tcp_vs_ping]
+    notes: "Healthy ping versus TCP ACL."
+  - fault_a: F12
+    fault_b: F1
+    separating_tests: [T1_e2e_ping, T2_hop_ping]
+    notes: "Backup down versus primary down."
+  - fault_a: F5
+    fault_b: F3
+    separating_tests: [T1_e2e_ping]
+    notes: "Delay versus loss."
+  - fault_a: F4
+    fault_b: F3
+    separating_tests: [T5_if_errors]
+    notes: "Corruption versus loss."
+  - fault_a: F6
+    fault_b: F3
+    separating_tests: [T6_queue_stats, T10_speed]
+    notes: "Congestion versus loss."
+  - fault_a: U2
+    fault_b: F3
+    separating_tests: [T9_oneway_loss]
+    notes: "Reverse loss versus forward loss."
+  - fault_a: U1
+    fault_b: H0
+    separating_tests: [T4_mtu]
+    notes: "MTU mismatch versus healthy DF ping."

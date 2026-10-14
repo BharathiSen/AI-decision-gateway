@@ -43,13 +43,9 @@ def check_consistency(proposal, test_results, primary_cause_id=None):
 
 
 def _summarize_observation(obs):
-    if obs.get("test_id") == "T1_e2e_ping":
-        return f"loss={obs.get('packet_loss_percent')},lat={obs.get('latency_ms')}"
-    if obs.get("test_id") == "T7_route_check":
-        return str(obs.get("active_path"))
-    if obs.get("test_id") == "T10_speed":
-        return str(obs.get("mbit_per_sec"))
-    return "ok"
+    from bench.outcomes import grade_result
+
+    return grade_result(obs)
 
 
 def _prediction_matches(expected, observed):

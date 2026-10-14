@@ -8,9 +8,6 @@ executes the full battery (T10 last).
 import re
 import time
 from datetime import datetime, timezone
-from pathlib import Path
-
-import yaml
 
 try:
     from network import controller as ctl
@@ -21,6 +18,13 @@ try:
     from bench.mininet_util import run_in_node
 except ImportError:
     from mininet_util import run_in_node
+
+try:
+    from bench.outcomes import grade_result, is_degraded, load_thresholds as _load_thresholds
+    from bench.outcomes import parse_qdisc_stats
+except ImportError:
+    from outcomes import grade_result, is_degraded, load_thresholds as _load_thresholds
+    from outcomes import parse_qdisc_stats
 
 HOPS = [
     ("hostA", "r1", "10.0.1.1"),
@@ -34,9 +38,6 @@ HOPS_BACKUP = [
     ("r3", "r4", "10.0.34.2"),
     ("r4", "hostB", "10.0.4.2"),
 ]
-
-_CONFIG = Path(__file__).resolve().parent.parent / "config"
-
 
 def _parse_ping(output):
     loss_match = re.search(r"(\d+)% packet loss", output)
@@ -73,15 +74,28 @@ def _hop_ping(net, src, dst_ip, count=10, interval=0.2):
     return p
 
 
-def T2_hop_ping(net, path="primary"):
-    t0 = time.monotonic()
-    hops = HOPS if path == "primary" else HOPS_BACKUP
+def _ping_hops(net, hops):
     # Sequential: Mininet node.cmd() deadlocks if called from several threads.
-    results = [_hop_ping(net, src, dst_ip) for src, _node, dst_ip in hops]
+    return [_hop_ping(net, src, dst_ip) for src, _node, dst_ip in hops]
+
+
+def T2_hop_ping(net, path="primary"):
+    """Hop pings on the requested path, plus both paths for fault separation.
+
+    Backup hops are what separate a dead backup (F12) from a healthy
+    primary. `hops` stays the requested path so existing callers still
+    read a single path.
+    """
+    t0 = time.monotonic()
+    primary = _ping_hops(net, HOPS)
+    backup = _ping_hops(net, HOPS_BACKUP)
+    selected = primary if path != "backup" else backup
     return {
         "test_id": "T2_hop_ping",
         "path": path,
-        "hops": results,
+        "hops": selected,
+        "hops_primary": primary,
+        "hops_backup": backup,
         "duration_seconds": time.monotonic() - t0,
     }
 
@@ -116,21 +130,26 @@ def T5_if_errors(net):
 def T6_queue_stats(net):
     t0 = time.monotonic()
     queues = {}
-    for name in ("r2", "r3"):
+    for name in ("r1", "r2", "r3"):
         node = net.get(name)
         for intf in node.intfList():
             if intf.name == "lo":
                 continue
-            qdisc = run_in_node(node, f"tc -s qdisc show dev {intf.name}")
-            queues[f"{name}/{intf.name}"] = qdisc.strip()
+            qdisc = run_in_node(node, f"tc -s qdisc show dev {intf.name}").strip()
+            parsed = parse_qdisc_stats(qdisc)
+            parsed["raw"] = qdisc
+            queues[f"{name}/{intf.name}"] = parsed
     return {"test_id": "T6_queue_stats", "queues": queues, "duration_seconds": time.monotonic() - t0}
 
 
 def T7_route_check(net):
     t0 = time.monotonic()
     r1 = run_in_node(net.get("r1"), "ip route show 10.0.4.0/24").strip()
+    r2 = run_in_node(net.get("r2"), "ip route show 10.0.4.0/24").strip()
     r4 = run_in_node(net.get("r4"), "ip route show 10.0.1.0/24").strip()
-    if "10.0.12.2" in r1:
+    if "blackhole" in r1 or "blackhole" in r2:
+        active = "blackhole"
+    elif "10.0.12.2" in r1:
         active = "primary"
     elif "10.0.13.2" in r1:
         active = "backup"
@@ -139,6 +158,7 @@ def T7_route_check(net):
     return {
         "test_id": "T7_route_check",
         "r1_to_dest": r1,
+        "r2_to_dest": r2,
         "r4_to_src": r4,
         "active_path": active,
         "duration_seconds": time.monotonic() - t0,
@@ -247,26 +267,27 @@ def run_all(net, test_ids=None):
 
 
 def load_thresholds(noise_id="N0"):
-    with (_CONFIG / "thresholds.yaml").open() as f:
-        doc = yaml.safe_load(f)
-    return doc["by_noise_level"].get(noise_id, doc["by_noise_level"]["N0"])
+    return _load_thresholds(noise_id)
 
 
 def evaluate_against_thresholds(test_results, noise_id="N0"):
-    """Return list of alarms (empty if all within healthy thresholds)."""
+    """Return list of alarms (empty if graded outcomes are healthy)."""
     th = load_thresholds(noise_id)
     alarms = []
-    by_id = {r["test_id"]: r for r in test_results}
-    t1 = by_id.get("T1_e2e_ping", {})
-    if t1:
-        lim = th.get("T1_e2e_ping", {})
-        if t1.get("packet_loss_percent", 100) > lim.get("max_loss_percent", 100):
-            alarms.append("T1_loss_high")
-        lat = t1.get("latency_ms")
-        if lat is not None and lat > lim.get("max_latency_ms", 1e9):
-            alarms.append("T1_latency_high")
-    t10 = by_id.get("T10_speed", {})
-    if t10 and t10.get("mbit_per_sec") is not None:
-        if t10["mbit_per_sec"] < th.get("T10_speed", {}).get("min_mbit", 0):
+    seen = set()
+    for result in test_results:
+        tid = result.get("test_id")
+        outcome = grade_result(result, th)
+        if tid == "T1_e2e_ping":
+            if outcome == "down" or "loss" in outcome:
+                alarms.append("T1_loss_high")
+            if "latency" in outcome:
+                alarms.append("T1_latency_high")
+            continue
+        if tid == "T10_speed" and outcome == "slow":
             alarms.append("T10_speed_low")
+            continue
+        if is_degraded(tid, outcome, th) and tid not in seen:
+            alarms.append(f"{tid}_degraded")
+            seen.add(tid)
     return alarms
