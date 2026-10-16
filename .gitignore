@@ -9,3 +9,6 @@ __pycache__/
 results/episodes/*.json 
 
 checklist.md
+
+
+/.cursor

@@ -74,12 +74,12 @@ def _hop_ping(net, src, dst_ip, count=10, interval=0.2):
     return p
 
 
-def _ping_hops(net, hops):
+def _ping_hops(net, hops, count=10, interval=0.2):
     # Sequential: Mininet node.cmd() deadlocks if called from several threads.
-    return [_hop_ping(net, src, dst_ip) for src, _node, dst_ip in hops]
+    return [_hop_ping(net, src, dst_ip, count=count, interval=interval) for src, _node, dst_ip in hops]
 
 
-def T2_hop_ping(net, path="primary"):
+def T2_hop_ping(net, path="primary", count=10, interval=0.2):
     """Hop pings on the requested path, plus both paths for fault separation.
 
     Backup hops are what separate a dead backup (F12) from a healthy
@@ -87,8 +87,8 @@ def T2_hop_ping(net, path="primary"):
     read a single path.
     """
     t0 = time.monotonic()
-    primary = _ping_hops(net, HOPS)
-    backup = _ping_hops(net, HOPS_BACKUP)
+    primary = _ping_hops(net, HOPS, count=count, interval=interval)
+    backup = _ping_hops(net, HOPS_BACKUP, count=count, interval=interval)
     selected = primary if path != "backup" else backup
     return {
         "test_id": "T2_hop_ping",
