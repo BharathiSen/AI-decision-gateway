@@ -54,6 +54,9 @@ def parse_qdisc_stats(text):
         "drops": drops,
         "backlog_bytes": backlog_bytes,
         "backlog_packets": backlog_packets,
+        # netem "loss N%" counts those discards as dropped. That is not a queue.
+        "loss_rule": bool(re.search(r"\bloss\b", text or "")),
+        "rate_rule": bool(re.search(r"\brate\b|\btbf\b", text or "")),
     }
 
 
@@ -146,7 +149,10 @@ def _grade_t6(result):
     drops = []
     backlog = []
     for name, stats in sorted(_queue_maps(result).items()):
-        if stats.get("drops", 0):
+        # Packet-loss netem reports drops too. Count them only when the
+        # qdisc is a rate limit or has no loss rule.
+        intentional_loss = stats.get("loss_rule") and not stats.get("rate_rule")
+        if stats.get("drops", 0) and not intentional_loss:
             drops.append(name)
         elif stats.get("backlog_bytes", 0) or stats.get("backlog_packets", 0):
             backlog.append(name)

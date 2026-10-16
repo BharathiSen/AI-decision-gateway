@@ -103,6 +103,13 @@ def test_grades():
         "T6 clear",
         grade_result({"test_id": "T6_queue_stats", "queues": {"r2/r2-eth1": {"drops": 0, "backlog_bytes": 0, "backlog_packets": 0}}}, THRESHOLDS) == "clear",
     )
+    check(
+        "T6 netem loss is not congestion",
+        grade_result(
+            {"test_id": "T6_queue_stats", "queues": {"r2/r2-eth1": "qdisc netem 1: root limit 1000 loss 20%\n Sent 10 bytes 8 pkt (dropped 12, overlimits 0 requeues 0)\n backlog 0b 0p requeues 0"}},
+            THRESHOLDS,
+        ) == "clear",
+    )
 
     check(
         "T7 blackhole",
