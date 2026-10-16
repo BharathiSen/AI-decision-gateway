@@ -121,37 +121,60 @@ def main():
             if fault_id == "H0":
                 stats["h0_episodes"] += 1
             print(f"episode {i + 1}/{args.episodes} fault {fault_id} ...", flush=True)
-            record = run_episode(net, links, fault_id=fault_id, seed=rng.randint(0, 2**20), run_oam=True)
-            try:
-                proposal, source = _propose(record["network_snapshot"], fault_id, use_model)
-            except Exception as exc:
+
+            def agent_fn(snapshot, _fault=fault_id, _model=use_model):
+                proposal, source = _propose(snapshot, _fault, _model)
+                print(f"  {source} proposed {proposal.get('action')}", flush=True)
+                return proposal
+
+            def gate_fn(episode, _net=net):
+                oam_results = (episode.get("oam") or {}).get("results") or []
+                return decide(
+                    _net,
+                    episode.get("agent_proposal"),
+                    episode.get("network_snapshot"),
+                    oam_results,
+                    mode="pilot_v0",
+                    run_missing_tests=False,
+                )
+
+            record = run_episode(
+                net,
+                links,
+                fault_id=fault_id,
+                seed=rng.randint(0, 2**20),
+                run_oam=True,
+                agent_fn=agent_fn,
+                gate_fn=gate_fn,
+            )
+            if record.get("agent_error"):
                 stats["model_errors"] += 1
-                print(f"  model error: {exc}", flush=True)
+                print(f"  model error: {record['agent_error']}", flush=True)
                 continue
-            print(f"  {source} proposed {proposal.get('action')}", flush=True)
+            proposal = record.get("agent_proposal") or {}
             if fault_id != "H0" and _is_wrong(proposal, fault_id):
                 stats["wrong_proposals"] += 1
                 stats["wrong_proposals_non_h0"] += 1
 
-            oam_results = record["oam"]["results"]
-            g = decide(net, proposal, record["network_snapshot"], oam_results, mode="pilot_v0", run_missing_tests=False)
+            g = record.get("gate_decision") or {}
+            oam_results = (record.get("oam") or {}).get("results") or []
             b = decide_b5(net, proposal, record["network_snapshot"], oam_results, fault_id)
+            if (g.get("decision") == "allow") and not record.get("execution_attempted"):
+                print(f"  execution withheld: {record.get('execution_error')}", flush=True)
 
-            if g["decision"] == "allow" and _is_wrong(proposal, fault_id):
+            if g.get("decision") == "allow" and _is_wrong(proposal, fault_id):
                 stats["gate_v0_unsafe"] += 1
             if b["decision"] == "allow" and _is_wrong(proposal, fault_id):
                 stats["b5_unsafe"] += 1
-            if g["decision"] == "escalate":
+            if g.get("decision") == "escalate":
                 stats["gate_v0_escalate"] += 1
             if b["decision"] == "escalate":
                 stats["b5_escalate"] += 1
 
-            record["agent_proposal"] = proposal
-            record["gate_decision"] = g
             if args.save_episodes:
                 save_episode(record)
 
-            for tid in g["tests_run"]:
+            for tid in g.get("tests_run") or []:
                 for k, v in costs.items():
                     if k.startswith(tid[:2]):
                         stats["gate_v0_cost"] += v.get("time_seconds", 0)
