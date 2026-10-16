@@ -51,9 +51,18 @@ class FakeNode:
         self.tc_class_out = tc_class_out
         self.tc_qdisc_out = tc_qdisc_out
         self.route_out = route_out
+        self._mtu = {}
 
     def cmd(self, c):
         self.cmds.append(c)
+        if c.startswith("ip link set dev") and " mtu " in c:
+            parts = c.split()
+            # ip link set dev <intf> mtu <value>
+            self._mtu[parts[4]] = parts[6]
+            return ""
+        if c.startswith("cat") and "mtu" in c:
+            intf = c.rsplit("/", 2)[-2]
+            return self._mtu.get(intf, "1500")
         if c.startswith("tc qdisc del"):
             return ""
         if c.startswith("tc class show"):

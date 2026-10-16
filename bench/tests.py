@@ -103,17 +103,43 @@ def T2_hop_ping(net, path="primary"):
 def T4_mtu(net):
     t0 = time.monotonic()
     hostB = net.get("hostB").IP()
-    out = run_in_node(net.get("hostA"), f"ping -c 3 -M do -s 1400 -W 2 {hostB}")
-    ok = "0% packet loss" in out or "1 received" in out
+    out = run_in_node(net.get("hostA"), f"ping -c 5 -M do -s 1400 -W 2 {hostB}")
+    # Match the loss number. A substring check treats "100% packet loss"
+    # as success because it contains "0% packet loss".
+    loss = _parse_ping(out)["packet_loss_percent"]
     return {
         "test_id": "T4_mtu",
-        "df_ping_ok": ok,
+        "df_ping_ok": loss == 0.0,
         "raw": out,
         "duration_seconds": time.monotonic() - t0,
     }
 
 
-def T5_if_errors(net):
+def _snmp_input_errors(node):
+    """IP header errors plus ICMP checksum errors. netem corrupt bumps these; loss does not."""
+    text = run_in_node(node, "cat /proc/net/snmp")
+    total = 0
+    pending = None
+    for line in (text or "").splitlines():
+        parts = line.split()
+        if len(parts) < 2 or parts[0] not in ("Ip:", "Icmp:"):
+            continue
+        if pending == parts[0]:
+            header = pending_header
+            for name, value in zip(header, parts[1:]):
+                if name in ("InHdrErrors", "InCsumErrors"):
+                    try:
+                        total += int(value)
+                    except ValueError:
+                        pass
+            pending = None
+        else:
+            pending = parts[0]
+            pending_header = parts[1:]
+    return total
+
+
+def T5_if_errors(net, probe_count=0):
     t0 = time.monotonic()
     stats = {}
     for name in ("r1", "r2", "r3", "r4"):
@@ -124,6 +150,12 @@ def T5_if_errors(net):
             rx = run_in_node(node, f"cat /sys/class/net/{intf.name}/statistics/rx_errors")
             tx = run_in_node(node, f"cat /sys/class/net/{intf.name}/statistics/tx_errors")
             stats[f"{name}/{intf.name}"] = {"rx_errors": _counter(rx), "tx_errors": _counter(tx)}
+    if probe_count:
+        hostB = net.get("hostB")
+        before = _snmp_input_errors(hostB)
+        _hop_ping(net, "hostA", hostB.IP(), count=probe_count, interval=0.05)
+        delta = max(0, _snmp_input_errors(hostB) - before)
+        stats["hostB/icmp"] = {"rx_errors": delta, "tx_errors": 0}
     return {"test_id": "T5_if_errors", "interfaces": stats, "duration_seconds": time.monotonic() - t0}
 
 
@@ -185,10 +217,10 @@ def T8_tcp_vs_ping(net):
     }
 
 
-def T9_oneway_loss(net):
+def T9_oneway_loss(net, count=10, interval=0.2):
     t0 = time.monotonic()
-    a2b = _hop_ping(net, "hostA", net.get("hostB").IP(), count=10)
-    b2a = _hop_ping(net, "hostB", net.get("hostA").IP(), count=10)
+    a2b = _hop_ping(net, "hostA", net.get("hostB").IP(), count=count, interval=interval)
+    b2a = _hop_ping(net, "hostB", net.get("hostA").IP(), count=count, interval=interval)
     return {
         "test_id": "T9_oneway_loss",
         "hostA_to_hostB": a2b,
@@ -254,15 +286,26 @@ def run_test(net, test_id, **kwargs):
     return TEST_FUNCS[test_id](net, **kwargs)
 
 
-def run_all(net, test_ids=None):
-    """Run full OAM battery; T10 always last."""
+def run_all(net, test_ids=None, ping_count=None, error_probe=None):
+    """Run full OAM battery; T10 always last.
+
+    ping_count and error_probe are optional. The fault-matrix run uses
+    them so a 20% loss and a few corrupted packets are not a coin flip
+    on 10 pings. The default battery is unchanged.
+    """
     ids = list(test_ids or DEFAULT_ORDER)
     if "T10_speed" in ids:
         ids = [i for i in ids if i != "T10_speed"] + ["T10_speed"]
     started = datetime.now(timezone.utc).isoformat()
     results = []
     for tid in ids:
-        results.append(run_test(net, tid))
+        kwargs = {}
+        if ping_count and tid in ("T1_e2e_ping", "T2_hop_ping", "T9_oneway_loss"):
+            kwargs["count"] = ping_count
+            kwargs["interval"] = 0.05
+        if error_probe and tid == "T5_if_errors":
+            kwargs["probe_count"] = error_probe
+        results.append(run_test(net, tid, **kwargs))
     return {"started_at": started, "completed_at": datetime.now(timezone.utc).isoformat(), "results": results}
 
 

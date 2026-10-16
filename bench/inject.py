@@ -39,6 +39,8 @@ been built.
 
 import random
 import re
+import subprocess
+import time
 import uuid
 from pathlib import Path
 
@@ -459,33 +461,80 @@ def _inject_corrupt(net, link_name, node, corrupt_percent):
     interface's bandwidth cap is NOT enforced while this fault is
     active -- a real, deliberate tradeoff, not an oversight: rebuilding
     a combined htb+corrupt hierarchy by hand is out of scope here.
+
+    veth accepts corrupted frames unless receive checksum offload is
+    off on the next hop, so also turn that off. Otherwise T5 never
+    sees InCsumErrors and corruption looks like a healthy link.
     """
     intf = _intf_obj(net, link_name, node)
     node_obj = net.get(node)
     node_obj.cmd(f"tc qdisc del dev {intf.name} root 2>/dev/null")
-    node_obj.cmd(f"tc qdisc replace dev {intf.name} root netem corrupt {corrupt_percent}%")
-    return {"link": link_name, "node": node, "interface": intf.name, "corrupt_percent": corrupt_percent}
+    out = node_obj.cmd(f"tc qdisc replace dev {intf.name} root netem corrupt {corrupt_percent}%")
+    if out.strip() and _is_tc_failure_output(out):
+        raise RuntimeError(f"{link_name}/{node} ({intf.name}): corrupt inject failed: {out.strip()}")
+    peer = next((n for n in LINKS.get(link_name, {}) if n != node), None)
+    peer_intf = get_interface(link_name, peer) if peer else None
+    if peer and peer_intf:
+        net.get(peer).cmd(f"ethtool -K {peer_intf} rx off 2>/dev/null")
+    return {
+        "link": link_name,
+        "node": node,
+        "interface": intf.name,
+        "corrupt_percent": corrupt_percent,
+        "peer": peer,
+        "peer_intf": peer_intf,
+    }
+
+
+def _restore_corrupt_offload(net, peer, peer_intf):
+    if peer and peer_intf:
+        net.get(peer).cmd(f"ethtool -K {peer_intf} rx on 2>/dev/null")
 
 
 # ---------------------------------------------------------------------------
 # Raw ip link for what Mininet genuinely can't do: MTU (U1)
 # ---------------------------------------------------------------------------
 
-def _inject_mtu(net, link_name, node, mtu_bytes):
-    """No MTU support anywhere in TCIntf or the base Intf class
-    (confirmed against Mininet's source) -- plain ip link, no Mininet
-    API involved.
+def _set_one_mtu(net, link_name, node, mtu_bytes):
+    """Lower one interface MTU. IPv6 rejects anything under 1280, and the
+    catalog range is 576–1200, so IPv6 on that interface is disabled first.
+    Raises if the kernel did not keep the new value.
     """
     intf_name = get_interface(link_name, node)
     node_obj = net.get(node)
     original = node_obj.cmd(f"cat /sys/class/net/{intf_name}/mtu").strip()
-    node_obj.cmd(f"ip link set dev {intf_name} mtu {mtu_bytes}")
-    return original
+    node_obj.cmd(f"sysctl -w net.ipv6.conf.{intf_name}.disable_ipv6=1")
+    out = node_obj.cmd(f"ip link set dev {intf_name} mtu {int(mtu_bytes)}")
+    got = node_obj.cmd(f"cat /sys/class/net/{intf_name}/mtu").strip()
+    if got != str(int(mtu_bytes)):
+        raise RuntimeError(
+            f"{link_name}/{node} ({intf_name}): mtu stayed {got or 'unset'}, "
+            f"wanted {int(mtu_bytes)}: {out.strip()}"
+        )
+    return {"node": node, "link": link_name, "mtu": original}
+
+
+def _inject_mtu(net, link_name, node, mtu_bytes):
+    """No MTU support anywhere in TCIntf or the base Intf class
+    (confirmed against Mininet's source) -- plain ip link, no Mininet
+    API involved. Both ends are set so a DF ping cannot sneak through
+    the peer's still-default MTU.
+    """
+    nodes = list(LINKS.get(link_name) or {node: None})
+    if node not in nodes:
+        nodes.append(node)
+    return [_set_one_mtu(net, link_name, n, mtu_bytes) for n in nodes]
 
 
 def _cleanup_mtu(net, link_name, node, original_mtu):
-    intf_name = get_interface(link_name, node)
-    net.get(node).cmd(f"ip link set dev {intf_name} mtu {original_mtu}")
+    saved = original_mtu
+    if isinstance(saved, str):
+        saved = [{"node": node, "link": link_name, "mtu": saved}]
+    for item in saved or []:
+        intf_name = get_interface(item["link"], item["node"])
+        node_obj = net.get(item["node"])
+        node_obj.cmd(f"ip link set dev {intf_name} mtu {item['mtu']}")
+        node_obj.cmd(f"sysctl -w net.ipv6.conf.{intf_name}.disable_ipv6=0")
 
 
 # ---------------------------------------------------------------------------
@@ -532,17 +581,42 @@ def _cleanup_acl(net, node, protocol, port):
 # ---------------------------------------------------------------------------
 
 def _start_background_traffic(net, from_node, to_node, rate_mbit):
-    dest_ip = net.get(to_node).IP()
-    pid = net.get(from_node).cmd(
-        f"iperf3 -c {dest_ip} -t 3600 -b {rate_mbit}M "
+    """UDP flood on port 5202, faster than the shaper.
+
+    Port 5201 stays free for T8/T10. Sending at the shaped rate never
+    fills the queue, so T6 stays clear; the sender aims well above it.
+    """
+    dest = net.get(to_node)
+    server = None
+    if hasattr(dest, "popen"):
+        server = dest.popen(
+            ["iperf3", "-s", "-p", "5202"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        time.sleep(0.4)
+    send_mbit = max(float(rate_mbit) * 8, 20)
+    raw = net.get(from_node).cmd(
+        f"iperf3 -c {dest.IP()} -p 5202 -u -b {send_mbit:.0f}M -t 3600 "
         f"> /tmp/inject_bg_{from_node}.log 2>&1 & echo $!"
     ).strip()
-    return pid
+    pid = raw.splitlines()[-1].strip() if raw else ""
+    return {"pid": pid, "server": server, "from_node": from_node}
 
 
-def _stop_background_traffic(net, from_node, pid):
+def _stop_background_traffic(net, from_node, handle):
+    if isinstance(handle, str):
+        pid, server, src = handle, None, from_node
+    else:
+        handle = handle or {}
+        pid = handle.get("pid")
+        server = handle.get("server")
+        src = handle.get("from_node", from_node)
     if pid:
-        net.get(from_node).cmd(f"kill {pid} 2>/dev/null")
+        net.get(src).cmd(f"kill {pid} 2>/dev/null")
+        net.get(src).cmd("pkill -f 'iperf3 -c' 2>/dev/null")
+    if server is not None and server.poll() is None:
+        server.terminate()
 
 
 # ---------------------------------------------------------------------------
@@ -703,8 +777,11 @@ def inject(net, fault_id, params=None, seed=None):
         link_name = target["link"]
         from_node = _direction_from_node(target)
         original, guessed = _capture_link_params(net, link_name, from_node)
-        _inject_corrupt(net, link_name, from_node, resolved["corrupt_percent"])
-        cleanup_fn = lambda: configure_one_end(net, link_name, from_node, **original)
+        corrupt_info = _inject_corrupt(net, link_name, from_node, resolved["corrupt_percent"])
+        cleanup_fn = lambda info=corrupt_info: (
+            _restore_corrupt_offload(net, info.get("peer"), info.get("peer_intf")),
+            configure_one_end(net, link_name, from_node, **original),
+        )
         details["node"] = from_node
         details["pre_injection_params"] = original
         if guessed:
@@ -752,8 +829,8 @@ def inject(net, fault_id, params=None, seed=None):
         }
 
         if resolved.get("background_traffic"):
-            pid = _start_background_traffic(net, from_node, to_node, resolved["rate_mbit"])
-            cleanups.append(lambda: _stop_background_traffic(net, from_node, pid))
+            handle = _start_background_traffic(net, from_node, to_node, resolved["rate_mbit"])
+            cleanups.append(lambda h=handle: _stop_background_traffic(net, from_node, h))
 
         return correlation_id
 

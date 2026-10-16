@@ -16,18 +16,29 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from network.topology import create_network
 from bench import inject as inj
 from bench import tests as oam
-from bench.mininet_util import recover_net
+from bench.mininet_util import ensure_iperf3_server, recover_net
 from bench.outcomes import signature
 from bench.signature_checks import load_expected, separation_errors
 
 RESULTS = Path(__file__).resolve().parent.parent / "results"
 
 
+# Top of each catalog range, so the matrix is not a one-sample coin flip.
+# F6/F7 keep background traffic, but on UDP/5202 (see inject.py), so T8/T10
+# can still use the iperf3 server on 5201.
+_OBSERVABLE_PARAMS = {
+    "F3": {"loss_percent": 20},
+    "F4": {"corrupt_percent": 5},
+    "F6": {"rate_mbit": 1, "background_traffic": True},
+    "F7": {"rate_mbit": 1, "background_traffic": True},
+    "F11": {"loss_percent": 20},
+    "U1": {"mtu_bytes": 1000},
+    "U2": {"loss_percent": 20},
+}
+
+
 def _inject_params(fault_id):
-    """Skip long background iperf so T10 can use the port itself."""
-    if fault_id in ("F6", "F7"):
-        return {"rate_mbit": 2, "background_traffic": False}
-    return None
+    return _OBSERVABLE_PARAMS.get(fault_id)
 
 
 def main():
@@ -41,13 +52,15 @@ def main():
     net = state["net"]
     rows = []
     try:
+        ensure_iperf3_server(net)
         for fid in fault_ids:
             print(f"fault {fid} ...", flush=True)
             cid = None
             try:
                 inj.reset_all(net)
                 cid = inj.inject(net, fid, params=_inject_params(fid), seed=42)
-                bundle = oam.run_all(net)
+                ensure_iperf3_server(net)
+                bundle = oam.run_all(net, ping_count=50, error_probe=80)
                 sig = signature(bundle["results"])
                 for tid, val in sig.items():
                     rows.append({"fault_id": fid, "test_id": tid, "outcome": val})
