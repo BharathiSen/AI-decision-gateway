@@ -59,7 +59,7 @@ def calibrate(noise_id, runs, seed_base=0, full=False):
             print(f"  run {i + 1}/{runs} ...", flush=True)
             try:
                 inj.reset_all(net)
-                bundle = oam.run_all(net, test_ids=test_ids, ping_count=10)
+                bundle = oam.run_all(net, test_ids=test_ids)
             except UnicodeDecodeError as exc:
                 print(f"  run {i + 1}/{runs} skipped after binary shell output: {exc}", flush=True)
                 recover_net(net)
