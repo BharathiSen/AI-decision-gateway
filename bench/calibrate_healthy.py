@@ -1,7 +1,8 @@
 """
 Calibrate thresholds from healthy (H0) runs and estimate false-alarm rate.
 
-    sudo python3 bench/calibrate_healthy.py --runs 200 --noise N0
+    sudo python3 bench/calibrate_healthy.py --noise N0
+    sudo python3 bench/calibrate_healthy.py --runs 200 --full --noise N0
 """
 
 import argparse
@@ -34,7 +35,12 @@ def _percentile(values, p):
     return values[f] + (values[c] - values[f]) * (k - f)
 
 
-def calibrate(noise_id, runs, seed_base=0):
+# The report only stores T1 and T10. Hop pings dominate a full battery
+# and are not used for these thresholds.
+_THRESHOLD_TESTS = ["T1_e2e_ping", "T10_speed"]
+
+
+def calibrate(noise_id, runs, seed_base=0, full=False):
     mn_cleanup()
     state = create_network()
     net = state["net"]
@@ -44,14 +50,16 @@ def calibrate(noise_id, runs, seed_base=0):
     losses = []
     speeds = []
     false_alarms = 0
+    test_ids = None if full else _THRESHOLD_TESTS
 
-    print(f"Calibrating {noise_id}: {runs} healthy runs (each run is a full OAM pass).", flush=True)
+    scope = "full OAM battery" if full else "T1 and T10 only"
+    print(f"Calibrating {noise_id}: {runs} healthy runs ({scope}).", flush=True)
     try:
         for i in range(runs):
             print(f"  run {i + 1}/{runs} ...", flush=True)
             try:
                 inj.reset_all(net)
-                bundle = oam.run_all(net)
+                bundle = oam.run_all(net, test_ids=test_ids, ping_count=10)
             except UnicodeDecodeError as exc:
                 print(f"  run {i + 1}/{runs} skipped after binary shell output: {exc}", flush=True)
                 recover_net(net)
@@ -114,8 +122,9 @@ def update_thresholds_yaml(noise_id, report):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--runs", type=int, default=200)
+    parser.add_argument("--runs", type=int, default=30)
     parser.add_argument("--noise", default="N0")
+    parser.add_argument("--full", action="store_true", help="run the whole OAM battery each sample")
     parser.add_argument("--write-thresholds", action="store_true")
     parser.add_argument("--report", default="results/calibration_report.json")
     args = parser.parse_args()
@@ -124,7 +133,7 @@ def main():
         print("calibrate_healthy.py requires root on the Mininet VM.", file=sys.stderr)
         sys.exit(2)
 
-    report = calibrate(args.noise, args.runs)
+    report = calibrate(args.noise, args.runs, full=args.full)
     out = Path(args.report)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, indent=2), encoding="utf-8")
