@@ -11,19 +11,11 @@ from pathlib import Path
 
 import yaml
 
+from bench.contracts import TEST_IDS
+
 CANONICAL_ACTIONS = {"REROUTE", "DO_NOTHING", "ESCALATE"}
 ALLOWED_ACTIONS = CANONICAL_ACTIONS
-ALLOWED_TESTS = {
-    "T1_e2e_ping",
-    "T2_hop_ping",
-    "T4_mtu",
-    "T5_if_errors",
-    "T6_queue_stats",
-    "T7_route_check",
-    "T8_tcp_vs_ping",
-    "T9_oneway_loss",
-    "T10_speed",
-}
+ALLOWED_TESTS = set(TEST_IDS)
 MAX_EXPECTED_LEN = 80
 MAX_PROPOSAL_BYTES = 8 * 1024
 _FAULTS = Path(__file__).resolve().parent.parent / "config" / "faults.yaml"

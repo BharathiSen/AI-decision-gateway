@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 
 from bench import inject as inj
 from bench import tests as oam
+from bench.contracts import validate_record
 from bench.traffic import apply_noise, clear_noise
 from telemetry.collector import collect_current_state
 
@@ -90,6 +91,8 @@ def screen_proposal(proposal):
     from agent.validate import validate_proposal
 
     ok, errors = validate_proposal(proposal)
+    if ok:
+        ok, errors = validate_record("proposal", proposal)
     if ok:
         return None
     return {
@@ -174,6 +177,40 @@ def apply_authorized_action(gate_decision, proposal, execute_fn, approved_snapsh
     return outcome
 
 
+def default_components():
+    """The pieces one episode is allowed to call."""
+    from control.actions import execute
+    from gate.decide import decide
+
+    return {
+        "apply_noise": apply_noise,
+        "clear_noise": clear_noise,
+        "reset_all": inj.reset_all,
+        "inject": inj.inject,
+        "inject_compound": inj.inject_compound,
+        "telemetry": collect_current_state,
+        "tests": oam.run_all,
+        "read_state": read_execution_state,
+        "gate": decide,
+        "execute": execute,
+        "log": save_episode,
+    }
+
+
+def _execution_view(record):
+    return {
+        key: record.get(key)
+        for key in (
+            "execution_attempted",
+            "execution_result",
+            "execution_error",
+            "remediation_succeeded",
+            "safeguard_missing",
+            "state_verified",
+        )
+    }
+
+
 def run_episode(
     net,
     links,
@@ -185,6 +222,7 @@ def run_episode(
     agent_fn=None,
     gate_fn=None,
     execute_fn=None,
+    _components=None,
 ):
     """
     Execute one episode and return a serializable record.
@@ -193,25 +231,28 @@ def run_episode(
     execute_fn(proposal) -> execution result. Invoked only after allow
         and a fresh route/path recheck against network_snapshot.
     """
+    parts = dict(default_components())
+    if _components:
+        parts.update(_components)
     episode_id = str(uuid.uuid4())
     started = datetime.now(timezone.utc).isoformat()
-    noise_applied = apply_noise(net, noise_id, links)
+    noise_applied = parts["apply_noise"](net, noise_id, links)
     correlation_ids = []
 
     try:
-        inj.reset_all(net)
+        parts["reset_all"](net)
         if compound_id:
-            comp = inj.inject_compound(net, compound_id, seed=seed)
+            comp = parts["inject_compound"](net, compound_id, seed=seed)
             correlation_ids = comp["correlation_ids"]
             fault_label = compound_id
         elif fault_id != "H0":
-            correlation_ids = [inj.inject(net, fault_id, seed=seed)]
+            correlation_ids = [parts["inject"](net, fault_id, seed=seed)]
             fault_label = fault_id
         else:
             fault_label = "H0"
 
-        snapshot = collect_current_state(net, links)
-        oam_bundle = oam.run_all(net) if run_oam else None
+        snapshot = parts["telemetry"](net, links)
+        oam_bundle = parts["tests"](net) if run_oam else None
 
         record = {
             "episode_id": episode_id,
@@ -234,6 +275,13 @@ def run_episode(
             "state_verified": False,
         }
 
+        telemetry_ok, telemetry_errors = validate_record("telemetry", snapshot)
+        if not telemetry_ok:
+            record["execution_error"] = "invalid telemetry"
+            record["agent_error"] = "; ".join(telemetry_errors)
+            record["completed_at"] = datetime.now(timezone.utc).isoformat()
+            return record
+
         if agent_fn:
             try:
                 record["agent_proposal"] = agent_fn(snapshot)
@@ -255,26 +303,39 @@ def run_episode(
                 record["execution_error"] = f"gate error: {record['gate_error']}"
                 record["completed_at"] = datetime.now(timezone.utc).isoformat()
                 return record
+            if record["gate_decision"] is not None:
+                gate_ok, gate_errors = validate_record("gate_decision", record["gate_decision"])
+                if not gate_ok:
+                    record["gate_error"] = "; ".join(gate_errors)
+                    record["execution_error"] = f"gate error: {record['gate_error']}"
+                    record["completed_at"] = datetime.now(timezone.utc).isoformat()
+                    return record
 
         if execute_fn is None:
-            def execute_fn(proposal, _net=net):
-                from control.actions import execute, proposal_to_action
+            controller = parts["execute"]
+
+            def execute_fn(proposal, _net=net, _execute=controller):
+                from control.actions import proposal_to_action
 
                 action, payload = proposal_to_action(proposal or {})
-                return execute(_net, action, payload)
+                return _execute(_net, action, payload)
 
         record.update(apply_authorized_action(
             record.get("gate_decision"),
             record.get("agent_proposal") or {},
             execute_fn,
             record.get("network_snapshot") or {},
-            lambda: read_execution_state(net, links),
+            lambda: parts["read_state"](net, links),
         ))
+        result_ok, result_errors = validate_record("execution_result", _execution_view(record))
+        if not result_ok:
+            record["remediation_succeeded"] = False
+            record["execution_error"] = "invalid execution result: " + "; ".join(result_errors)
         record["completed_at"] = datetime.now(timezone.utc).isoformat()
         return record
     finally:
-        clear_noise(net, noise_applied, links)
-        inj.reset_all(net)
+        parts["clear_noise"](net, noise_applied, links)
+        parts["reset_all"](net)
 
 
 def save_episode(record, directory=None):
@@ -464,8 +525,239 @@ def _self_check():
     except TypeError:
         pass
 
+    from control.actions import execute as controller_execute
+    from gate.decide import decide as gate_decide
+
+    wired = default_components()
+    assert wired["telemetry"] is collect_current_state
+    assert wired["tests"] is oam.run_all
+    assert wired["inject"] is inj.inject
+    assert wired["reset_all"] is inj.reset_all
+    assert wired["read_state"] is read_execution_state
+    assert wired["execute"] is controller_execute
+    assert wired["gate"] is gate_decide
+    assert wired["log"] is save_episode
+
+    full = _snapshot(active_path="primary")
+    for link in full["links"]:
+        link["endpoints"] = ["a", "b"]
+        link["latency_ms"] = 5.0
+        link["packet_loss_percent"] = 0.0
+    full = {
+        "timestamp": "2026-01-01T00:00:00+00:00",
+        "nodes": [
+            {"name": "hostA", "type": "host", "ips": [{"intf": "hostA-eth0", "ip": "10.0.1.2"}]},
+            {"name": "r1", "type": "router", "ips": [{"intf": "r1-eth1", "ip": "10.0.12.1"}]},
+        ],
+        "links": full["links"],
+        "routes": full["routes"],
+        "interface_counters": {"r1/r1-eth1": {"rx_errors": 0, "tx_errors": 0, "rx_dropped": 0, "tx_dropped": 0}},
+        "queues": {"r1/r1-eth1": {"drops": 0, "backlog_bytes": 0, "backlog_packets": 0, "raw": ""}},
+        "metrics": {
+            "latency_ms": 20.0,
+            "packet_loss_percent": 0.0,
+            "connectivity": True,
+            "active_path": "primary",
+        },
+    }
+    assert validate_record("telemetry", full)[0]
+    assert validate_record("telemetry", {"timestamp": "x"})[0] is False
+    assert validate_record("predicted_test", {"test_id": "T1_e2e_ping", "expected": "loss"})[0]
+    assert validate_record("predicted_test", {"test_id": "T3_missing", "expected": "loss"})[0] is False
+    assert validate_record("gate_decision", {"decision": "approve"})[0] is False
+
+    events = []
+
+    def quiet_noise(net, noise_id, links=None):
+        events.append("noise")
+        return {}
+
+    def quiet_clear(net, applied, links=None):
+        events.append("clear")
+
+    def quiet_reset(net):
+        events.append("reset")
+
+    def quiet_inject(net, fault_id, seed=None):
+        events.append("inject")
+        return "corr-1"
+
+    def quiet_telemetry(net, links=None):
+        events.append("telemetry")
+        return full
+
+    def quiet_tests(net):
+        events.append("tests")
+        return {"results": [{"test_id": "T7_route_check"}]}
+
+    def quiet_read(net, links=None):
+        return full
+
+    fakes = {
+        "apply_noise": quiet_noise,
+        "clear_noise": quiet_clear,
+        "reset_all": quiet_reset,
+        "inject": quiet_inject,
+        "telemetry": quiet_telemetry,
+        "tests": quiet_tests,
+        "read_state": quiet_read,
+    }
+
+    def local_agent(state):
+        events.append("agent")
+        return {
+            "action": "DO_NOTHING",
+            "target": "HostA_to_HostB",
+            "reason": "healthy",
+            "proposed_path": ["r1", "r2", "r4"],
+        }
+
+    def local_gate(record):
+        events.append("gate")
+        return gate_decide(
+            None,
+            record["agent_proposal"],
+            record["network_snapshot"],
+            (record.get("oam") or {}).get("results") or [],
+            mode="pilot_v0",
+            run_missing_tests=False,
+        )
+
+    def local_execute(proposal):
+        events.append("execute")
+        return {"executed": False, "action": proposal.get("action")}
+
+    connected = run_episode(
+        object(),
+        {},
+        fault_id="F1",
+        run_oam=True,
+        agent_fn=local_agent,
+        gate_fn=local_gate,
+        execute_fn=local_execute,
+        _components=fakes,
+    )
+    assert connected["gate_decision"]["decision"] == "allow", connected
+    assert connected["execution_attempted"] is True and connected["state_verified"] is True
+    assert validate_record("proposal", connected["agent_proposal"])[0]
+    assert validate_record("gate_decision", connected["gate_decision"])[0]
+    assert validate_record("execution_result", _execution_view(connected))[0]
+    walked = [item for item in events if item in ("inject", "telemetry", "tests", "agent", "gate", "execute")]
+    assert walked == ["inject", "telemetry", "tests", "agent", "gate", "execute"], walked
+
+    import tempfile
+
+    logged = save_episode(connected, tempfile.mkdtemp())
+    loaded = json.loads(Path(logged).read_text(encoding="utf-8"))
+    assert loaded["episode_id"] == connected["episode_id"]
+    Path(logged).unlink()
+    Path(logged).parent.rmdir()
+
+    skipped = []
+    invalid_telemetry = run_episode(
+        object(),
+        {},
+        fault_id="H0",
+        run_oam=False,
+        agent_fn=lambda state: skipped.append("agent"),
+        gate_fn=lambda record: skipped.append("gate"),
+        execute_fn=lambda proposal: skipped.append("execute"),
+        _components=dict(fakes, telemetry=lambda net, links=None: {"timestamp": "x"}),
+    )
+    assert skipped == []
+    assert invalid_telemetry["execution_error"] == "invalid telemetry"
+
+    invalid_gate = run_episode(
+        object(),
+        {},
+        fault_id="H0",
+        run_oam=False,
+        agent_fn=local_agent,
+        gate_fn=lambda record: {"decision": "approve"},
+        execute_fn=lambda proposal: skipped.append("execute"),
+        _components=fakes,
+    )
+    assert skipped == []
+    assert invalid_gate["execution_attempted"] is False
+    assert str(invalid_gate["execution_error"]).startswith("gate error:")
+
     print("execution boundary: PASS")
 
 
+def live_diamond():
+    """One healthy pass on the diamond topology.
+
+    On the VM, as root:
+
+        sudo python3 bench/run_episode.py --live
+    """
+    import os
+
+    if not hasattr(os, "geteuid") or os.geteuid() != 0:
+        print("diamond integration must run as root on the Mininet VM.", file=sys.stderr)
+        return 2
+    from network.topology import create_network
+
+    parts = default_components()
+    state = create_network()
+    net, links = state["net"], state["links"]
+    try:
+        def agent_fn(_snapshot):
+            return {
+                "action": "DO_NOTHING",
+                "target": "HostA_to_HostB",
+                "reason": "integration",
+                "proposed_path": ["r1", "r2", "r4"],
+            }
+
+        def gate_fn(record, _net=net):
+            oam_results = (record.get("oam") or {}).get("results") or []
+            return parts["gate"](
+                _net,
+                record["agent_proposal"],
+                record["network_snapshot"],
+                oam_results,
+                mode="pilot_v0",
+                run_missing_tests=False,
+            )
+
+        record = run_episode(
+            net,
+            links,
+            fault_id="H0",
+            run_oam=True,
+            agent_fn=agent_fn,
+            gate_fn=gate_fn,
+            _components={"tests": lambda _net: {"results": [oam.run_test(_net, "T7_route_check")]}},
+        )
+    finally:
+        net.stop()
+
+    failures = []
+    if not validate_record("telemetry", record.get("network_snapshot"))[0]:
+        failures.append("telemetry")
+    names = {node.get("name") for node in (record.get("network_snapshot") or {}).get("nodes") or []}
+    if not {"hostA", "hostB", "r1", "r2", "r3", "r4"} <= names:
+        failures.append("diamond nodes")
+    if not validate_record("proposal", record.get("agent_proposal"))[0]:
+        failures.append("proposal")
+    if (record.get("gate_decision") or {}).get("decision") != "allow":
+        failures.append("gate")
+    if not validate_record("execution_result", _execution_view(record))[0]:
+        failures.append("execution")
+    if record.get("execution_attempted") is not True or record.get("state_verified") is not True:
+        failures.append(record.get("execution_error") or "execution withheld")
+    oam_ids = [item.get("test_id") for item in (record.get("oam") or {}).get("results") or []]
+    if oam_ids != ["T7_route_check"]:
+        failures.append("test runner")
+    if failures:
+        print("diamond integration: FAIL " + "; ".join(str(item) for item in failures))
+        return 1
+    print("diamond integration: PASS")
+    return 0
+
+
 if __name__ == "__main__":
+    if "--live" in sys.argv:
+        sys.exit(live_diamond())
     _self_check()

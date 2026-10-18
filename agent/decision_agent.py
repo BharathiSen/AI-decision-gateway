@@ -21,22 +21,14 @@ from pathlib import Path
 import yaml
 from openai import OpenAI
 
+from bench.contracts import TEST_IDS, llm_proposal_schema
+
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 MODEL = "openai/gpt-4o-mini"
 
 DEFAULT_ALLOWED_ACTIONS = ["REROUTE", "DO_NOTHING", "ESCALATE"]
-DEFAULT_OAM_CATALOG = [
-    "T1_e2e_ping",
-    "T2_hop_ping",
-    "T4_mtu",
-    "T5_if_errors",
-    "T6_queue_stats",
-    "T7_route_check",
-    "T8_tcp_vs_ping",
-    "T9_oneway_loss",
-    "T10_speed",
-]
+DEFAULT_OAM_CATALOG = list(TEST_IDS)
 
 # Policy context now lives in policy/policy.yaml (sibling of this file's
 # package), not as a literal here, so it can be edited without touching
@@ -71,45 +63,6 @@ Also return up to five candidate causes. For each cause, predict how \
 named OAM tests from oam_test_catalog would read if that cause were true \
 (use test_id and a short expected field). You still do not execute \
 anything or choose which tests the gate runs."""
-
-
-def _build_schema(allowed_actions):
-    return {
-        "type": "object",
-        "properties": {
-            "action": {"type": "string", "enum": list(allowed_actions)},
-            "target": {"type": "string"},
-            "proposed_path": {"type": "array", "items": {"type": "string"}},
-            "reason": {"type": "string"},
-        },
-        "required": ["action", "target", "proposed_path", "reason"],
-        "additionalProperties": False,
-    }
-
-
-def _build_prediction_schema(allowed_actions):
-    pred = {
-        "type": "object",
-        "properties": {
-            "test_id": {"type": "string"},
-            "expected": {"type": "string"},
-        },
-        "required": ["test_id", "expected"],
-        "additionalProperties": False,
-    }
-    cause = {
-        "type": "object",
-        "properties": {
-            "cause_id": {"type": "string"},
-            "predicted_tests": {"type": "array", "items": pred, "maxItems": 8},
-        },
-        "required": ["cause_id", "predicted_tests"],
-        "additionalProperties": False,
-    }
-    base = _build_schema(allowed_actions)
-    base["properties"]["causes"] = {"type": "array", "items": cause, "maxItems": 5}
-    base["required"].append("causes")
-    return base
 
 
 def propose_decision(
@@ -163,7 +116,7 @@ def propose_decision(
             "json_schema": {
                 "name": "network_decision",
                 "strict": True,
-                "schema": _build_schema(allowed_actions),
+                "schema": llm_proposal_schema(allowed_actions),
             },
         },
     )
@@ -224,7 +177,7 @@ def propose_with_predictions(
             "json_schema": {
                 "name": "network_decision_with_predictions",
                 "strict": True,
-                "schema": _build_prediction_schema(allowed_actions),
+                "schema": llm_proposal_schema(allowed_actions, predictions=True),
             },
         },
     )
