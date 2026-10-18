@@ -24,6 +24,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 import yaml
@@ -35,8 +36,10 @@ from bench.outcomes import grade_result, is_degraded, load_thresholds
 
 ROOT = Path(__file__).resolve().parent.parent
 THRESHOLDS_PATH = ROOT / "config" / "thresholds.yaml"
+SAMPLES_PATH = ROOT / "results" / "calibration_samples.jsonl"
 FULL_BATTERY = list(TEST_IDS)
 MIN_CALIBRATION_RUNS = 200
+CALIBRATION_PINGS = 3
 
 
 def _percentile(values, p):
@@ -351,22 +354,68 @@ def _self_check():
     print("healthy calibration: PASS")
 
 
-def collect_healthy(net, runs, test_ids):
+def _slim(bundle):
+    results = []
+    for result in bundle.get("results") or []:
+        item = {key: value for key, value in result.items() if key not in ("raw", "tcp_raw")}
+        queues = item.get("queues")
+        if isinstance(queues, dict):
+            item["queues"] = {
+                name: {key: value for key, value in stats.items() if key != "raw"}
+                for name, stats in queues.items()
+                if isinstance(stats, dict)
+            }
+        results.append(item)
+    return {"results": results}
+
+
+def _load_samples(path, noise_id):
+    if not path.exists():
+        return []
+    bundles = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        item = json.loads(line)
+        if item.get("noise_id") == noise_id:
+            bundles.append(item["bundle"])
+    return bundles
+
+
+def _append_sample(path, noise_id, index, bundle):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"noise_id": noise_id, "index": index, "bundle": bundle}) + "\n")
+
+
+def collect_healthy(net, runs, test_ids, noise_id="N0", sample_path=SAMPLES_PATH):
     from bench import inject as inj
     from bench import tests as oam
     from bench.mininet_util import recover_net
 
-    bundles = []
-    for index in range(runs):
+    bundles = _load_samples(sample_path, noise_id)
+    if len(bundles) >= runs:
+        print(f"  {noise_id} already has {len(bundles)} saved runs.", flush=True)
+        return bundles[:runs]
+    print(f"  resuming {noise_id} at {len(bundles) + 1}/{runs}.", flush=True)
+    inj.reset_all(net)
+    for index in range(len(bundles), runs):
         print(f"  run {index + 1}/{runs} ...", flush=True)
+        started = time.monotonic()
         try:
-            inj.reset_all(net)
-            bundles.append(oam.run_all(net, test_ids=test_ids))
+            bundle = _slim(oam.run_all(
+                net,
+                test_ids=test_ids,
+                ping_count=CALIBRATION_PINGS,
+                ping_interval=0.2,
+            ))
         except UnicodeDecodeError as exc:
             print(f"  run {index + 1}/{runs} skipped after binary shell output: {exc}", flush=True)
             recover_net(net)
-        else:
-            print(f"  run {index + 1}/{runs} done", flush=True)
+            continue
+        _append_sample(sample_path, noise_id, index, bundle)
+        bundles.append(bundle)
+        print(f"  run {index + 1}/{runs} done in {time.monotonic() - started:.0f}s", flush=True)
     return bundles
 
 
@@ -393,7 +442,7 @@ def calibrate(noise_ids, runs, eval_runs, seed=0, quick=False):
             )
             noise_applied = apply_noise(net, noise_id, state["links"])
             try:
-                collected = collect_healthy(net, total, test_ids)
+                collected = collect_healthy(net, total, test_ids, noise_id=noise_id)
             finally:
                 try:
                     clear_noise(net, noise_applied, state["links"])

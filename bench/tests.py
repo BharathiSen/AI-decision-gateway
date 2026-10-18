@@ -103,7 +103,7 @@ def T2_hop_ping(net, path="primary", count=10, interval=0.2):
 def T4_mtu(net):
     t0 = time.monotonic()
     hostB = net.get("hostB").IP()
-    out = run_in_node(net.get("hostA"), f"ping -c 5 -M do -s 1400 -W 2 {hostB}")
+    out = run_in_node(net.get("hostA"), f"ping -c 5 -i 0.2 -M do -s 1400 -W 2 {hostB}")
     # Match the loss number. A substring check treats "100% packet loss"
     # as success because it contains "0% packet loss".
     loss = _parse_ping(out)["packet_loss_percent"]
@@ -144,12 +144,18 @@ def T5_if_errors(net, probe_count=0):
     stats = {}
     for name in ("r1", "r2", "r3", "r4"):
         node = net.get(name)
-        for intf in node.intfList():
-            if intf.name == "lo":
+        intfs = [intf.name for intf in node.intfList() if intf.name != "lo"]
+        if not intfs:
+            continue
+        script = "; ".join(
+            f'echo "{intf} $(cat /sys/class/net/{intf}/statistics/rx_errors) $(cat /sys/class/net/{intf}/statistics/tx_errors)"'
+            for intf in intfs
+        )
+        for line in run_in_node(node, script).splitlines():
+            parts = line.split()
+            if len(parts) < 3:
                 continue
-            rx = run_in_node(node, f"cat /sys/class/net/{intf.name}/statistics/rx_errors")
-            tx = run_in_node(node, f"cat /sys/class/net/{intf.name}/statistics/tx_errors")
-            stats[f"{name}/{intf.name}"] = {"rx_errors": _counter(rx), "tx_errors": _counter(tx)}
+            stats[f"{name}/{parts[0]}"] = {"rx_errors": _counter(parts[1]), "tx_errors": _counter(parts[2])}
     if probe_count:
         hostB = net.get("hostB")
         before = _snmp_input_errors(hostB)
@@ -164,13 +170,29 @@ def T6_queue_stats(net):
     queues = {}
     for name in ("r1", "r2", "r3"):
         node = net.get(name)
-        for intf in node.intfList():
-            if intf.name == "lo":
-                continue
-            qdisc = run_in_node(node, f"tc -s qdisc show dev {intf.name}").strip()
-            parsed = parse_qdisc_stats(qdisc)
-            parsed["raw"] = qdisc
-            queues[f"{name}/{intf.name}"] = parsed
+        intfs = [intf.name for intf in node.intfList() if intf.name != "lo"]
+        if not intfs:
+            continue
+        script = "; ".join(f'echo "@@{intf}"; tc -s qdisc show dev {intf}' for intf in intfs)
+        current = None
+        chunk = []
+
+        def store(intf_name, lines, _name=name):
+            if not intf_name:
+                return
+            raw = "\n".join(lines).strip()
+            parsed = parse_qdisc_stats(raw)
+            parsed["raw"] = raw
+            queues[f"{_name}/{intf_name}"] = parsed
+
+        for line in run_in_node(node, script).splitlines():
+            if line.startswith("@@"):
+                store(current, chunk)
+                current = line[2:].strip()
+                chunk = []
+            else:
+                chunk.append(line)
+        store(current, chunk)
     return {"test_id": "T6_queue_stats", "queues": queues, "duration_seconds": time.monotonic() - t0}
 
 
@@ -286,12 +308,13 @@ def run_test(net, test_id, **kwargs):
     return TEST_FUNCS[test_id](net, **kwargs)
 
 
-def run_all(net, test_ids=None, ping_count=None, error_probe=None):
+def run_all(net, test_ids=None, ping_count=None, error_probe=None, ping_interval=None):
     """Run full OAM battery; T10 always last.
 
     ping_count and error_probe are optional. The fault-matrix run uses
     them so a 20% loss and a few corrupted packets are not a coin flip
-    on 10 pings. The default battery is unchanged.
+    on 10 pings. The default battery is unchanged. ping_interval overrides
+    the short matrix spacing; healthy calibration passes 0.2.
     """
     ids = list(test_ids or DEFAULT_ORDER)
     if "T10_speed" in ids:
@@ -302,7 +325,7 @@ def run_all(net, test_ids=None, ping_count=None, error_probe=None):
         kwargs = {}
         if ping_count and tid in ("T1_e2e_ping", "T2_hop_ping", "T9_oneway_loss"):
             kwargs["count"] = ping_count
-            kwargs["interval"] = 0.05
+            kwargs["interval"] = 0.05 if ping_interval is None else ping_interval
         if error_probe and tid == "T5_if_errors":
             kwargs["probe_count"] = error_probe
         results.append(run_test(net, tid, **kwargs))
