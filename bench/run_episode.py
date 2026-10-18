@@ -24,7 +24,6 @@ EPISODE_DIR = Path(__file__).resolve().parent.parent / "results" / "episodes"
 GATE_DECISIONS = {"allow", "block", "escalate"}
 CONTROL_ROUTES = (("r1", "10.0.4.0/24"), ("r4", "10.0.1.0/24"))
 PATH_LINKS = ("r1-r2", "r2-r4", "r1-r3", "r3-r4")
-BACKUP_LINKS = ("r1-r3", "r3-r4")
 
 
 def normalize_gate_decision(gate_decision):
@@ -60,16 +59,6 @@ def execution_fingerprint(snapshot):
     return {"routes": routes, "links": links}
 
 
-def proposal_uses_backup(proposal):
-    proposal = proposal or {}
-    label = proposal.get("path") or proposal.get("proposed_path_label")
-    if label == "backup":
-        return True
-    if label == "primary":
-        return False
-    return "r3" in (proposal.get("proposed_path") or [])
-
-
 def assess_recheck(approved_snapshot, current_snapshot, proposal):
     """Compare the gate snapshot with a fresh read. Does not trust a caller flag."""
     approved = execution_fingerprint(approved_snapshot)
@@ -83,11 +72,31 @@ def assess_recheck(approved_snapshot, current_snapshot, proposal):
         return {"state_verified": False, "reason": "route changed since the gate decision"}
     if approved["links"] != current["links"]:
         return {"state_verified": False, "reason": "path state changed since the gate decision"}
-    if proposal_uses_backup(proposal):
-        backup_up = all(current["links"].get(name) is True for name in BACKUP_LINKS)
-        if not backup_up:
-            return {"state_verified": False, "reason": "backup path is down"}
+    from gate.checks import path_links_up, reroute_choice
+
+    choice = reroute_choice(proposal)
+    action = (proposal or {}).get("action")
+    if choice is None and action in ("REROUTE", "REBALANCE", "reroute_traffic", "rebalance"):
+        return {"state_verified": False, "reason": "path not in policy-approved routes"}
+    if choice is not None:
+        up, _down = path_links_up(current_snapshot, choice)
+        if not up:
+            return {"state_verified": False, "reason": f"{choice} path is down"}
     return {"state_verified": True, "reason": None}
+
+
+def screen_proposal(proposal):
+    """Reject a proposal before the gate. None means the proposal may proceed."""
+    from agent.validate import validate_proposal
+
+    ok, errors = validate_proposal(proposal)
+    if ok:
+        return None
+    return {
+        "agent_error": "; ".join(errors),
+        "execution_error": "invalid proposal",
+        "execution_attempted": False,
+    }
 
 
 def read_execution_state(net, links=None):
@@ -145,9 +154,23 @@ def apply_authorized_action(gate_decision, proposal, execute_fn, approved_snapsh
         outcome["remediation_succeeded"] = False
         return outcome
     outcome["execution_result"] = result
-    outcome["remediation_succeeded"] = bool(
-        isinstance(result, dict) and result.get("executed") is True
-    )
+    succeeded = isinstance(result, dict) and result.get("executed") is True
+    outcome["remediation_succeeded"] = succeeded
+    if succeeded:
+        from gate.checks import reroute_choice
+
+        requested = reroute_choice(proposal)
+        if requested is not None:
+            try:
+                after = read_state()
+            except Exception as exc:
+                outcome["remediation_succeeded"] = False
+                outcome["execution_error"] = f"partial remediation: {type(exc).__name__}: {exc}"
+                return outcome
+            active = ((after or {}).get("metrics") or {}).get("active_path")
+            if active != requested:
+                outcome["remediation_succeeded"] = False
+                outcome["execution_error"] = "partial remediation"
     return outcome
 
 
@@ -218,6 +241,11 @@ def run_episode(
                 record["agent_error"] = f"{type(exc).__name__}: {exc}"
                 record["completed_at"] = datetime.now(timezone.utc).isoformat()
                 return record
+            rejection = screen_proposal(record["agent_proposal"])
+            if rejection:
+                record.update(rejection)
+                record["completed_at"] = datetime.now(timezone.utc).isoformat()
+                return record
 
         if gate_fn:
             try:
@@ -257,18 +285,19 @@ def save_episode(record, directory=None):
     return path
 
 
-def _snapshot(r1_via="10.0.12.2", backup_up=True):
+def _snapshot(r1_via="10.0.12.2", backup_up=True, primary_up=True, active_path="backup"):
     return {
         "routes": [
             {"node": "r1", "prefix": "10.0.4.0/24", "route": f"10.0.4.0/24 via {r1_via} dev r1-eth1"},
             {"node": "r4", "prefix": "10.0.1.0/24", "route": "10.0.1.0/24 via 10.0.24.1 dev r4-eth0"},
         ],
         "links": [
-            {"name": "r1-r2", "up": True},
-            {"name": "r2-r4", "up": True},
+            {"name": "r1-r2", "up": primary_up},
+            {"name": "r2-r4", "up": primary_up},
             {"name": "r1-r3", "up": backup_up},
             {"name": "r3-r4", "up": backup_up},
         ],
+        "metrics": {"active_path": active_path},
     }
 
 
@@ -331,6 +360,54 @@ def _self_check():
 
     assert "state_verified" not in inspect.signature(apply_authorized_action).parameters
     assert "state_verified" not in inspect.signature(run_episode).parameters
+
+    rejected = screen_proposal({"action": "reboot", "target": "HostA_to_HostB", "reason": "no"})
+    assert rejected["execution_attempted"] is False
+    assert rejected["execution_error"] == "invalid proposal"
+
+    from gate.checks import check_safety
+
+    backup = {
+        "action": "REROUTE",
+        "target": "HostA_to_HostB",
+        "reason": "check",
+        "proposed_path": ["r1", "r3", "r4"],
+    }
+    primary = {
+        "action": "REROUTE",
+        "target": "HostA_to_HostB",
+        "reason": "check",
+        "proposed_path": ["r1", "r2", "r4"],
+    }
+    assert check_safety(backup, _snapshot(backup_up=False))["passed"] is False
+    assert check_safety(primary, _snapshot(primary_up=False))["passed"] is False
+    assert check_safety(backup, healthy)["passed"] is True
+
+    calls.clear()
+    primary_down = _snapshot(primary_up=False, active_path="primary")
+    calls.clear()
+    blocked_primary = apply_authorized_action(
+        {"decision": "allow"},
+        primary,
+        execute,
+        primary_down,
+        lambda: primary_down,
+    )
+    assert calls == []
+    assert blocked_primary["execution_error"] == "primary path is down"
+
+    calls.clear()
+    stayed = apply_authorized_action(
+        {"decision": "allow"},
+        backup,
+        execute,
+        healthy,
+        lambda: _snapshot(active_path="primary"),
+    )
+    assert stayed["execution_attempted"] is True
+    assert stayed["remediation_succeeded"] is False
+    assert stayed["execution_error"] == "partial remediation"
+
     print("execution boundary: PASS")
 
 

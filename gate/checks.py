@@ -67,8 +67,36 @@ def check_discrimination(ruled_out_alternatives):
     }
 
 
-def check_safety(proposal, network_snapshot):
+PRIMARY_LINKS = ("r1-r2", "r2-r4")
+BACKUP_LINKS = ("r1-r3", "r3-r4")
+
+
+def reroute_choice(proposal):
+    """Return primary or backup only for an exact policy path or label."""
+    proposal = proposal or {}
+    label = proposal.get("path") or proposal.get("proposed_path_label")
+    if label in ("primary", "backup"):
+        return label
+    nodes = proposal.get("proposed_path") or []
     policy = _load_policy()
+    if nodes == (policy.get("primary_path") or []):
+        return "primary"
+    if nodes == (policy.get("backup_path") or []):
+        return "backup"
+    return None
+
+
+def path_links_up(snapshot, choice):
+    needed = PRIMARY_LINKS if choice == "primary" else BACKUP_LINKS
+    by_name = {
+        link.get("name"): link.get("up")
+        for link in (snapshot or {}).get("links") or []
+    }
+    down = [name for name in needed if by_name.get(name) is not True]
+    return not down, down
+
+
+def check_safety(proposal, network_snapshot):
     try:
         action = normalize_action(proposal.get("action"))
     except ValueError as exc:
@@ -77,19 +105,10 @@ def check_safety(proposal, network_snapshot):
     if action not in RISKY_ACTIONS:
         return {"passed": True, "reason": "non-risky action"}
 
-    path_nodes = proposal.get("proposed_path") or []
-    allowed_primary = policy.get("primary_path", [])
-    allowed_backup = policy.get("backup_path", [])
-    if path_nodes == allowed_primary or path_nodes == allowed_backup:
-        return {"passed": True, "path": path_nodes}
-
-    if "r2" in path_nodes or "primary" in str(proposal.get("reason", "")).lower():
-        return {"passed": True, "path": "primary"}
-    if "r3" in path_nodes:
-        return {"passed": True, "path": "backup"}
-
-    metrics = (network_snapshot or {}).get("metrics", {})
-    if action.name == "REROUTE" and not metrics.get("connectivity"):
-        return {"passed": True, "reason": "reroute while degraded"}
-
-    return {"passed": False, "reason": "path not in policy-approved routes"}
+    choice = reroute_choice(proposal)
+    if choice is None:
+        return {"passed": False, "reason": "path not in policy-approved routes"}
+    up, down = path_links_up(network_snapshot, choice)
+    if not up:
+        return {"passed": False, "reason": f"{choice} path is down", "down": down}
+    return {"passed": True, "path": choice}

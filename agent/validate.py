@@ -1,12 +1,15 @@
 """
 Validate agent JSON proposals.
 
-Malformed, oversized, or unsupported proposals are invalid. Unknown
-cause ids stay allowed so a held-out fault can still be proposed; the
-gate decides whether to escalate.
+Malformed, oversized, or unsupported proposals are invalid. A cause id
+must be one of the catalog ids in config/faults.yaml, including the
+held-out U1–U5 ids.
 """
 
 import json
+from pathlib import Path
+
+import yaml
 
 CANONICAL_ACTIONS = {"REROUTE", "DO_NOTHING", "ESCALATE"}
 ALLOWED_ACTIONS = CANONICAL_ACTIONS
@@ -23,6 +26,17 @@ ALLOWED_TESTS = {
 }
 MAX_EXPECTED_LEN = 80
 MAX_PROPOSAL_BYTES = 8 * 1024
+_FAULTS = Path(__file__).resolve().parent.parent / "config" / "faults.yaml"
+
+
+def catalog_cause_ids():
+    cached = getattr(catalog_cause_ids, "_ids", None)
+    if cached is None:
+        with _FAULTS.open(encoding="utf-8") as handle:
+            doc = yaml.safe_load(handle)
+        cached = {item["id"] for item in (doc.get("faults") or []) if item.get("id")}
+        catalog_cause_ids._ids = cached
+    return cached
 
 
 def _json_size(data):
@@ -69,8 +83,11 @@ def validate_proposal(data, allowed_actions=None, max_causes=5, max_bytes=MAX_PR
             if not isinstance(cause, dict):
                 errors.append(f"causes[{i}] must be object")
                 continue
-            if not isinstance(cause.get("cause_id"), str) or not cause.get("cause_id"):
+            cause_id = cause.get("cause_id")
+            if not isinstance(cause_id, str) or not cause_id:
                 errors.append(f"causes[{i}] needs cause_id")
+            elif cause_id not in catalog_cause_ids():
+                errors.append(f"causes[{i}] cause_id {cause_id!r} is not in the fault catalog")
             if "predicted_tests" not in cause:
                 errors.append(f"causes[{i}] needs predicted_tests")
                 continue

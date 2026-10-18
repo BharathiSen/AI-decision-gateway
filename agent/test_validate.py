@@ -41,7 +41,12 @@ def main():
     unknown_cause = copy.deepcopy(good)
     unknown_cause["causes"][0]["cause_id"] = "not-in-catalog"
     ok, errs = validate_proposal(unknown_cause)
-    check("unknown cause id stays valid", ok, errs)
+    check("unknown cause id rejected", not ok, errs)
+
+    held_out = copy.deepcopy(good)
+    held_out["causes"][0]["cause_id"] = "U1"
+    ok, errs = validate_proposal(held_out)
+    check("held-out catalog id accepted", ok, errs)
 
     bad = copy.deepcopy(good)
     bad["causes"][0]["predicted_tests"][0]["test_id"] = "T99"
