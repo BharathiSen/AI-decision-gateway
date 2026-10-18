@@ -3,7 +3,7 @@
 from control.actions import Action, execute
 
 
-def decide(proposal, snapshot):
+def decide(proposal, snapshot, test_results=None):
     metrics = (snapshot or {}).get("metrics", {})
     loss = metrics.get("packet_loss_percent", 0)
     if loss > 15:

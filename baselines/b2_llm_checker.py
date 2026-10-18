@@ -7,9 +7,8 @@ from control.actions import normalize_action, RISKY_ACTIONS
 def decide(proposal, snapshot, test_results):
     action = normalize_action(proposal.get("action"))
     if action not in RISKY_ACTIONS:
-        return {"method": "B2", "decision": "allow", "reason": "pass-through"}
+        return {"method": "B2", "decision": "allow", "action": action.value, "reason": "pass-through"}
     consistency = check_consistency(proposal, test_results)
     safety = check_safety(proposal, snapshot)
-    if consistency["passed"] and safety["passed"]:
-        return {"method": "B2", "decision": "allow", "checks": [consistency, safety]}
-    return {"method": "B2", "decision": "block", "checks": [consistency, safety]}
+    decision = "allow" if consistency["passed"] and safety["passed"] else "block"
+    return {"method": "B2", "decision": decision, "action": action.value, "checks": [consistency, safety]}

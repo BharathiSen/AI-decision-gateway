@@ -408,6 +408,62 @@ def _self_check():
     assert stayed["remediation_succeeded"] is False
     assert stayed["execution_error"] == "partial remediation"
 
+    import ast
+    from bench.tests import TEST_FUNCS
+    from baselines import run_method
+
+    banned = ("network.controller", "network.fault_injector", "bench.inject", "control.actions")
+    agent_dir = Path(__file__).resolve().parent.parent / "agent"
+    for path in agent_dir.glob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            names = []
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                names = [node.module]
+            for imported in names:
+                assert not any(imported == item or imported.startswith(item + ".") for item in banned), (path.name, imported)
+
+    required_tests = {
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T5_if_errors",
+        "T6_queue_stats",
+        "T7_route_check",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss",
+        "T10_speed",
+    }
+    assert required_tests <= set(TEST_FUNCS)
+
+    from agent.validate import validate_proposal
+
+    unknown = {
+        "action": "DO_NOTHING",
+        "target": "HostA_to_HostB",
+        "reason": "check",
+        "causes": [{"cause_id": "NOT_A_FAULT", "predicted_tests": []}],
+    }
+    assert validate_proposal(unknown)[0] is False
+
+    shared = {
+        "action": "REROUTE",
+        "target": "HostA_to_HostB",
+        "reason": "check",
+        "proposed_path": ["r1", "r3", "r4"],
+    }
+    for method in ("B0", "B1", "B2", "B3", "B5"):
+        out = run_method(method, shared, healthy, [])
+        assert out["decision"] in {"allow", "block", "escalate"}, out
+        assert "action" in out and out["method"] == method
+    try:
+        run_method("B0", shared, healthy, [], fault_id="F1")
+        raise AssertionError("fault_id was accepted")
+    except TypeError:
+        pass
+
     print("execution boundary: PASS")
 
 

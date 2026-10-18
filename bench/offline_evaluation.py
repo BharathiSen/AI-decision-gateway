@@ -15,7 +15,7 @@ from pathlib import Path
 
 import yaml
 
-from baselines.b5_adaptive import decide_b5
+from baselines import run_method
 from bench import inject as inj
 from bench.run_episode import EPISODE_DIR, save_episode
 from gate.decide import decide
@@ -213,7 +213,7 @@ def run_offline_pilot(episodes=500, seed=1, save_episodes=True, episodes_dir=Non
 
         oam_results = oam_bundle["results"]
         g = decide(None, proposal, snapshot, oam_results, mode="pilot_v0", run_missing_tests=False)
-        b = decide_b5(None, proposal, snapshot, oam_results, fault_id, run_tests=False)
+        b = run_method("B5", proposal, snapshot, oam_results)
 
         if g["decision"] == "allow" and _is_wrong(proposal, fault_id):
             stats["gate_v0_unsafe"] += 1

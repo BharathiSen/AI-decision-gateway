@@ -23,7 +23,7 @@ from bench.run_episode import run_episode, save_episode
 from bench import inject as inj
 from bench import tests as oam
 from gate.decide import decide
-from baselines.b5_adaptive import decide_b5
+from baselines import run_method
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXES = yaml.safe_load((ROOT / "config" / "correct_fixes.yaml").read_text(encoding="utf-8"))
@@ -158,7 +158,7 @@ def main():
 
             g = record.get("gate_decision") or {}
             oam_results = (record.get("oam") or {}).get("results") or []
-            b = decide_b5(net, proposal, record["network_snapshot"], oam_results, fault_id)
+            b = run_method("B5", proposal, record["network_snapshot"], oam_results, net=net)
             if (g.get("decision") == "allow") and not record.get("execution_attempted"):
                 print(f"  execution withheld: {record.get('execution_error')}", flush=True)
 
