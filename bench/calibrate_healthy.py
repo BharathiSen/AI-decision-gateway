@@ -351,6 +351,16 @@ def _self_check():
     assert "inject(" not in live
     assert "reset_all" in live and "run_all" in live
 
+    import tempfile
+
+    checkpoint = Path(tempfile.mkdtemp()) / "samples.jsonl"
+    checkpoint.write_text('not-json\n{"noise_id": "N0", "index": 0, "bundle": {"results": []}}\n', encoding="utf-8")
+    loaded = _load_samples(checkpoint, "N0")
+    assert len(loaded) == 1 and loaded[0] == {"results": []}
+    assert "not-json" not in checkpoint.read_text(encoding="utf-8")
+    checkpoint.unlink()
+    checkpoint.parent.rmdir()
+
     print("healthy calibration: PASS")
 
 
@@ -370,16 +380,28 @@ def _slim(bundle):
 
 
 def _load_samples(path, noise_id):
+    """Read saved samples. A blank or half-written line does not stop the run."""
     if not path.exists():
         return []
-    bundles = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
+    kept = []
+    skipped = 0
+    for line in path.read_text(encoding="utf-8-sig").splitlines():
+        line = line.strip()
+        if not line:
             continue
-        item = json.loads(line)
-        if item.get("noise_id") == noise_id:
-            bundles.append(item["bundle"])
-    return bundles
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            skipped += 1
+            continue
+        if not isinstance(item, dict) or "bundle" not in item:
+            skipped += 1
+            continue
+        kept.append(item)
+    if skipped:
+        print(f"  ignored {skipped} unreadable checkpoint line(s) in {path.name}", flush=True)
+        path.write_text("".join(json.dumps(item) + "\n" for item in kept), encoding="utf-8")
+    return [item["bundle"] for item in kept if item.get("noise_id") == noise_id]
 
 
 def _append_sample(path, noise_id, index, bundle):
