@@ -1,5 +1,6 @@
 """Apply background-traffic / jitter noise levels from config/noise.yaml."""
 
+import time
 from pathlib import Path
 
 import yaml
@@ -26,12 +27,20 @@ def apply_noise(net, noise_id, links=None):
     applied = {"noise_id": noise_id}
 
     if level["background_traffic"]["enabled"]:
+        # UDP on 5202. T8 and T10 keep the TCP iperf3 server on 5201.
+        from bench.mininet_util import ensure_iperf3_server
+
         rate = level["background_traffic"]["rate_mbit"]
-        pid = net.get("hostA").cmd(
-            f"iperf3 -c {net.get('hostB').IP()} -t 3600 -b {rate}M "
+        dest = net.get("hostB")
+        server = ensure_iperf3_server(net, "hostB", port=5202)
+        time.sleep(0.4)
+        raw = net.get("hostA").cmd(
+            f"iperf3 -c {dest.IP()} -p 5202 -u -b {rate}M -t 3600 "
             f"> /tmp/noise_bg.log 2>&1 & echo $!"
         ).strip()
+        pid = raw.splitlines()[-1].strip() if raw else ""
         applied["background_pid"] = pid
+        applied["background_server"] = server
         applied["background_rate_mbit"] = rate
 
     if level["jitter"]["enabled"]:
@@ -56,5 +65,8 @@ def clear_noise(net, applied, links=None):
     pid = applied.get("background_pid")
     if pid:
         net.get("hostA").cmd(f"kill {pid} 2>/dev/null")
+    server = applied.get("background_server")
+    if server is not None and server.poll() is None:
+        server.terminate()
     for link_name in ("r1-r2", "r2-r4"):
         ctl.configure_link(ctl.get_link(net, link_name, links), **ctl.BASELINE_LINK_PARAMS)

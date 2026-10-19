@@ -14,6 +14,11 @@ so the VM can be powered off. Run the same command again to continue:
 
     sudo python3 bench/calibrate_healthy.py --noise N0 --runs 200 --eval-runs 50
 
+A finished sample is reprinted from the checkpoint. Add --fill-speed to
+measure only the saved runs that have no T10 bitrate, in batches:
+
+    sudo python3 bench/calibrate_healthy.py --noise N1 --runs 200 --eval-runs 50 --fill-speed --batch 50
+
 --write-thresholds is refused unless that sample is a full battery of
 at least 200 calibration runs plus a separate eval set. The configured
 speed floor is kept when the healthy low tail sits below it.
@@ -77,17 +82,31 @@ def _counts(values):
     return found
 
 
+def _usable_loss(value):
+    """A finished ping. Total loss and values above 100% are not a healthy sample."""
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    if value < 0 or value >= 100:
+        return None
+    return value
+
+
 def _observe(result):
     """Pull the numbers a healthy threshold can use. No fault label."""
     test_id = result.get("test_id")
     observed = {"test_id": test_id}
     if test_id == "T1_e2e_ping":
         observed["latency_ms"] = result.get("latency_ms")
-        observed["packet_loss_percent"] = result.get("packet_loss_percent")
+        observed["packet_loss_percent"] = _usable_loss(result.get("packet_loss_percent"))
     elif test_id == "T2_hop_ping":
         hops = list(result.get("hops_primary") or []) + list(result.get("hops_backup") or [])
         latencies = [hop.get("latency_ms") for hop in hops if hop.get("latency_ms") is not None]
-        losses = [hop.get("packet_loss_percent") for hop in hops if hop.get("packet_loss_percent") is not None]
+        losses = [_usable_loss(hop.get("packet_loss_percent")) for hop in hops]
+        losses = [value for value in losses if value is not None]
         observed["latency_ms"] = max(latencies) if latencies else None
         observed["packet_loss_percent"] = max(losses) if losses else None
     elif test_id == "T4_mtu":
@@ -113,8 +132,8 @@ def _observe(result):
         observed["ping_ok"] = bool(result.get("ping_ok"))
         observed["tcp_ok"] = bool(result.get("tcp_ok"))
     elif test_id == "T9_oneway_loss":
-        observed["a2b_loss"] = (result.get("hostA_to_hostB") or {}).get("packet_loss_percent")
-        observed["b2a_loss"] = (result.get("hostB_to_hostA") or {}).get("packet_loss_percent")
+        observed["a2b_loss"] = _usable_loss((result.get("hostA_to_hostB") or {}).get("packet_loss_percent"))
+        observed["b2a_loss"] = _usable_loss((result.get("hostB_to_hostA") or {}).get("packet_loss_percent"))
     elif test_id == "T10_speed":
         observed["mbit_per_sec"] = result.get("mbit_per_sec")
     return observed
@@ -199,7 +218,10 @@ def propose_thresholds(tests, existing):
     t10 = existing.get("T10_speed") or {}
     floor = t10.get("min_mbit", 1.0)
     p05 = ((tests.get("T10_speed") or {}).get("mbit_per_sec") or {}).get("p05")
-    if p05 is None or p05 * 0.9 < floor:
+    if p05 is None:
+        proposed["T10_speed"] = {"min_mbit": floor}
+        notes.append("T10 had no bitrate; speed floor was not changed")
+    elif p05 * 0.9 < floor:
         proposed["T10_speed"] = {"min_mbit": floor}
         notes.append("T10 min_mbit kept at the configured floor")
     else:
@@ -207,11 +229,34 @@ def propose_thresholds(tests, existing):
     return proposed, notes
 
 
+def _no_reading(result):
+    """A probe that did not return a usable number is not a false alarm."""
+    test_id = result.get("test_id")
+    if test_id == "T10_speed":
+        return result.get("mbit_per_sec") is None
+    if test_id == "T1_e2e_ping":
+        raw = result.get("packet_loss_percent")
+        return raw is not None and _usable_loss(raw) is None
+    if test_id == "T9_oneway_loss":
+        for key in ("hostA_to_hostB", "hostB_to_hostA"):
+            raw = (result.get(key) or {}).get("packet_loss_percent")
+            if raw is not None and _usable_loss(raw) is None:
+                return True
+        return False
+    if test_id == "T2_hop_ping":
+        hops = list(result.get("hops_primary") or []) + list(result.get("hops_backup") or [])
+        raw = [hop.get("packet_loss_percent") for hop in hops if hop.get("packet_loss_percent") is not None]
+        return bool(raw) and all(_usable_loss(value) is None for value in raw)
+    return False
+
+
 def score_false_alarms(bundles, thresholds):
     """Count eval bundles whose graded outcome is not healthy."""
     alarms = 0
     for bundle in bundles:
         for result in bundle.get("results") or []:
+            if _no_reading(result):
+                continue
             outcome = grade_result(result, thresholds)
             if is_degraded(result.get("test_id"), outcome, thresholds):
                 alarms += 1
@@ -338,6 +383,54 @@ def _self_check():
     )
     assert fast["proposed_thresholds"]["T10_speed"]["min_mbit"] == 9.0
 
+    dead_rows = [{"results": _healthy_result()} for _ in range(19)]
+    dead_one = _healthy_result(loss=100.0)
+    for item in dead_one:
+        if item["test_id"] == "T2_hop_ping":
+            for hop in item["hops_primary"] + item["hops_backup"]:
+                hop["packet_loss_percent"] = 100.0
+        if item["test_id"] == "T9_oneway_loss":
+            item["hostA_to_hostB"]["packet_loss_percent"] = 3333.0
+    dead_rows.append({"results": dead_one})
+    dead = build_report(dead_rows, [{"results": dead_one}], "N0", existing, True, 0)
+    assert dead["tests"]["T1_e2e_ping"]["packet_loss_percent"]["p95"] == 0.0
+    assert dead["proposed_thresholds"]["T1_e2e_ping"]["max_loss_percent"] == 5.0
+    assert dead["proposed_thresholds"]["T2_hop_ping"]["max_loss_percent"] == 10.0
+    assert dead["tests"]["T9_oneway_loss"]["a2b_loss"]["p95"] == 0.0
+    assert dead["eval_false_alarms"] == 0
+
+    partial_rows = [{"results": _healthy_result(loss=20.0)} for _ in range(20)]
+    for bundle in partial_rows:
+        for item in bundle["results"]:
+            if item["test_id"] == "T2_hop_ping":
+                item["hops_primary"][0]["packet_loss_percent"] = 20.0
+    partial = build_report(partial_rows, [{"results": _healthy_result(loss=50.0)}], "N0", existing, True, 0)
+    assert partial["proposed_thresholds"]["T1_e2e_ping"]["max_loss_percent"] == 22.0
+    assert partial["proposed_thresholds"]["T2_hop_ping"]["max_loss_percent"] == 22.0
+    assert partial["eval_false_alarms"] == 1
+
+    blank = _healthy_result()
+    for item in blank:
+        if item["test_id"] == "T10_speed":
+            item["mbit_per_sec"] = None
+    missing_speed = build_report(
+        [{"results": blank} for _ in range(20)],
+        [{"results": blank}],
+        "N1",
+        existing,
+        True,
+        0,
+    )
+    assert missing_speed["tests"]["T10_speed"]["mbit_per_sec"]["n"] == 0
+    assert missing_speed["proposed_thresholds"]["T10_speed"]["min_mbit"] == 1.0
+    assert any("no bitrate" in note for note in missing_speed["threshold_notes"])
+    assert missing_speed["eval_false_alarms"] == 0
+
+    from bench.traffic import apply_noise
+
+    traffic = inspect.getsource(apply_noise)
+    assert "-p 5202" in traffic and "-u " in traffic
+
     assert ready_to_write(report) is False
     try:
         update_thresholds_yaml({"N0": report}, THRESHOLDS_PATH)
@@ -417,6 +510,90 @@ def _append_sample(path, noise_id, index, bundle):
         os.fsync(handle.fileno())
 
 
+def _read_rows(path):
+    rows = []
+    if not path.exists():
+        return rows
+    for line in path.read_text(encoding="utf-8-sig").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(item, dict) and "bundle" in item:
+            rows.append(item)
+    return rows
+
+
+def _write_rows(path, rows):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for item in rows:
+            handle.write(json.dumps(item) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def _replace_noise_bundle(path, noise_id, index, bundle):
+    rows = _read_rows(path)
+    seen = 0
+    for item in rows:
+        if item.get("noise_id") != noise_id:
+            continue
+        if seen == index:
+            item["bundle"] = bundle
+            item["index"] = index
+            _write_rows(path, rows)
+            return
+        seen += 1
+
+
+def _t10_mbit(bundle):
+    for result in bundle.get("results") or []:
+        if result.get("test_id") == "T10_speed":
+            return result.get("mbit_per_sec")
+    return None
+
+
+def fill_missing_speed(net, bundles, noise_id, sample_path=SAMPLES_PATH, batch=CALIBRATION_BATCH):
+    """Measure T10 only where a saved run has no bitrate. Leave the other tests."""
+    from bench import tests as oam
+    from bench.mininet_util import recover_net
+
+    missing = [index for index, bundle in enumerate(bundles) if _t10_mbit(bundle) is None]
+    if not missing:
+        return bundles, False
+    todo = missing if batch is None else missing[:batch]
+    print(
+        f"  {noise_id} has {len(missing)} saved runs with no T10 bitrate. Measuring {len(todo)}.",
+        flush=True,
+    )
+    for index in todo:
+        print(f"  speed {index + 1}/{len(bundles)} ...", flush=True)
+        try:
+            result = _call_with_timeout(
+                SAMPLE_TIMEOUT_SECONDS,
+                lambda: oam.run_test(net, "T10_speed", duration=1),
+            )
+        except (UnicodeDecodeError, TimeoutError) as exc:
+            print(f"  speed {index + 1}/{len(bundles)} skipped: {exc}", flush=True)
+            recover_net(net)
+            continue
+        result.pop("raw", None)
+        if result.get("mbit_per_sec") is None:
+            print(f"  speed {index + 1}/{len(bundles)} skipped: no bitrate", flush=True)
+            continue
+        results = [row for row in bundles[index].get("results") or [] if row.get("test_id") != "T10_speed"]
+        results.append(result)
+        bundles[index]["results"] = results
+        _replace_noise_bundle(sample_path, noise_id, index, bundles[index])
+        print(f"  speed {index + 1}/{len(bundles)} {result['mbit_per_sec']:.2f} Mbit/s", flush=True)
+    still = any(_t10_mbit(bundle) is None for bundle in bundles)
+    return bundles, still
+
+
 def _session_goal(done, total, batch):
     if batch is None:
         return total
@@ -476,7 +653,7 @@ def collect_healthy(net, runs, test_ids, noise_id="N0", sample_path=SAMPLES_PATH
     return bundles
 
 
-def calibrate(noise_ids, runs, eval_runs, seed=0, quick=False, batch=CALIBRATION_BATCH):
+def calibrate(noise_ids, runs, eval_runs, seed=0, quick=False, batch=CALIBRATION_BATCH, fill_speed=False):
     from network.topology import create_network
     from bench import inject as inj
     from bench.traffic import apply_noise, clear_noise
@@ -498,20 +675,32 @@ def calibrate(noise_ids, runs, eval_runs, seed=0, quick=False, batch=CALIBRATION
                 flush=True,
             )
             noise_applied = apply_noise(net, noise_id, state["links"])
+            speed_left = False
             try:
                 collected = collect_healthy(net, total, test_ids, noise_id=noise_id, batch=batch)
+                if fill_speed and len(collected) >= total:
+                    collected, speed_left = fill_missing_speed(
+                        net, collected, noise_id, batch=batch,
+                    )
             finally:
                 try:
                     clear_noise(net, noise_applied, state["links"])
                 except Exception as exc:
                     print(f"clear_noise failed: {exc}", flush=True)
                 recover_net(net)
-            if len(collected) < total:
-                print(
-                    f"  saved {len(collected)}/{total} for {noise_id}. "
-                    "Run the same command again to continue. The VM can be off between sittings.",
-                    flush=True,
-                )
+            if len(collected) < total or speed_left:
+                if speed_left:
+                    print(
+                        f"  {noise_id} still has saved runs with no T10 bitrate. "
+                        "Run the same command with --fill-speed again.",
+                        flush=True,
+                    )
+                else:
+                    print(
+                        f"  saved {len(collected)}/{total} for {noise_id}. "
+                        "Run the same command again to continue. The VM can be off between sittings.",
+                        flush=True,
+                    )
                 return None
             reports[noise_id] = build_report(
                 collected[:runs],
@@ -548,6 +737,7 @@ def main():
     parser.add_argument("--report", default="results/calibration_report.json")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--batch", type=int, default=CALIBRATION_BATCH, help="new samples to collect before exiting")
+    parser.add_argument("--fill-speed", action="store_true", help="measure T10 only where a saved run has no bitrate")
     args = parser.parse_args()
 
     if not _is_root():
@@ -562,6 +752,7 @@ def main():
         seed=args.seed,
         quick=args.quick,
         batch=args.batch,
+        fill_speed=args.fill_speed,
     )
     if reports is None:
         return
