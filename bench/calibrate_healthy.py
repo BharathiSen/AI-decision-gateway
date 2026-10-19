@@ -9,11 +9,10 @@ Offline check, from the repo root:
 
     python bench/calibrate_healthy.py
 
-Live collection, on the VM as root. One traffic level is a long run.
-All three levels is the Stage 5 sample:
+Live collection, on the VM as root. Each launch saves 10 samples and exits
+so the VM can be powered off. Run the same command again to continue:
 
     sudo python3 bench/calibrate_healthy.py --noise N0 --runs 200 --eval-runs 50
-    sudo python3 bench/calibrate_healthy.py --noise all --runs 200 --eval-runs 50
 
 --write-thresholds is refused unless that sample is a full battery of
 at least 200 calibration runs plus a separate eval set. The configured
@@ -23,6 +22,7 @@ speed floor is kept when the healthy low tail sits below it.
 import argparse
 import json
 import os
+import signal
 import sys
 import time
 from pathlib import Path
@@ -40,6 +40,8 @@ SAMPLES_PATH = ROOT / "results" / "calibration_samples.jsonl"
 FULL_BATTERY = list(TEST_IDS)
 MIN_CALIBRATION_RUNS = 200
 CALIBRATION_PINGS = 3
+CALIBRATION_BATCH = 10
+SAMPLE_TIMEOUT_SECONDS = 90
 
 
 def _percentile(values, p):
@@ -350,6 +352,9 @@ def _self_check():
     live = inspect.getsource(collect_healthy)
     assert "inject(" not in live
     assert "reset_all" in live and "run_all" in live
+    assert _session_goal(0, 250, 10) == 10
+    assert _session_goal(10, 250, 10) == 20
+    assert _session_goal(245, 250, 10) == 250
 
     import tempfile
 
@@ -408,31 +413,61 @@ def _append_sample(path, noise_id, index, bundle):
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps({"noise_id": noise_id, "index": index, "bundle": bundle}) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
 
 
-def collect_healthy(net, runs, test_ids, noise_id="N0", sample_path=SAMPLES_PATH):
+def _session_goal(done, total, batch):
+    if batch is None:
+        return total
+    return min(total, done + batch)
+
+
+def _call_with_timeout(seconds, fn):
+    """Stop one sample if a Mininet shell never returns. No-op where SIGALRM is absent."""
+    if not hasattr(signal, "SIGALRM"):
+        return fn()
+
+    def _handle(signum, frame):
+        raise TimeoutError(f"sample exceeded {seconds}s")
+
+    previous = signal.signal(signal.SIGALRM, _handle)
+    signal.alarm(seconds)
+    try:
+        return fn()
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+def collect_healthy(net, runs, test_ids, noise_id="N0", sample_path=SAMPLES_PATH, batch=CALIBRATION_BATCH):
     from bench import inject as inj
     from bench import tests as oam
     from bench.mininet_util import recover_net
 
     bundles = _load_samples(sample_path, noise_id)
+    goal = _session_goal(len(bundles), runs, batch)
     if len(bundles) >= runs:
         print(f"  {noise_id} already has {len(bundles)} saved runs.", flush=True)
         return bundles[:runs]
-    print(f"  resuming {noise_id} at {len(bundles) + 1}/{runs}.", flush=True)
+    print(f"  resuming {noise_id} at {len(bundles) + 1}/{runs}; this sitting stops at {goal}.", flush=True)
     inj.reset_all(net)
-    for index in range(len(bundles), runs):
+    for index in range(len(bundles), goal):
         print(f"  run {index + 1}/{runs} ...", flush=True)
         started = time.monotonic()
         try:
-            bundle = _slim(oam.run_all(
-                net,
-                test_ids=test_ids,
-                ping_count=CALIBRATION_PINGS,
-                ping_interval=0.2,
-            ))
-        except UnicodeDecodeError as exc:
-            print(f"  run {index + 1}/{runs} skipped after binary shell output: {exc}", flush=True)
+            bundle = _call_with_timeout(
+                SAMPLE_TIMEOUT_SECONDS,
+                lambda: _slim(oam.run_all(
+                    net,
+                    test_ids=test_ids,
+                    ping_count=CALIBRATION_PINGS,
+                    ping_interval=0.2,
+                    speed_seconds=1,
+                )),
+            )
+        except (UnicodeDecodeError, TimeoutError) as exc:
+            print(f"  run {index + 1}/{runs} skipped: {exc}", flush=True)
             recover_net(net)
             continue
         _append_sample(sample_path, noise_id, index, bundle)
@@ -441,7 +476,7 @@ def collect_healthy(net, runs, test_ids, noise_id="N0", sample_path=SAMPLES_PATH
     return bundles
 
 
-def calibrate(noise_ids, runs, eval_runs, seed=0, quick=False):
+def calibrate(noise_ids, runs, eval_runs, seed=0, quick=False, batch=CALIBRATION_BATCH):
     from network.topology import create_network
     from bench import inject as inj
     from bench.traffic import apply_noise, clear_noise
@@ -464,13 +499,20 @@ def calibrate(noise_ids, runs, eval_runs, seed=0, quick=False):
             )
             noise_applied = apply_noise(net, noise_id, state["links"])
             try:
-                collected = collect_healthy(net, total, test_ids, noise_id=noise_id)
+                collected = collect_healthy(net, total, test_ids, noise_id=noise_id, batch=batch)
             finally:
                 try:
                     clear_noise(net, noise_applied, state["links"])
                 except Exception as exc:
                     print(f"clear_noise failed: {exc}", flush=True)
                 recover_net(net)
+            if len(collected) < total:
+                print(
+                    f"  saved {len(collected)}/{total} for {noise_id}. "
+                    "Run the same command again to continue. The VM can be off between sittings.",
+                    flush=True,
+                )
+                return None
             reports[noise_id] = build_report(
                 collected[:runs],
                 collected[runs:],
@@ -505,6 +547,7 @@ def main():
     parser.add_argument("--write-thresholds", action="store_true")
     parser.add_argument("--report", default="results/calibration_report.json")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--batch", type=int, default=CALIBRATION_BATCH, help="new samples to collect before exiting")
     args = parser.parse_args()
 
     if not _is_root():
@@ -512,7 +555,16 @@ def main():
         sys.exit(2)
 
     noise_ids = ["N0", "N1", "N2"] if args.noise == "all" else [args.noise]
-    reports = calibrate(noise_ids, args.runs, args.eval_runs, seed=args.seed, quick=args.quick)
+    reports = calibrate(
+        noise_ids,
+        args.runs,
+        args.eval_runs,
+        seed=args.seed,
+        quick=args.quick,
+        batch=args.batch,
+    )
+    if reports is None:
+        return
     payload = {"version": 1, "levels": reports}
     out = Path(args.report)
     out.parent.mkdir(parents=True, exist_ok=True)

@@ -308,7 +308,7 @@ def run_test(net, test_id, **kwargs):
     return TEST_FUNCS[test_id](net, **kwargs)
 
 
-def run_all(net, test_ids=None, ping_count=None, error_probe=None, ping_interval=None):
+def run_all(net, test_ids=None, ping_count=None, error_probe=None, ping_interval=None, speed_seconds=None):
     """Run full OAM battery; T10 always last.
 
     ping_count and error_probe are optional. The fault-matrix run uses
@@ -328,6 +328,8 @@ def run_all(net, test_ids=None, ping_count=None, error_probe=None, ping_interval
             kwargs["interval"] = 0.05 if ping_interval is None else ping_interval
         if error_probe and tid == "T5_if_errors":
             kwargs["probe_count"] = error_probe
+        if speed_seconds and tid == "T10_speed":
+            kwargs["duration"] = speed_seconds
         results.append(run_test(net, tid, **kwargs))
     return {"started_at": started, "completed_at": datetime.now(timezone.utc).isoformat(), "results": results}
 
