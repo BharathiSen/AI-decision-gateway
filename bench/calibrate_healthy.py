@@ -578,36 +578,53 @@ def _store_speeds(bundles, indexes, intervals):
     return updates
 
 
+def _print_iperf_tail(raw):
+    lines = [line for line in (raw or "").splitlines() if line.strip() and "bits/sec" not in line]
+    for line in lines[-5:]:
+        print(f"  {line}", flush=True)
+
+
 def fill_missing_speed(net, bundles, noise_id, sample_path=SAMPLES_PATH, batch=CALIBRATION_BATCH):
-    """Fill missing T10 readings from one killable iperf, then return."""
+    """Fill missing T10 readings, then return so the VM can stop."""
     from bench import tests as oam
-    from bench.mininet_util import ensure_iperf3_server
+    from bench.mininet_util import ensure_iperf3_server, restart_iperf3_server
 
     missing = [index for index, bundle in enumerate(bundles) if _t10_mbit(bundle) is None]
     if not missing:
         return bundles, False
     count = min(len(missing), SPEED_FILL_CAP)
-    todo = missing[:count]
     print(
         f"  {noise_id} has {len(missing)} saved runs with no T10 bitrate. "
-        f"One {count}s iperf, then this command exits.",
+        f"Collecting {count}, then this command exits.",
         flush=True,
     )
     ensure_iperf3_server(net, "hostB", port=5201)
-    intervals, raw = oam.collect_speed_intervals(net, count, port=5201)
-    if not intervals:
-        for line in (raw or "").splitlines()[-5:]:
-            print(f"  {line}", flush=True)
-        print("  port 5201 gave no bitrate. Trying port 5203.", flush=True)
-        ensure_iperf3_server(net, "hostB", port=5203)
-        time.sleep(0.4)
-        intervals, raw = oam.collect_speed_intervals(net, count, port=5203)
-    if not intervals:
+    found, raw = oam.collect_speed_intervals(net, count, port=5201)
+    if len(found) < count:
+        if not found:
+            _print_iperf_tail(raw)
+        else:
+            print(
+                f"  iperf stopped after {len(found)}s. Continuing with one-second tests.",
+                flush=True,
+            )
+        restart_iperf3_server(net, port=5201)
+        time.sleep(0.3)
+        failures = 0
+        while len(found) < count and failures < 3:
+            more, raw = oam.collect_speed_intervals(net, 1, port=5201)
+            if not more:
+                failures += 1
+                _print_iperf_tail(raw)
+                restart_iperf3_server(net, port=5201)
+                time.sleep(0.3)
+                continue
+            failures = 0
+            found.extend(more[: count - len(found)])
+    if not found:
         print("  speed fill got no bitrate. Not retrying this sitting.", flush=True)
-        for line in (raw or "").splitlines()[-5:]:
-            print(f"  {line}", flush=True)
         return bundles, True
-    updates = _store_speeds(bundles, todo, intervals)
+    updates = _store_speeds(bundles, missing[:count], found)
     _replace_noise_bundles(sample_path, noise_id, updates)
     print(f"  saved {len(updates)} speed readings.", flush=True)
     still = any(_t10_mbit(bundle) is None for bundle in bundles)
