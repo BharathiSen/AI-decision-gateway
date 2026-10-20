@@ -96,30 +96,12 @@ def mn_cleanup():
         subprocess.run([mn, "-c"], check=False, capture_output=True)
 
 
-def _drop_held(proc):
-    if proc is None:
-        return
-    for attr in ("_stdin_keep", "_log"):
-        handle = getattr(proc, attr, None)
-        if handle is None:
-            continue
-        try:
-            if hasattr(handle, "close"):
-                handle.close()
-            else:
-                os.close(handle)
-        except OSError:
-            pass
-
-
 def ensure_iperf3_server(net, host="hostB", port=5201):
     """Start iperf3 with Node.popen so the server outlives the Mininet shell.
 
     A background `iperf3 -s &` inside node.cmd() is killed when that shell
     exits, which leaves every T10 sample empty. Port 5201 is the speed and
     TCP test. Another port can serve background traffic at the same time.
-    stdin stays open: iperf3 exits with "Bad file descriptor" when fd 0 is
-    closed, and that was cutting long tests off after a few seconds.
     """
     node = net.get(host)
     procs = getattr(node, "_iperf3_procs", None)
@@ -134,20 +116,11 @@ def ensure_iperf3_server(net, host="hostB", port=5201):
     if proc is not None and proc.poll() is None:
         return proc
     cmd = ["iperf3", "-s"] if int(port) == 5201 else ["iperf3", "-s", "-p", str(port)]
-    read_fd, write_fd = os.pipe()
-    log = open(f"/tmp/iperf3-server-{int(port)}.log", "wb", buffering=0)
-    try:
-        proc = node.popen(
-            cmd,
-            stdin=read_fd,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            close_fds=False,
-        )
-    finally:
-        os.close(read_fd)
-    proc._stdin_keep = write_fd
-    proc._log = log
+    proc = node.popen(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
     procs[port] = proc
     if int(port) == 5201:
         node._iperf3_proc = proc
@@ -163,5 +136,8 @@ def restart_iperf3_server(net, host="hostB", port=5201):
         node._iperf3_proc = None
     if proc is not None and proc.poll() is None:
         proc.kill()
-    _drop_held(proc)
+        try:
+            proc.wait(timeout=2)
+        except Exception:
+            pass
     return ensure_iperf3_server(net, host, port)

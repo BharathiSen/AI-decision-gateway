@@ -439,10 +439,11 @@ def _self_check():
     )
     assert parsed == [8.0, 7.5]
     filler = inspect.getsource(fill_missing_speed)
-    assert "collect_speed_intervals" in filler and "SPEED_FILL_CAP" in filler
+    assert "measure_speed_once" in filler and "SPEED_FILL_CAP" in filler
     assert "_call_with_timeout" not in filler
-    from bench.tests import collect_speed_intervals
-    assert "timeout -k" in inspect.getsource(collect_speed_intervals)
+    from bench.tests import measure_speed_once
+    once = inspect.getsource(measure_speed_once)
+    assert "timeout 8" in once and "-t 1" in once and "-i 1" not in once
 
     assert ready_to_write(report) is False
     try:
@@ -599,28 +600,20 @@ def fill_missing_speed(net, bundles, noise_id, sample_path=SAMPLES_PATH, batch=C
         flush=True,
     )
     ensure_iperf3_server(net, "hostB", port=5201)
-    found, raw = oam.collect_speed_intervals(net, count, port=5201)
-    if len(found) < count:
-        if not found:
+    time.sleep(0.3)
+    found = []
+    failures = 0
+    while len(found) < count and failures < 3:
+        mbit, raw = oam.measure_speed_once(net, port=5201)
+        if mbit is None:
+            failures += 1
             _print_iperf_tail(raw)
-        else:
-            print(
-                f"  iperf stopped after {len(found)}s. Continuing with one-second tests.",
-                flush=True,
-            )
-        restart_iperf3_server(net, port=5201)
-        time.sleep(0.3)
-        failures = 0
-        while len(found) < count and failures < 3:
-            more, raw = oam.collect_speed_intervals(net, 1, port=5201)
-            if not more:
-                failures += 1
-                _print_iperf_tail(raw)
+            if failures >= 2:
                 restart_iperf3_server(net, port=5201)
-                time.sleep(0.3)
-                continue
-            failures = 0
-            found.extend(more[: count - len(found)])
+                time.sleep(0.5)
+            continue
+        failures = 0
+        found.append(mbit)
     if not found:
         print("  speed fill got no bitrate. Not retrying this sitting.", flush=True)
         return bundles, True

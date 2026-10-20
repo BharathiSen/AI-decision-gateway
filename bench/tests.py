@@ -278,31 +278,30 @@ def _parse_mbit_intervals(output):
     return found
 
 
-def collect_speed_intervals(net, seconds, port=5201):
-    """One iperf3 from the Mininet shell, which is the path that returns bitrates.
+def measure_speed_once(net, port=5201):
+    """One one-second iperf3, the same shape as a working N0 T10 sample.
 
-    popen gives iperf3 a closed stdin and it exits with "Bad file descriptor".
-    timeout -k kills a stuck client so the shell comes back, and the output
-    file still holds any one-second lines already printed.
+    A multi-second interval report makes this iperf3 close its control
+    socket with "Bad file descriptor". One second, with no interval flag, does not.
     """
     dest = net.get("hostB").IP()
-    limit = int(seconds) + 8
+    port_arg = "" if int(port) == 5201 else f"-p {int(port)} "
     out = run_in_node(
         net.get("hostA"),
-        f"timeout -k 1 {limit} iperf3 -c {dest} -p {int(port)} -t {int(seconds)} "
-        f"-i 1 --connect-timeout 1000",
+        f"timeout 8 iperf3 -c {dest} {port_arg}-t 1 --connect-timeout 2000",
     )
-    intervals = _parse_mbit_intervals(out)
-    for mbit in intervals:
+    mbit = _parse_mbit(out)
+    if mbit is not None:
         print(f"  {mbit:.2f} Mbit/s", flush=True)
-    return intervals, out
+    return mbit, out
 
 
 def T10_speed(net, duration=3, interval=None):
     t0 = time.monotonic()
     hostB = net.get("hostB").IP()
     if interval:
-        intervals, out = collect_speed_intervals(net, duration, port=5201)
+        mbit, out = measure_speed_once(net, port=5201)
+        intervals = [mbit] if mbit is not None else []
     else:
         out = run_in_node(
             net.get("hostA"),
