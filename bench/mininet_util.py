@@ -69,6 +69,18 @@ def run_in_node(node, command):
         return ""
 
 
+def stop_iperf_clients(net, host="hostA"):
+    """Kill iperf3 clients without using the node shell. Servers stay up."""
+    node = net.get(host)
+    if not hasattr(node, "popen"):
+        return
+    node.popen(
+        ["pkill", "-f", "iperf3 -c"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
 def recover_net(net, names=("hostA", "hostB", "r1", "r2", "r3", "r4")):
     for name in names:
         try:

@@ -15,9 +15,9 @@ so the VM can be powered off. Run the same command again to continue:
     sudo python3 bench/calibrate_healthy.py --noise N0 --runs 200 --eval-runs 50
 
 A finished sample is reprinted from the checkpoint. Add --fill-speed to
-measure only the saved runs that have no T10 bitrate, in batches:
+measure missing T10 readings with one short iperf, then the command exits:
 
-    sudo python3 bench/calibrate_healthy.py --noise N1 --runs 200 --eval-runs 50 --fill-speed --batch 50
+    sudo python3 bench/calibrate_healthy.py --noise N1 --runs 200 --eval-runs 50 --fill-speed
 
 --write-thresholds is refused unless that sample is a full battery of
 at least 200 calibration runs plus a separate eval set. The configured
@@ -47,6 +47,7 @@ MIN_CALIBRATION_RUNS = 200
 CALIBRATION_PINGS = 3
 CALIBRATION_BATCH = 10
 SAMPLE_TIMEOUT_SECONDS = 90
+SPEED_FILL_CAP = 15
 
 
 def _percentile(values, p):
@@ -426,10 +427,19 @@ def _self_check():
     assert any("no bitrate" in note for note in missing_speed["threshold_notes"])
     assert missing_speed["eval_false_alarms"] == 0
 
+    from bench.tests import _parse_mbit_intervals
     from bench.traffic import apply_noise
 
     traffic = inspect.getsource(apply_noise)
     assert "-p 5202" in traffic and "-u " in traffic
+    parsed = _parse_mbit_intervals(
+        "[  5]   0.00-1.00   sec  1.00 MBytes  8.00 Mbits/sec\n"
+        "[  5]   1.00-2.00   sec  1.00 MBytes  7.50 Mbits/sec\n"
+        "[  5]   0.00-2.00   sec  2.00 MBytes  7.75 Mbits/sec\n"
+    )
+    assert parsed == [8.0, 7.5]
+    filler = inspect.getsource(fill_missing_speed)
+    assert "interval=1" in filler and "SPEED_FILL_CAP" in filler
 
     assert ready_to_write(report) is False
     try:
@@ -536,18 +546,16 @@ def _write_rows(path, rows):
         os.fsync(handle.fileno())
 
 
-def _replace_noise_bundle(path, noise_id, index, bundle):
+def _replace_noise_bundles(path, noise_id, updates):
+    """Replace several saved bundles for one noise level in a single write."""
     rows = _read_rows(path)
-    seen = 0
-    for item in rows:
-        if item.get("noise_id") != noise_id:
+    positions = [pos for pos, item in enumerate(rows) if item.get("noise_id") == noise_id]
+    for index, bundle in updates.items():
+        if index >= len(positions):
             continue
-        if seen == index:
-            item["bundle"] = bundle
-            item["index"] = index
-            _write_rows(path, rows)
-            return
-        seen += 1
+        rows[positions[index]]["bundle"] = bundle
+        rows[positions[index]]["index"] = index
+    _write_rows(path, rows)
 
 
 def _t10_mbit(bundle):
@@ -558,38 +566,44 @@ def _t10_mbit(bundle):
 
 
 def fill_missing_speed(net, bundles, noise_id, sample_path=SAMPLES_PATH, batch=CALIBRATION_BATCH):
-    """Measure T10 only where a saved run has no bitrate. Leave the other tests."""
+    """Fill missing T10 readings from one iperf, then return so the VM can stop."""
     from bench import tests as oam
-    from bench.mininet_util import recover_net
+    from bench.mininet_util import recover_net, stop_iperf_clients
 
     missing = [index for index, bundle in enumerate(bundles) if _t10_mbit(bundle) is None]
     if not missing:
         return bundles, False
-    todo = missing if batch is None else missing[:batch]
+    count = min(len(missing), SPEED_FILL_CAP if batch is None else batch, SPEED_FILL_CAP)
+    todo = missing[:count]
     print(
-        f"  {noise_id} has {len(missing)} saved runs with no T10 bitrate. Measuring {len(todo)}.",
+        f"  {noise_id} has {len(missing)} saved runs with no T10 bitrate. "
+        f"One {count}s iperf fills {count}, then this command exits.",
         flush=True,
     )
-    for index in todo:
-        print(f"  speed {index + 1}/{len(bundles)} ...", flush=True)
-        try:
-            result = _call_with_timeout(
-                SAMPLE_TIMEOUT_SECONDS,
-                lambda: oam.run_test(net, "T10_speed", duration=1),
-            )
-        except (UnicodeDecodeError, TimeoutError) as exc:
-            print(f"  speed {index + 1}/{len(bundles)} skipped: {exc}", flush=True)
-            recover_net(net)
-            continue
-        result.pop("raw", None)
-        if result.get("mbit_per_sec") is None:
-            print(f"  speed {index + 1}/{len(bundles)} skipped: no bitrate", flush=True)
-            continue
+    try:
+        result = _call_with_timeout(
+            count + 12,
+            lambda: oam.run_test(net, "T10_speed", duration=count, interval=1),
+        )
+    except (UnicodeDecodeError, TimeoutError) as exc:
+        print(f"  speed fill stopped: {exc}", flush=True)
+        stop_iperf_clients(net)
+        recover_net(net)
+        return bundles, True
+    intervals = list(result.get("intervals") or [])
+    if not intervals:
+        print("  speed fill got no bitrate. Not retrying this sitting.", flush=True)
+        for line in (result.get("raw") or "").splitlines()[-5:]:
+            print(f"  {line}", flush=True)
+        return bundles, True
+    updates = {}
+    for index, mbit in zip(todo, intervals):
         results = [row for row in bundles[index].get("results") or [] if row.get("test_id") != "T10_speed"]
-        results.append(result)
+        results.append({"test_id": "T10_speed", "mbit_per_sec": mbit})
         bundles[index]["results"] = results
-        _replace_noise_bundle(sample_path, noise_id, index, bundles[index])
-        print(f"  speed {index + 1}/{len(bundles)} {result['mbit_per_sec']:.2f} Mbit/s", flush=True)
+        updates[index] = bundles[index]
+    _replace_noise_bundles(sample_path, noise_id, updates)
+    print(f"  saved {len(updates)} speed readings.", flush=True)
     still = any(_t10_mbit(bundle) is None for bundle in bundles)
     return bundles, still
 

@@ -261,17 +261,40 @@ def _parse_mbit(output):
     return float(value) * scale
 
 
-def T10_speed(net, duration=3):
+def _parse_mbit_intervals(output):
+    """One-second iperf3 lines. The summary line spans more than one second."""
+    found = []
+    seen = set()
+    scale = {"K": 1e-3, "M": 1.0, "G": 1e3}
+    pattern = re.compile(
+        r"(\d+\.\d+)-(\d+\.\d+)\s+sec\s+[\d.]+\s+[KMG]?Bytes\s+([\d.]+)\s*([KMG])bits/sec"
+    )
+    for match in pattern.finditer(output or ""):
+        start, end, value, unit = match.groups()
+        if abs((float(end) - float(start)) - 1.0) > 0.25 or start in seen:
+            continue
+        seen.add(start)
+        found.append(float(value) * scale[unit])
+    return found
+
+
+def T10_speed(net, duration=3, interval=None):
     t0 = time.monotonic()
     hostB = net.get("hostB").IP()
-    out = run_in_node(
-        net.get("hostA"),
-        f"timeout 20 iperf3 -c {hostB} -t {duration} --connect-timeout 2000",
-    )
-    mbit = _parse_mbit(out)
+    if interval:
+        # One connection, one line per second. A refused port fails in about a second.
+        command = (
+            f"timeout {int(duration) + 8} iperf3 -c {hostB} -t {int(duration)} "
+            f"-i 1 --connect-timeout 1000"
+        )
+    else:
+        command = f"timeout 20 iperf3 -c {hostB} -t {duration} --connect-timeout 2000"
+    out = run_in_node(net.get("hostA"), command)
+    intervals = _parse_mbit_intervals(out) if interval else []
     return {
         "test_id": "T10_speed",
-        "mbit_per_sec": mbit,
+        "mbit_per_sec": intervals[-1] if intervals else _parse_mbit(out),
+        "intervals": intervals,
         "raw": out[-2000:] if len(out) > 2000 else out,
         "duration_seconds": time.monotonic() - t0,
     }
