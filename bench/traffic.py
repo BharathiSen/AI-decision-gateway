@@ -1,5 +1,6 @@
 """Apply background-traffic / jitter noise levels from config/noise.yaml."""
 
+import subprocess
 import time
 from pathlib import Path
 
@@ -34,12 +35,14 @@ def apply_noise(net, noise_id, links=None):
         dest = net.get("hostB")
         server = ensure_iperf3_server(net, "hostB", port=5202)
         time.sleep(0.4)
-        raw = net.get("hostA").cmd(
-            f"iperf3 -c {dest.IP()} -p 5202 -u -b {rate}M -t 3600 "
-            f"> /tmp/noise_bg.log 2>&1 & echo $!"
-        ).strip()
-        pid = raw.splitlines()[-1].strip() if raw else ""
-        applied["background_pid"] = pid
+        # popen, not the Mininet shell. A background client started with
+        # node.cmd() leaves that shell waiting, and the speed test then hangs.
+        client = net.get("hostA").popen(
+            ["iperf3", "-c", dest.IP(), "-p", "5202", "-u", "-b", f"{rate}M", "-t", "3600"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        applied["background_proc"] = client
         applied["background_server"] = server
         applied["background_rate_mbit"] = rate
 
@@ -62,6 +65,9 @@ def clear_noise(net, applied, links=None):
     except ImportError:
         from mininet_util import recover_net
     recover_net(net)
+    client = applied.get("background_proc")
+    if client is not None and client.poll() is None:
+        client.terminate()
     pid = applied.get("background_pid")
     if pid:
         net.get("hostA").cmd(f"kill {pid} 2>/dev/null")
