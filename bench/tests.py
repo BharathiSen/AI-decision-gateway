@@ -5,10 +5,7 @@ Each test returns a dict with raw output and parsed fields. run_all()
 executes the full battery (T10 last).
 """
 
-import os
 import re
-import select
-import subprocess
 import time
 from datetime import datetime, timezone
 
@@ -282,53 +279,23 @@ def _parse_mbit_intervals(output):
 
 
 def collect_speed_intervals(net, seconds, port=5201):
-    """Run one iperf3 with popen, not the Mininet shell.
+    """One iperf3 from the Mininet shell, which is the path that returns bitrates.
 
-    The shell blocks until iperf exits, and a stuck client never exits.
-    This waits on the pipe and kills that one process. One-second lines
-    already read are kept.
+    popen gives iperf3 a closed stdin and it exits with "Bad file descriptor".
+    timeout -k kills a stuck client so the shell comes back, and the output
+    file still holds any one-second lines already printed.
     """
-    node = net.get("hostA")
-    proc = node.popen(
-        [
-            "iperf3", "-c", net.get("hostB").IP(), "-p", str(port),
-            "-t", str(int(seconds)), "-i", "1", "--connect-timeout", "1000",
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+    dest = net.get("hostB").IP()
+    limit = int(seconds) + 8
+    out = run_in_node(
+        net.get("hostA"),
+        f"timeout -k 1 {limit} iperf3 -c {dest} -p {int(port)} -t {int(seconds)} "
+        f"-i 1 --connect-timeout 1000",
     )
-    chunks = []
-    shown = 0
-    deadline = time.monotonic() + int(seconds) + 4
-    quiet_until = time.monotonic() + 3
-    try:
-        while time.monotonic() < deadline:
-            if proc.stdout is None:
-                break
-            ready, _, _ = select.select([proc.stdout], [], [], 1.0)
-            if not ready:
-                if proc.poll() is not None or (not chunks and time.monotonic() > quiet_until):
-                    break
-                continue
-            piece = os.read(proc.stdout.fileno(), 4096)
-            if not piece:
-                break
-            chunks.append(piece)
-            found = _parse_mbit_intervals(b"".join(chunks).decode("utf-8", errors="replace"))
-            for mbit in found[shown:]:
-                print(f"  {mbit:.2f} Mbit/s", flush=True)
-            shown = len(found)
-            if proc.poll() is not None:
-                break
-    finally:
-        if proc.poll() is None:
-            proc.kill()
-            try:
-                proc.wait(timeout=2)
-            except Exception:
-                pass
-    raw = b"".join(chunks).decode("utf-8", errors="replace")
-    return _parse_mbit_intervals(raw), raw
+    intervals = _parse_mbit_intervals(out)
+    for mbit in intervals:
+        print(f"  {mbit:.2f} Mbit/s", flush=True)
+    return intervals, out
 
 
 def T10_speed(net, duration=3, interval=None):

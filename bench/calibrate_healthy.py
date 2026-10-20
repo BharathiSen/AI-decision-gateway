@@ -431,7 +431,7 @@ def _self_check():
     from bench.traffic import apply_noise
 
     traffic = inspect.getsource(apply_noise)
-    assert "5202" in traffic and '"-u"' in traffic
+    assert "5202" in traffic and "-u " in traffic
     parsed = _parse_mbit_intervals(
         "[  5]   0.00-1.00   sec  1.00 MBytes  8.00 Mbits/sec\n"
         "[  5]   1.00-2.00   sec  1.00 MBytes  7.50 Mbits/sec\n"
@@ -441,6 +441,8 @@ def _self_check():
     filler = inspect.getsource(fill_missing_speed)
     assert "collect_speed_intervals" in filler and "SPEED_FILL_CAP" in filler
     assert "_call_with_timeout" not in filler
+    from bench.tests import collect_speed_intervals
+    assert "timeout -k" in inspect.getsource(collect_speed_intervals)
 
     assert ready_to_write(report) is False
     try:
