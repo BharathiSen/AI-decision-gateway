@@ -444,6 +444,7 @@ def _self_check():
     assert "_call_with_timeout" not in filler
     from bench.mininet_util import start_one_off_iperf3
     assert '"-s", "-1"' in inspect.getsource(start_one_off_iperf3)
+    assert "free_tcp_port" in inspect.getsource(start_one_off_iperf3)
     from bench.tests import measure_speed_once
     once = inspect.getsource(measure_speed_once)
     assert "timeout 8" in once and "-t 1" in once and "-i 1" not in once
@@ -583,8 +584,11 @@ def _store_speeds(bundles, indexes, intervals):
 
 
 def _print_iperf_tail(raw):
-    lines = [line for line in (raw or "").splitlines() if line.strip() and "bits/sec" not in line]
-    for line in lines[-5:]:
+    lines = [line.strip() for line in (raw or "").splitlines() if "error" in line.lower()]
+    if not lines:
+        print("  no bitrate", flush=True)
+        return
+    for line in lines[-2:]:
         print(f"  {line}", flush=True)
 
 
@@ -603,20 +607,21 @@ def fill_missing_speed(net, bundles, noise_id, sample_path=SAMPLES_PATH, batch=C
         flush=True,
     )
     found = []
-    failures = 0
-    while len(found) < count and failures < 5:
+    attempts = 0
+    attempt_limit = count + 20
+    while len(found) < count and attempts < attempt_limit:
+        attempts += 1
         server = start_one_off_iperf3(net, port=5201)
         time.sleep(0.25)
         try:
             mbit, raw = oam.measure_speed_once(net, port=5201)
         finally:
             finish_one_off(server)
-        if mbit is None:
-            failures += 1
+        failed = mbit is None or "unable to send" in (raw or "") or "error -" in (raw or "")
+        if failed:
             _print_iperf_tail(raw)
             time.sleep(0.3)
             continue
-        failures = 0
         found.append(mbit)
     if not found:
         print("  speed fill got no bitrate. Not retrying this sitting.", flush=True)

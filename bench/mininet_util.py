@@ -5,6 +5,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import time
 import uuid
 from pathlib import Path
 
@@ -159,6 +160,22 @@ def stop_iperf3_server(net, host="hostB", port=5201):
     _release_stdio(proc)
 
 
+def free_tcp_port(net, port, host="hostB"):
+    """Kill whatever is still listening on this port inside the node.
+
+    Killing the Mininet popen handle often leaves iperf3 itself running.
+    The next client then connects to that stuck server and gets
+    "Bad file descriptor".
+    """
+    node = net.get(host)
+    node.cmd(
+        f"fuser -k {int(port)}/tcp >/dev/null 2>&1; "
+        f"ss -lptnH 'sport = :{int(port)}' 2>/dev/null "
+        f"| sed -n 's/.*pid=\\([0-9]*\\).*/\\1/p' | sort -u | xargs -r kill >/dev/null 2>&1; "
+        f"true"
+    )
+
+
 def start_one_off_iperf3(net, host="hostB", port=5201):
     """Serve a single client, then exit.
 
@@ -167,6 +184,8 @@ def start_one_off_iperf3(net, host="hostB", port=5201):
     stays open so the server does not treat a closed fd 0 as a hangup.
     """
     stop_iperf3_server(net, host, port)
+    free_tcp_port(net, port, host)
+    time.sleep(0.2)
     node = net.get(host)
     cmd = ["iperf3", "-s", "-1"]
     if int(port) != 5201:
