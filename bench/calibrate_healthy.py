@@ -439,8 +439,11 @@ def _self_check():
     )
     assert parsed == [8.0, 7.5]
     filler = inspect.getsource(fill_missing_speed)
-    assert "measure_speed_once" in filler and "SPEED_FILL_CAP" in filler
+    assert "measure_speed_once" in filler and "start_one_off_iperf3" in filler
+    assert "SPEED_FILL_CAP" in filler
     assert "_call_with_timeout" not in filler
+    from bench.mininet_util import start_one_off_iperf3
+    assert '"-s", "-1"' in inspect.getsource(start_one_off_iperf3)
     from bench.tests import measure_speed_once
     once = inspect.getsource(measure_speed_once)
     assert "timeout 8" in once and "-t 1" in once and "-i 1" not in once
@@ -588,7 +591,7 @@ def _print_iperf_tail(raw):
 def fill_missing_speed(net, bundles, noise_id, sample_path=SAMPLES_PATH, batch=CALIBRATION_BATCH):
     """Fill missing T10 readings, then return so the VM can stop."""
     from bench import tests as oam
-    from bench.mininet_util import ensure_iperf3_server, restart_iperf3_server
+    from bench.mininet_util import finish_one_off, start_one_off_iperf3
 
     missing = [index for index, bundle in enumerate(bundles) if _t10_mbit(bundle) is None]
     if not missing:
@@ -599,18 +602,19 @@ def fill_missing_speed(net, bundles, noise_id, sample_path=SAMPLES_PATH, batch=C
         f"Collecting {count}, then this command exits.",
         flush=True,
     )
-    ensure_iperf3_server(net, "hostB", port=5201)
-    time.sleep(0.3)
     found = []
     failures = 0
-    while len(found) < count and failures < 3:
-        mbit, raw = oam.measure_speed_once(net, port=5201)
+    while len(found) < count and failures < 5:
+        server = start_one_off_iperf3(net, port=5201)
+        time.sleep(0.25)
+        try:
+            mbit, raw = oam.measure_speed_once(net, port=5201)
+        finally:
+            finish_one_off(server)
         if mbit is None:
             failures += 1
             _print_iperf_tail(raw)
-            if failures >= 2:
-                restart_iperf3_server(net, port=5201)
-                time.sleep(0.5)
+            time.sleep(0.3)
             continue
         failures = 0
         found.append(mbit)

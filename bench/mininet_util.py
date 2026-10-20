@@ -127,6 +127,76 @@ def ensure_iperf3_server(net, host="hostB", port=5201):
     return proc
 
 
+def _release_stdio(proc):
+    if proc is None:
+        return
+    for attr in ("_stdin_keep", "_log"):
+        handle = getattr(proc, attr, None)
+        if handle is None:
+            continue
+        try:
+            if hasattr(handle, "close"):
+                handle.close()
+            else:
+                os.close(handle)
+        except OSError:
+            pass
+
+
+def stop_iperf3_server(net, host="hostB", port=5201):
+    """Stop a tracked server so its port can be bound again."""
+    node = net.get(host)
+    procs = getattr(node, "_iperf3_procs", None) or {}
+    proc = procs.pop(port, None)
+    if port == 5201:
+        node._iperf3_proc = None
+    if proc is not None and proc.poll() is None:
+        proc.kill()
+        try:
+            proc.wait(timeout=2)
+        except Exception:
+            pass
+    _release_stdio(proc)
+
+
+def start_one_off_iperf3(net, host="hostB", port=5201):
+    """Serve a single client, then exit.
+
+    A long-lived iperf3 server closes its control socket after a few tests.
+    Later clients connect and then fail with "Bad file descriptor". stdin
+    stays open so the server does not treat a closed fd 0 as a hangup.
+    """
+    stop_iperf3_server(net, host, port)
+    node = net.get(host)
+    cmd = ["iperf3", "-s", "-1"]
+    if int(port) != 5201:
+        cmd += ["-p", str(port)]
+    read_fd, write_fd = os.pipe()
+    log = open(f"/tmp/iperf3-oneoff-{int(port)}.log", "wb", buffering=0)
+    try:
+        proc = node.popen(
+            cmd,
+            stdin=read_fd,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+        )
+    finally:
+        os.close(read_fd)
+    proc._stdin_keep = write_fd
+    proc._log = log
+    return proc
+
+
+def finish_one_off(proc):
+    if proc is not None and proc.poll() is None:
+        proc.kill()
+        try:
+            proc.wait(timeout=2)
+        except Exception:
+            pass
+    _release_stdio(proc)
+
+
 def restart_iperf3_server(net, host="hostB", port=5201):
     """Replace a server left stuck after a client died mid-test."""
     node = net.get(host)
