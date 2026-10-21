@@ -251,14 +251,64 @@ def T9_oneway_loss(net, count=10, interval=0.2):
     }
 
 
-def _parse_mbit(output):
-    """iperf3 bitrate in Mbit/s. Accepts Kbits, Mbits, and Gbits."""
-    matches = re.findall(r"([\d.]+)\s*([KMG])bits/sec", output or "")
-    if not matches:
+# The diamond links are 10 Mbit/s. iperf3 can print a little over that.
+# 167 and 2930 are a short-interval token, not a completed transfer.
+SPEED_MBIT_MAX = 15.0
+# A bare saved number with no checked summary. The broken fills were under
+# 1 Mbit/s; the healthy clusters were above it. A new checked summary may be slower.
+UNVERIFIED_MIN_MBIT = 1.0
+_SUMMARY_LINE = re.compile(
+    r"(\d+\.\d+)-(\d+\.\d+)\s+sec\s+[\d.]+\s+[KMG]?Bytes\s+([\d.]+)\s*([KMG])bits/sec"
+)
+
+
+def _summary_mbit(output, seconds):
+    """Bitrate from the iperf3 summary that covers this transfer.
+
+    The last bits/sec token is not used. A short interval can say Gbits/sec
+    and was parsed as 2930 Mbit/s.
+    """
+    if not output:
         return None
-    value, unit = matches[-1]
-    scale = {"K": 1e-3, "M": 1.0, "G": 1e3}[unit]
-    return float(value) * scale
+    if "unable to send" in output or "error -" in output or "interrupt -" in output:
+        return None
+    scale = {"K": 1e-3, "M": 1.0, "G": 1e3}
+    chosen = None
+    for match in _SUMMARY_LINE.finditer(output):
+        start, end, value, unit = match.groups()
+        if abs((float(end) - float(start)) - float(seconds)) > 0.25:
+            continue
+        chosen = float(value) * scale[unit]
+    if chosen is None or chosen <= 0 or chosen > SPEED_MBIT_MAX:
+        return None
+    return chosen
+
+
+def _parse_mbit(output):
+    """One-second transfer. Same rule as measure_speed_once."""
+    return _summary_mbit(output, 1.0)
+
+
+def accepted_speed(result):
+    """A bitrate that can enter the healthy distribution.
+
+    A checked summary is a completed transfer, including a slow one.
+    A bare saved number under 1 Mbit/s, or above the 10 Mbit/s path, is
+    remeasured.
+    """
+    if not isinstance(result, dict):
+        return None
+    try:
+        mbit = float(result.get("mbit_per_sec"))
+    except (TypeError, ValueError):
+        return None
+    if mbit != mbit or mbit <= 0 or mbit > SPEED_MBIT_MAX:
+        return None
+    if result.get("checked"):
+        return mbit
+    if mbit < UNVERIFIED_MIN_MBIT:
+        return None
+    return mbit
 
 
 def _parse_mbit_intervals(output):
@@ -304,10 +354,11 @@ def T10_speed(net, duration=3, interval=None):
             net.get("hostA"),
             f"timeout 20 iperf3 -c {hostB} -t {duration} --connect-timeout 2000",
         )
+        mbit = _summary_mbit(out, duration)
         intervals = []
     return {
         "test_id": "T10_speed",
-        "mbit_per_sec": intervals[-1] if intervals else _parse_mbit(out),
+        "mbit_per_sec": mbit,
         "intervals": intervals,
         "raw": out[-2000:] if len(out) > 2000 else out,
         "duration_seconds": time.monotonic() - t0,

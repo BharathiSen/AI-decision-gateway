@@ -14,9 +14,10 @@ so the VM can be powered off. Run the same command again to continue:
 
     sudo python3 bench/calibrate_healthy.py --noise N0 --runs 200 --eval-runs 50
 
-A finished sample is reprinted from the checkpoint. This speed filler is
-frozen: it only fills saved runs that have no T10 bitrate, up to 30 per
-launch, and it does not change the normal one-second T10 command.
+A finished sample is reprinted from the checkpoint. --fill-speed remeasures
+saved runs whose T10 bitrate is missing, above the 10 Mbit/s path, or a
+bare number under 1 Mbit/s. A new reading is kept only from a completed
+one-second summary. Up to 30 per launch. The normal T10 command is unchanged.
 
     sudo python3 bench/calibrate_healthy.py --noise N1 --runs 200 --eval-runs 50 --fill-speed
 
@@ -39,6 +40,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from bench.contracts import TEST_IDS
 from bench.outcomes import grade_result, is_degraded, load_thresholds
+from bench.tests import accepted_speed
 
 ROOT = Path(__file__).resolve().parent.parent
 THRESHOLDS_PATH = ROOT / "config" / "thresholds.yaml"
@@ -137,7 +139,7 @@ def _observe(result):
         observed["a2b_loss"] = _usable_loss((result.get("hostA_to_hostB") or {}).get("packet_loss_percent"))
         observed["b2a_loss"] = _usable_loss((result.get("hostB_to_hostA") or {}).get("packet_loss_percent"))
     elif test_id == "T10_speed":
-        observed["mbit_per_sec"] = result.get("mbit_per_sec")
+        observed["mbit_per_sec"] = accepted_speed(result)
     return observed
 
 
@@ -235,7 +237,7 @@ def _no_reading(result):
     """A probe that did not return a usable number is not a false alarm."""
     test_id = result.get("test_id")
     if test_id == "T10_speed":
-        return result.get("mbit_per_sec") is None
+        return accepted_speed(result) is None
     if test_id == "T1_e2e_ping":
         raw = result.get("packet_loss_percent")
         return raw is not None and _usable_loss(raw) is None
@@ -364,8 +366,12 @@ def _self_check():
     assert contaminated["tests"]["T1_e2e_ping"]["latency_ms"]["p95"] != 40.0
     assert contaminated["eval_false_alarms"] == 0
 
+    slow_row = _healthy_result(mbit=0.3)
+    for item in slow_row:
+        if item["test_id"] == "T10_speed":
+            item["checked"] = True
     slow = build_report(
-        [{"results": _healthy_result(mbit=0.3)} for _ in range(20)],
+        [{"results": slow_row} for _ in range(20)],
         [{"results": _healthy_result()}],
         "N0",
         existing,
@@ -374,6 +380,22 @@ def _self_check():
     )
     assert slow["proposed_thresholds"]["T10_speed"]["min_mbit"] == 1.0
     assert "T10 min_mbit kept at the configured floor" in slow["threshold_notes"]
+    assert slow["tests"]["T10_speed"]["mbit_per_sec"]["n"] == 20
+
+    junk_rows = [{"results": _healthy_result(mbit=8.0)} for _ in range(19)]
+    junk_rows.append({"results": _healthy_result(mbit=2930.0)})
+    junk_rows.append({"results": _healthy_result(mbit=0.05)})
+    junk = build_report(
+        junk_rows,
+        [{"results": _healthy_result(mbit=0.05)}],
+        "N0",
+        existing,
+        True,
+        0,
+    )
+    assert junk["tests"]["T10_speed"]["mbit_per_sec"]["n"] == 19
+    assert junk["tests"]["T10_speed"]["mbit_per_sec"]["max"] == 8.0
+    assert junk["eval_false_alarms"] == 0
 
     fast = build_report(
         [{"results": _healthy_result(mbit=10.0)} for _ in range(20)],
@@ -428,8 +450,19 @@ def _self_check():
     assert any("no bitrate" in note for note in missing_speed["threshold_notes"])
     assert missing_speed["eval_false_alarms"] == 0
 
-    from bench.tests import _parse_mbit_intervals
+    from bench.tests import _parse_mbit_intervals, _summary_mbit
     from bench.traffic import apply_noise
+
+    summary = (
+        "[  5]   0.00-0.01   sec  3.58 MBytes  2930 Mbits/sec\n"
+        "[  5]   0.00-1.00   sec   448 KBytes  3.67 Mbits/sec                  sender\n"
+        "[  5]   0.00-1.00   sec   439 KBytes  3.59 Mbits/sec                  receiver\n"
+    )
+    assert _summary_mbit(summary, 1) == 3.59
+    assert _summary_mbit(summary + "iperf3: error - unable to send control message\n", 1) is None
+    assert _summary_mbit("[  5]   0.00-1.00   sec  20 MBytes  167 Mbits/sec\n", 1) is None
+    assert _summary_mbit("[  5]   0.00-1.00   sec  1.37 MBytes  11.6 Mbits/sec\n", 1) == 11.6
+    assert _summary_mbit("[  5]   0.00-3.00   sec  2.00 MBytes  5.60 Mbits/sec\n", 3) == 5.6
 
     traffic = inspect.getsource(apply_noise)
     assert "5202" in traffic and "-u " in traffic
@@ -572,7 +605,7 @@ def _replace_noise_bundles(path, noise_id, updates):
 def _t10_mbit(bundle):
     for result in bundle.get("results") or []:
         if result.get("test_id") == "T10_speed":
-            return result.get("mbit_per_sec")
+            return accepted_speed(result)
     return None
 
 
@@ -580,7 +613,7 @@ def _store_speeds(bundles, indexes, intervals):
     updates = {}
     for index, mbit in zip(indexes, intervals):
         results = [row for row in bundles[index].get("results") or [] if row.get("test_id") != "T10_speed"]
-        results.append({"test_id": "T10_speed", "mbit_per_sec": mbit})
+        results.append({"test_id": "T10_speed", "mbit_per_sec": mbit, "checked": True})
         bundles[index]["results"] = results
         updates[index] = bundles[index]
     return updates
@@ -744,6 +777,14 @@ def calibrate(noise_ids, runs, eval_runs, seed=0, quick=False, batch=CALIBRATION
                         "Run the same command again to continue. The VM can be off between sittings.",
                         flush=True,
                     )
+                return None
+            missing_speed = sum(1 for bundle in collected if _t10_mbit(bundle) is None)
+            if missing_speed:
+                print(
+                    f"  {noise_id} has {missing_speed} saved runs with no usable T10 bitrate. "
+                    "Run the same command with --fill-speed.",
+                    flush=True,
+                )
                 return None
             reports[noise_id] = build_report(
                 collected[:runs],
