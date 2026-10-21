@@ -168,6 +168,7 @@ def free_tcp_port(net, port, host="hostB"):
     "Bad file descriptor".
     """
     node = net.get(host)
+    recover_shell(node)
     node.cmd(
         f"fuser -k {int(port)}/tcp >/dev/null 2>&1; "
         f"ss -lptnH 'sport = :{int(port)}' 2>/dev/null "

@@ -290,10 +290,7 @@ def measure_speed_once(net, port=5201):
         net.get("hostA"),
         f"timeout 8 iperf3 -c {dest} {port_arg}-t 1 --connect-timeout 2000",
     )
-    mbit = _parse_mbit(out)
-    if mbit is not None:
-        print(f"  {mbit:.2f} Mbit/s", flush=True)
-    return mbit, out
+    return _parse_mbit(out), out
 
 
 def T10_speed(net, duration=3, interval=None):

@@ -14,8 +14,9 @@ so the VM can be powered off. Run the same command again to continue:
 
     sudo python3 bench/calibrate_healthy.py --noise N0 --runs 200 --eval-runs 50
 
-A finished sample is reprinted from the checkpoint. Add --fill-speed to
-measure missing T10 readings with one short iperf, then the command exits:
+A finished sample is reprinted from the checkpoint. This speed filler is
+frozen: it only fills saved runs that have no T10 bitrate, up to 30 per
+launch, and it does not change the normal one-second T10 command.
 
     sudo python3 bench/calibrate_healthy.py --noise N1 --runs 200 --eval-runs 50 --fill-speed
 
@@ -445,9 +446,11 @@ def _self_check():
     from bench.mininet_util import start_one_off_iperf3
     assert '"-s", "-1"' in inspect.getsource(start_one_off_iperf3)
     assert "free_tcp_port" in inspect.getsource(start_one_off_iperf3)
-    from bench.tests import measure_speed_once
+    from bench.tests import T10_speed, measure_speed_once
     once = inspect.getsource(measure_speed_once)
     assert "timeout 8" in once and "-t 1" in once and "-i 1" not in once
+    battery = inspect.getsource(T10_speed)
+    assert "timeout 20 iperf3" in battery
 
     assert ready_to_write(report) is False
     try:
@@ -622,13 +625,14 @@ def fill_missing_speed(net, bundles, noise_id, sample_path=SAMPLES_PATH, batch=C
             _print_iperf_tail(raw)
             time.sleep(0.3)
             continue
+        print(f"  {len(found) + 1}/{count}  {mbit:.2f} Mbit/s", flush=True)
+        slot = missing[len(found)]
         found.append(mbit)
+        _replace_noise_bundles(sample_path, noise_id, _store_speeds(bundles, [slot], [mbit]))
     if not found:
         print("  speed fill got no bitrate. Not retrying this sitting.", flush=True)
         return bundles, True
-    updates = _store_speeds(bundles, missing[:count], found)
-    _replace_noise_bundles(sample_path, noise_id, updates)
-    print(f"  saved {len(updates)} speed readings.", flush=True)
+    print(f"  saved {len(found)} speed readings.", flush=True)
     still = any(_t10_mbit(bundle) is None for bundle in bundles)
     return bundles, still
 
