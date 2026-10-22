@@ -14,12 +14,11 @@ so the VM can be powered off. Run the same command again to continue:
 
     sudo python3 bench/calibrate_healthy.py --noise N0 --runs 200 --eval-runs 50
 
-A finished sample is reprinted from the checkpoint. --fill-speed remeasures
-saved runs whose T10 bitrate is missing, above the 10 Mbit/s path, or a
-bare number under 1 Mbit/s. A new reading is kept only from a completed
-one-second summary. Up to 30 per launch. The normal T10 command is unchanged.
+Reprint the saved runs without starting Mininet. Failed speed readings
+under 1 Mbit/s and readings above 15 Mbit/s are left out of the
+distribution and are not counted as false alarms.
 
-    sudo python3 bench/calibrate_healthy.py --noise N1 --runs 200 --eval-runs 50 --fill-speed
+    python3 bench/calibrate_healthy.py --from-saved --noise all --runs 200 --eval-runs 50
 
 --write-thresholds is refused unless that sample is a full battery of
 at least 200 calibration runs plus a separate eval set. The configured
@@ -513,6 +512,19 @@ def _self_check():
     checkpoint.unlink()
     checkpoint.parent.rmdir()
 
+    saved = Path(tempfile.mkdtemp()) / "samples.jsonl"
+    rows = []
+    for index, mbit in enumerate((8.0, 8.0, 0.05, 2930.0)):
+        bundle = {"results": _healthy_result(mbit=mbit)}
+        rows.append({"noise_id": "N0", "index": index, "bundle": bundle})
+    saved.write_text("".join(json.dumps(item) + "\n" for item in rows), encoding="utf-8")
+    reprinted = report_from_saved(["N0"], 3, 1, sample_path=saved)
+    assert reprinted["N0"]["tests"]["T10_speed"]["mbit_per_sec"]["n"] == 2
+    assert reprinted["N0"]["eval_false_alarms"] == 0
+    assert "create_network" not in inspect.getsource(report_from_saved)
+    saved.unlink()
+    saved.parent.rmdir()
+
     print("healthy calibration: PASS")
 
 
@@ -807,6 +819,51 @@ def calibrate(noise_ids, runs, eval_runs, seed=0, quick=False, batch=CALIBRATION
     return reports
 
 
+def _bundles_for(path, noise_id):
+    """Saved runs for one noise level, in collection order. The last copy of an index wins."""
+    chosen = {}
+    for item in _read_rows(path):
+        if item.get("noise_id") != noise_id or "bundle" not in item:
+            continue
+        index = item.get("index")
+        if not isinstance(index, int):
+            index = len(chosen)
+        chosen[index] = item["bundle"]
+    return [chosen[index] for index in sorted(chosen)]
+
+
+def report_from_saved(noise_ids, runs, eval_runs, seed=0, sample_path=SAMPLES_PATH):
+    """Build the calibration report from the checkpoint. Does not start Mininet."""
+    reports = {}
+    total = runs + eval_runs
+    for noise_id in noise_ids:
+        bundles = _bundles_for(sample_path, noise_id)
+        if len(bundles) < total:
+            print(
+                f"  {noise_id} has {len(bundles)}/{total} saved runs. No report.",
+                flush=True,
+            )
+            continue
+        bundles = bundles[:total]
+        usable = sum(1 for bundle in bundles[:runs] if _t10_mbit(bundle) is not None)
+        report = build_report(
+            bundles[:runs],
+            bundles[runs:],
+            noise_id,
+            load_thresholds(noise_id),
+            True,
+            seed,
+        )
+        reports[noise_id] = report
+        print(
+            f"  {noise_id}: T10 fit {usable}/{runs}, "
+            f"eval false alarms {report['eval_false_alarms']}/{report['eval_runs']} "
+            f"({report['eval_false_alarm_rate']})",
+            flush=True,
+        )
+    return reports
+
+
 def _is_root():
     return hasattr(os, "geteuid") and os.geteuid() == 0
 
@@ -822,7 +879,23 @@ def main():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--batch", type=int, default=CALIBRATION_BATCH, help="new samples to collect before exiting")
     parser.add_argument("--fill-speed", action="store_true", help="measure T10 only where a saved run has no bitrate")
+    parser.add_argument("--from-saved", action="store_true", help="reprint the report from saved runs; does not start Mininet")
     args = parser.parse_args()
+
+    if args.from_saved:
+        if args.write_thresholds:
+            print("Refusing --write-thresholds on a reprint. Paste the report first.", file=sys.stderr)
+            sys.exit(2)
+        noise_ids = ["N0", "N1", "N2"] if args.noise == "all" else [args.noise]
+        reports = report_from_saved(noise_ids, args.runs, args.eval_runs, seed=args.seed)
+        if not reports:
+            return
+        payload = {"version": 1, "levels": reports}
+        out = Path(args.report)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        print(json.dumps(payload, indent=2))
+        return
 
     if not _is_root():
         print("calibrate_healthy.py collects on the Mininet VM as root.", file=sys.stderr)
@@ -850,7 +923,9 @@ def main():
 
 
 if __name__ == "__main__":
-    if "--check" in sys.argv or not _is_root():
+    if "--from-saved" in sys.argv:
+        main()
+    elif "--check" in sys.argv or not _is_root():
         _self_check()
     else:
         main()
