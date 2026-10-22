@@ -1154,9 +1154,11 @@ def main():
 
 
 if __name__ == "__main__":
-    if "--from-saved" in sys.argv:
+    if any(flag in sys.argv for flag in ("-h", "--help", "--from-saved")):
         main()
-    elif "--check" in sys.argv or not _is_root():
+    elif "--check" in sys.argv:
+        _self_check()
+    elif not _is_root():
         _self_check()
     else:
         main()
