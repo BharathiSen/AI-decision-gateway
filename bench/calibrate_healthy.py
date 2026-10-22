@@ -14,9 +14,10 @@ so the VM can be powered off. Run the same command again to continue:
 
     sudo python3 bench/calibrate_healthy.py --noise N0 --runs 200 --eval-runs 50
 
-Reprint the saved runs without starting Mininet. Failed speed readings
-under 1 Mbit/s and readings above 15 Mbit/s are left out of the
-distribution and are not counted as false alarms.
+When the checkpoint already has the requested runs, the command reprints
+that file and does not start Mininet, even if --fill-speed is passed.
+Failed speed readings under 1 Mbit/s and readings above 15 Mbit/s are
+left out of the distribution and are not counted as false alarms.
 
     python3 bench/calibrate_healthy.py --from-saved --noise all --runs 200 --eval-runs 50
 
@@ -522,6 +523,9 @@ def _self_check():
     assert reprinted["N0"]["tests"]["T10_speed"]["mbit_per_sec"]["n"] == 2
     assert reprinted["N0"]["eval_false_alarms"] == 0
     assert "create_network" not in inspect.getsource(report_from_saved)
+    assert _reprint_only(["N0"], 3, 1, saved, False) is True
+    assert _reprint_only(["N0"], 200, 50, saved, False) is False
+    assert _reprint_only(["N0"], 200, 50, saved, True) is True
     saved.unlink()
     saved.parent.rmdir()
 
@@ -832,6 +836,14 @@ def _bundles_for(path, noise_id):
     return [chosen[index] for index in sorted(chosen)]
 
 
+def _reprint_only(noise_ids, runs, eval_runs, sample_path=SAMPLES_PATH, from_saved=False):
+    """True when this launch must not start Mininet."""
+    if from_saved:
+        return True
+    total = runs + eval_runs
+    return all(len(_bundles_for(sample_path, noise_id)) >= total for noise_id in noise_ids)
+
+
 def report_from_saved(noise_ids, runs, eval_runs, seed=0, sample_path=SAMPLES_PATH):
     """Build the calibration report from the checkpoint. Does not start Mininet."""
     reports = {}
@@ -882,16 +894,20 @@ def main():
     parser.add_argument("--from-saved", action="store_true", help="reprint the report from saved runs; does not start Mininet")
     args = parser.parse_args()
 
-    if args.from_saved:
+    noise_ids = ["N0", "N1", "N2"] if args.noise == "all" else [args.noise]
+    if _reprint_only(noise_ids, args.runs, args.eval_runs, from_saved=args.from_saved):
         if args.write_thresholds:
             print("Refusing --write-thresholds on a reprint. Paste the report first.", file=sys.stderr)
             sys.exit(2)
-        noise_ids = ["N0", "N1", "N2"] if args.noise == "all" else [args.noise]
+        if not args.from_saved:
+            print("Saved runs already cover this sample. Reprinting. Mininet will not start.", flush=True)
         reports = report_from_saved(noise_ids, args.runs, args.eval_runs, seed=args.seed)
         if not reports:
             return
         payload = {"version": 1, "levels": reports}
         out = Path(args.report)
+        if not out.is_absolute():
+            out = ROOT / out
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         print(json.dumps(payload, indent=2))
@@ -901,7 +917,6 @@ def main():
         print("calibrate_healthy.py collects on the Mininet VM as root.", file=sys.stderr)
         sys.exit(2)
 
-    noise_ids = ["N0", "N1", "N2"] if args.noise == "all" else [args.noise]
     reports = calibrate(
         noise_ids,
         args.runs,
