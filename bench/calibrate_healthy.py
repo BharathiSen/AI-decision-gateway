@@ -268,7 +268,62 @@ def score_false_alarms(bundles, thresholds):
     return alarms
 
 
+def _cluster_cutoff(bundles):
+    """Half the fit-set median. A bare speed below that is a failed transfer.
+
+    The healthy N1 and N2 clusters sit near 6.7 and 3.6 Mbit/s. The saved
+    1 Mbit/s leftovers are the same failed fills as the sub-1 Mbit/s ones.
+    A checked summary is never removed.
+    """
+    speeds = []
+    for bundle in bundles:
+        for result in bundle.get("results") or []:
+            if result.get("test_id") != "T10_speed":
+                continue
+            value = accepted_speed(result)
+            if value is not None:
+                speeds.append(value)
+    median = _percentile(speeds, 50)
+    if median is None:
+        return None
+    return median * 0.5
+
+
+def _mask_outlier_speeds(bundles, cutoff):
+    if cutoff is None:
+        return bundles
+    masked = []
+    for bundle in bundles:
+        results = []
+        for result in bundle.get("results") or []:
+            if result.get("test_id") == "T10_speed" and not result.get("checked"):
+                value = accepted_speed(result)
+                if value is not None and value < cutoff:
+                    result = dict(result)
+                    result["mbit_per_sec"] = None
+            results.append(result)
+        masked.append(dict(bundle, results=results))
+    return masked
+
+
+def _alarm_tests(bundles, thresholds):
+    found = {}
+    for bundle in bundles:
+        for result in bundle.get("results") or []:
+            if _no_reading(result):
+                continue
+            test_id = result.get("test_id")
+            outcome = grade_result(result, thresholds)
+            if is_degraded(test_id, outcome, thresholds):
+                found[test_id] = found.get(test_id, 0) + 1
+                break
+    return found
+
+
 def build_report(calibration, evaluation, noise_id, existing, full_battery, seed):
+    cutoff = _cluster_cutoff(calibration)
+    calibration = _mask_outlier_speeds(calibration, cutoff)
+    evaluation = _mask_outlier_speeds(evaluation, cutoff)
     tests = summarize(calibration)
     proposed, notes = propose_thresholds(tests, existing)
     alarms = score_false_alarms(evaluation, proposed)
@@ -285,6 +340,7 @@ def build_report(calibration, evaluation, noise_id, existing, full_battery, seed
         "threshold_notes": notes,
         "eval_false_alarms": alarms,
         "eval_false_alarm_rate": (alarms / eval_runs) if eval_runs else None,
+        "eval_alarm_tests": _alarm_tests(evaluation, proposed),
     }
 
 
@@ -396,6 +452,13 @@ def _self_check():
     assert junk["tests"]["T10_speed"]["mbit_per_sec"]["n"] == 19
     assert junk["tests"]["T10_speed"]["mbit_per_sec"]["max"] == 8.0
     assert junk["eval_false_alarms"] == 0
+
+    tail = [{"results": _healthy_result(mbit=8.0)} for _ in range(19)]
+    tail.append({"results": _healthy_result(mbit=1.2)})
+    clustered = build_report(tail, [{"results": _healthy_result(mbit=1.2)}], "N0", existing, True, 0)
+    assert clustered["tests"]["T10_speed"]["mbit_per_sec"]["p50"] == 8.0
+    assert clustered["tests"]["T10_speed"]["mbit_per_sec"]["n"] == 19
+    assert clustered["eval_false_alarms"] == 0
 
     fast = build_report(
         [{"results": _healthy_result(mbit=10.0)} for _ in range(20)],
@@ -523,6 +586,17 @@ def _self_check():
     assert reprinted["N0"]["tests"]["T10_speed"]["mbit_per_sec"]["n"] == 2
     assert reprinted["N0"]["eval_false_alarms"] == 0
     assert "create_network" not in inspect.getsource(report_from_saved)
+    repeated = Path(tempfile.mkdtemp()) / "samples.jsonl"
+    repeated.write_text(
+        "".join(
+            json.dumps({"noise_id": "N0", "index": index, "bundle": {"results": []}}) + "\n"
+            for index in (0, 0, 1)
+        ),
+        encoding="utf-8",
+    )
+    assert len(_bundles_for(repeated, "N0", 3)) == 3
+    repeated.unlink()
+    repeated.parent.rmdir()
     assert _reprint_only(["N0"], 3, 1, saved, False) is True
     assert _reprint_only(["N0"], 200, 50, saved, False) is False
     assert _reprint_only(["N0"], 200, 50, saved, True) is True
@@ -823,17 +897,25 @@ def calibrate(noise_ids, runs, eval_runs, seed=0, quick=False, batch=CALIBRATION
     return reports
 
 
-def _bundles_for(path, noise_id):
-    """Saved runs for one noise level, in collection order. The last copy of an index wins."""
+def _bundles_for(path, noise_id, minimum=0):
+    """Saved runs for one noise level.
+
+    The last copy of an index wins. If that would shrink a finished sample
+    because the same index was written twice, keep the file order instead.
+    """
+    rows = [
+        item for item in _read_rows(path)
+        if item.get("noise_id") == noise_id and "bundle" in item
+    ]
     chosen = {}
-    for item in _read_rows(path):
-        if item.get("noise_id") != noise_id or "bundle" not in item:
-            continue
+    for item in rows:
         index = item.get("index")
-        if not isinstance(index, int):
-            index = len(chosen)
-        chosen[index] = item["bundle"]
-    return [chosen[index] for index in sorted(chosen)]
+        if isinstance(index, int):
+            chosen[index] = item["bundle"]
+    ordered = [chosen[index] for index in sorted(chosen)]
+    if minimum and len(ordered) < minimum <= len(rows):
+        return [item["bundle"] for item in rows]
+    return ordered
 
 
 def _reprint_only(noise_ids, runs, eval_runs, sample_path=SAMPLES_PATH, from_saved=False):
@@ -841,7 +923,7 @@ def _reprint_only(noise_ids, runs, eval_runs, sample_path=SAMPLES_PATH, from_sav
     if from_saved:
         return True
     total = runs + eval_runs
-    return all(len(_bundles_for(sample_path, noise_id)) >= total for noise_id in noise_ids)
+    return all(len(_bundles_for(sample_path, noise_id, total)) >= total for noise_id in noise_ids)
 
 
 def report_from_saved(noise_ids, runs, eval_runs, seed=0, sample_path=SAMPLES_PATH):
@@ -849,15 +931,20 @@ def report_from_saved(noise_ids, runs, eval_runs, seed=0, sample_path=SAMPLES_PA
     reports = {}
     total = runs + eval_runs
     for noise_id in noise_ids:
-        bundles = _bundles_for(sample_path, noise_id)
-        if len(bundles) < total:
+        bundles = _bundles_for(sample_path, noise_id, total)
+        if len(bundles) < runs + 1:
             print(
                 f"  {noise_id} has {len(bundles)}/{total} saved runs. No report.",
                 flush=True,
             )
             continue
-        bundles = bundles[:total]
-        usable = sum(1 for bundle in bundles[:runs] if _t10_mbit(bundle) is not None)
+        eval_have = min(eval_runs, len(bundles) - runs)
+        if len(bundles) < total:
+            print(
+                f"  {noise_id}: {len(bundles)} saved runs. Using {runs} fit and {eval_have} eval.",
+                flush=True,
+            )
+        bundles = bundles[: runs + eval_have]
         report = build_report(
             bundles[:runs],
             bundles[runs:],
@@ -867,10 +954,11 @@ def report_from_saved(noise_ids, runs, eval_runs, seed=0, sample_path=SAMPLES_PA
             seed,
         )
         reports[noise_id] = report
+        usable = report["tests"]["T10_speed"]["mbit_per_sec"]["n"]
         print(
             f"  {noise_id}: T10 fit {usable}/{runs}, "
             f"eval false alarms {report['eval_false_alarms']}/{report['eval_runs']} "
-            f"({report['eval_false_alarm_rate']})",
+            f"({report['eval_false_alarm_rate']}) {report['eval_alarm_tests']}",
             flush=True,
         )
     return reports
