@@ -2,11 +2,18 @@
 
 import copy
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from agent.validate import MAX_EXPECTED_LEN, MAX_PROPOSAL_BYTES, validate_batch, validate_proposal
+from agent.validate import (
+    MAX_EXPECTED_LEN,
+    MAX_PROPOSAL_BYTES,
+    proposal_freshness_errors,
+    validate_batch,
+    validate_proposal,
+)
 
 
 def good_proposal():
@@ -113,6 +120,15 @@ def main():
     rate, ok_n, total = validate_batch([copy.deepcopy(good) for _ in range(95)] + [bad] * 5)
     check("batch rate at least 95%", rate >= 0.95, f"{ok_n}/{total} = {rate:.2%}")
     print(f"validate_batch: {ok_n}/{total} = {rate:.2%}")
+
+    ts = datetime.now(timezone.utc).isoformat()
+    fresh = dict(no_causes, observed_at=ts)
+    check("fresh proposal bound to telemetry", not proposal_freshness_errors(fresh, {"timestamp": ts}))
+    stale = dict(no_causes, observed_at="2020-01-01T00:00:00+00:00")
+    check(
+        "stale observed_at rejected",
+        any("does not match" in err for err in proposal_freshness_errors(stale, {"timestamp": ts})),
+    )
     print("PASS")
 
 

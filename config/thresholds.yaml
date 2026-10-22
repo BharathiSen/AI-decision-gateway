@@ -40,4 +40,12 @@ by_noise_level:
 calibration:
   healthy_runs_target: 200
   false_alarm_rate_target: 0.05
-  notes: "Re-run bench/calibrate_healthy.py on VM to replace placeholders."
+  battery:
+    ping_count: 10
+    ping_interval: 0.2
+    speed_seconds: 3
+  notes: >-
+    Placeholder limits above are not VM-calibrated. Do not use them for
+    grading until --write-thresholds passes after false_alarm_rate_target
+    is met on an episode-aligned battery. Existing results/calibration_samples.jsonl
+    on the VM used the legacy 3-ping / 1-second speed profile unless re-collected.

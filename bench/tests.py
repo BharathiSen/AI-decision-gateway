@@ -43,6 +43,11 @@ HOPS_BACKUP = [
     ("r4", "hostB", "10.0.4.2"),
 ]
 
+# Default episode battery (also used for new healthy calibration runs).
+EPISODE_PING_COUNT = 10
+EPISODE_PING_INTERVAL = 0.2
+EPISODE_SPEED_SECONDS = 3
+
 def _parse_ping(output):
     loss_match = re.search(r"(\d+)% packet loss", output)
     rtt_match = re.search(r"= [\d.]+/([\d.]+)/", output)
@@ -84,7 +89,7 @@ def T1_e2e_ping(net, count=10, interval=0.2):
     parsed["connectivity"] = parsed["packet_loss_percent"] < 100.0
     parsed["duration_seconds"] = time.monotonic() - t0
     parsed["probes"] = [_icmp_probe(count)]
-    return {"test_id": "T1_e2e_ping", **parsed}
+    return {"test_id": "T1_e2e_ping", "error": None, **parsed}
 
 
 def _hop_ping(net, src, dst_ip, count=10, interval=0.2):
@@ -119,6 +124,7 @@ def T2_hop_ping(net, path="primary", count=10, interval=0.2):
         "hops_backup": backup,
         "duration_seconds": time.monotonic() - t0,
         "probes": [_icmp_probe((len(HOPS) + len(HOPS_BACKUP)) * count)],
+        "error": None,
     }
 
 
@@ -140,6 +146,7 @@ def T4_mtu(net):
         "raw": out,
         "duration_seconds": time.monotonic() - t0,
         "probes": [_icmp_probe(count, payload)],
+        "error": None,
     }
 
 
@@ -196,6 +203,7 @@ def T5_if_errors(net, probe_count=0):
         "interfaces": stats,
         "duration_seconds": time.monotonic() - t0,
         "probes": probes,
+        "error": None,
     }
 
 
@@ -232,6 +240,7 @@ def T6_queue_stats(net):
         "queues": queues,
         "duration_seconds": time.monotonic() - t0,
         "probes": [],
+        "error": None,
     }
 
 
@@ -256,6 +265,7 @@ def T7_route_check(net):
         "active_path": active,
         "duration_seconds": time.monotonic() - t0,
         "probes": [],
+        "error": None,
     }
 
 
@@ -277,6 +287,7 @@ def T8_tcp_vs_ping(net):
         "tcp_raw": tcp_out,
         "duration_seconds": time.monotonic() - t0,
         "probes": list(ping.get("probes") or []) + [{"kind": "tcp_connect", "packets": 1}],
+        "error": None,
     }
 
 
@@ -290,6 +301,7 @@ def T9_oneway_loss(net, count=10, interval=0.2):
         "hostB_to_hostA": b2a,
         "duration_seconds": time.monotonic() - t0,
         "probes": [_icmp_probe(count * 2)],
+        "error": None,
     }
 
 
@@ -417,6 +429,7 @@ def T10_speed(net, duration=3, interval=None):
         "raw": out[-2000:] if len(out) > 2000 else out,
         "duration_seconds": time.monotonic() - t0,
         "probes": [{"kind": "iperf3", "bytes": _summary_bytes(out, 1 if interval else duration)}],
+        "error": None,
     }
 
 
@@ -556,7 +569,19 @@ def run_all(net, test_ids=None, ping_count=None, error_probe=None, ping_interval
             kwargs["probe_count"] = error_probe
         if speed_seconds and tid == "T10_speed":
             kwargs["duration"] = speed_seconds
-        results.append(run_test(net, tid, **kwargs))
+        t0 = time.monotonic()
+        try:
+            row = run_test(net, tid, **kwargs)
+            if isinstance(row, dict) and "error" not in row:
+                row["error"] = None
+            results.append(row)
+        except Exception as exc:
+            results.append({
+                "test_id": tid,
+                "duration_seconds": time.monotonic() - t0,
+                "probes": [],
+                "error": f"{type(exc).__name__}: {exc}",
+            })
     return {
         "started_at": started,
         "completed_at": datetime.now(timezone.utc).isoformat(),
@@ -641,6 +666,19 @@ def _check_costs():
     )
     assert _summary_bytes(longer, 3) == 3 * 1024 ** 2
     assert _icmp_probe(5, 1400)["bytes"] == 5 * (_ICMP_HEADER + 1400)
+
+    def _boom(_net, **_kwargs):
+        raise RuntimeError("probe failed")
+
+    saved = TEST_FUNCS["T7_route_check"]
+    TEST_FUNCS["T7_route_check"] = _boom
+    try:
+        failed = run_all(object(), test_ids=["T7_route_check"])
+        assert failed["results"][0]["error"] == "RuntimeError: probe failed"
+        assert failed["results"][0]["test_id"] == "T7_route_check"
+    finally:
+        TEST_FUNCS["T7_route_check"] = saved
+
     tcp = summarize_costs([{
         "test_id": "T8_tcp_vs_ping",
         "duration_seconds": 0.4,

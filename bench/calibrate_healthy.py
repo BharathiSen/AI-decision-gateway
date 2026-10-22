@@ -39,6 +39,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from bench.contracts import TEST_IDS
+from bench.tests import EPISODE_PING_COUNT, EPISODE_PING_INTERVAL, EPISODE_SPEED_SECONDS
 from bench.outcomes import grade_result, is_degraded, load_thresholds
 from bench.tests import accepted_speed
 
@@ -47,7 +48,8 @@ THRESHOLDS_PATH = ROOT / "config" / "thresholds.yaml"
 SAMPLES_PATH = ROOT / "results" / "calibration_samples.jsonl"
 FULL_BATTERY = list(TEST_IDS)
 MIN_CALIBRATION_RUNS = 200
-CALIBRATION_PINGS = 3
+# Saved runs collected before this used ping_count=3 and speed_seconds=1.
+LEGACY_BATTERY = {"ping_count": 3, "ping_interval": 0.2, "speed_seconds": 1}
 CALIBRATION_BATCH = 10
 SAMPLE_TIMEOUT_SECONDS = 90
 SPEED_FILL_CAP = 30
@@ -788,9 +790,9 @@ def collect_healthy(net, runs, test_ids, noise_id="N0", sample_path=SAMPLES_PATH
                 lambda: _slim(oam.run_all(
                     net,
                     test_ids=test_ids,
-                    ping_count=CALIBRATION_PINGS,
-                    ping_interval=0.2,
-                    speed_seconds=1,
+                    ping_count=EPISODE_PING_COUNT,
+                    ping_interval=EPISODE_PING_INTERVAL,
+                    speed_seconds=EPISODE_SPEED_SECONDS,
                 )),
             )
         except (UnicodeDecodeError, TimeoutError) as exc:

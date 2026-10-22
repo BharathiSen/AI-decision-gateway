@@ -7,6 +7,7 @@ held-out U1–U5 ids.
 """
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -18,7 +19,21 @@ ALLOWED_ACTIONS = CANONICAL_ACTIONS
 ALLOWED_TESTS = set(TEST_IDS)
 MAX_EXPECTED_LEN = 80
 MAX_PROPOSAL_BYTES = 8 * 1024
+PROPOSAL_MAX_AGE_SECONDS = 120
 _FAULTS = Path(__file__).resolve().parent.parent / "config" / "faults.yaml"
+
+
+def _parse_iso_timestamp(value):
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip().replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 def catalog_cause_ids():
@@ -105,6 +120,28 @@ def validate_proposal(data, allowed_actions=None, max_causes=5, max_bytes=MAX_PR
                     )
 
     return len(errors) == 0, errors
+
+
+def proposal_freshness_errors(proposal, snapshot=None, now=None, max_age_seconds=PROPOSAL_MAX_AGE_SECONDS):
+    """Reject proposals not tied to the current telemetry snapshot or too old."""
+    if not isinstance(proposal, dict):
+        return ["proposal must be an object"]
+    errors = []
+    observed = proposal.get("observed_at")
+    if not isinstance(observed, str) or not observed.strip():
+        return ["missing observed_at"]
+    snap_ts = (snapshot or {}).get("timestamp")
+    if snap_ts and observed != snap_ts:
+        errors.append("proposal stale: observed_at does not match telemetry timestamp")
+    obs_dt = _parse_iso_timestamp(observed)
+    if obs_dt is None:
+        errors.append("observed_at is not a valid ISO timestamp")
+        return errors
+    now = now or datetime.now(timezone.utc)
+    age = (now - obs_dt).total_seconds()
+    if age > max_age_seconds:
+        errors.append(f"proposal stale: age {age:.0f}s exceeds {max_age_seconds}s")
+    return errors
 
 
 def validate_batch(proposals):

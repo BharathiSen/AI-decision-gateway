@@ -110,13 +110,29 @@ def _agent_cost(proposal, elapsed):
     }
 
 
-def screen_proposal(proposal):
+def bind_proposal_observation(proposal, snapshot):
+    """Bind a proposal to the telemetry snapshot used to produce it."""
+    if not isinstance(proposal, dict):
+        return proposal
+    bound = dict(proposal)
+    timestamp = (snapshot or {}).get("timestamp")
+    if timestamp:
+        bound["observed_at"] = timestamp
+    return bound
+
+
+def screen_proposal(proposal, snapshot=None):
     """Reject a proposal before the gate. None means the proposal may proceed."""
-    from agent.validate import validate_proposal
+    from agent.validate import proposal_freshness_errors, validate_proposal
 
     ok, errors = validate_proposal(proposal)
     if ok:
         ok, errors = validate_record("proposal", proposal)
+    if ok and snapshot is not None:
+        fresh = proposal_freshness_errors(proposal, snapshot)
+        if fresh:
+            ok = False
+            errors = fresh
     if ok:
         return None
     return {
@@ -316,8 +332,8 @@ def run_episode(
                 record["agent_error"] = f"{type(agent_exc).__name__}: {agent_exc}"
                 record["completed_at"] = datetime.now(timezone.utc).isoformat()
                 return record
-            record["agent_proposal"] = proposal
-            rejection = screen_proposal(record["agent_proposal"])
+            record["agent_proposal"] = bind_proposal_observation(proposal, snapshot)
+            rejection = screen_proposal(record["agent_proposal"], snapshot)
             if rejection:
                 record.update(rejection)
                 record["completed_at"] = datetime.now(timezone.utc).isoformat()
@@ -365,6 +381,58 @@ def run_episode(
     finally:
         parts["clear_noise"](net, noise_applied, links)
         parts["reset_all"](net)
+
+
+def aggregate_episode_costs(directory=None):
+    """Sum oam_cost, agent_cost and gate_cost across saved episode JSON files."""
+    directory = Path(directory or EPISODE_DIR)
+    if not directory.is_dir():
+        return {"episodes": 0, "oam": None, "agent": None, "gate": None}
+
+    def _sum_block(totals, flags, block):
+        if not isinstance(block, dict):
+            for key in totals:
+                flags[key] = False
+            return
+        for key in totals:
+            value = block.get(key)
+            if value is None or isinstance(value, bool) or not isinstance(value, (int, float)):
+                flags[key] = False
+            elif flags[key]:
+                totals[key] += float(value)
+
+    oam = {"total_duration_seconds": 0.0, "total_additional_packets": 0, "total_additional_bytes": 0}
+    oam_ok = {key: True for key in oam}
+    agent = {"latency_seconds": 0.0, "model_latency_seconds": 0.0, "prompt_tokens": 0, "completion_tokens": 0}
+    agent_ok = {key: True for key in agent}
+    gate = {"latency_seconds": 0.0}
+    gate_ok = {"latency_seconds": True}
+    episodes = 0
+    for path in sorted(directory.glob("*.json")):
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        episodes += 1
+        _sum_block(oam, oam_ok, record.get("oam_cost"))
+        _sum_block(agent, agent_ok, record.get("agent_cost"))
+        _sum_block(gate, gate_ok, record.get("gate_cost"))
+
+    for key, ok in oam_ok.items():
+        if not ok:
+            oam[key] = None
+    for key, ok in agent_ok.items():
+        if not ok:
+            agent[key] = None
+    for key, ok in gate_ok.items():
+        if not ok:
+            gate[key] = None
+    return {
+        "episodes": episodes,
+        "oam": oam if episodes else None,
+        "agent": agent if episodes else None,
+        "gate": gate if episodes else None,
+    }
 
 
 def save_episode(record, directory=None):
@@ -573,7 +641,7 @@ def _self_check():
         link["latency_ms"] = 5.0
         link["packet_loss_percent"] = 0.0
     full = {
-        "timestamp": "2026-01-01T00:00:00+00:00",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "nodes": [
             {"name": "hostA", "type": "host", "ips": [{"intf": "hostA-eth0", "ip": "10.0.1.2"}]},
             {"name": "r1", "type": "router", "ips": [{"intf": "r1-eth1", "ip": "10.0.12.1"}]},
@@ -740,7 +808,67 @@ def _self_check():
     assert compared["selected_tests"]["total_duration_seconds"] == 0.0
     assert compared["tests_executed"]["total_duration_seconds"] is None
 
+    stale = screen_proposal(
+        {
+            "action": "DO_NOTHING",
+            "target": "HostA_to_HostB",
+            "reason": "old",
+            "observed_at": "2020-01-01T00:00:00+00:00",
+        },
+        {"timestamp": full["timestamp"]},
+    )
+    assert stale and "does not match" in stale["agent_error"], stale
+
+    rolled = aggregate_episode_costs(tempfile.mkdtemp())
+    assert rolled["episodes"] == 0 and rolled["oam"] is None
+
     print("execution boundary: PASS")
+
+
+def live_oam_cost():
+    """Full OAM battery on the diamond; checks measured cost fields.
+
+    On the VM, as root:
+
+        sudo python3 bench/run_episode.py --live-cost
+    """
+    import os
+
+    if not hasattr(os, "geteuid") or os.geteuid() != 0:
+        print("live OAM cost check must run as root on the Mininet VM.", file=sys.stderr)
+        return 2
+    from network.topology import create_network
+
+    state = create_network()
+    net = state["net"]
+    try:
+        bundle = oam.run_all(net)
+        cost = bundle.get("cost") or {}
+        results = {row.get("test_id"): row for row in (bundle.get("results") or [])}
+    finally:
+        net.stop()
+
+    failures = []
+    if cost.get("test_count") != 9:
+        failures.append(f"test_count={cost.get('test_count')}")
+    t10 = results.get("T10_speed") or {}
+    if (t10.get("duration_seconds") or 0) < 1.0:
+        failures.append("T10 finished too quickly (iperf likely failed)")
+    if t10.get("error"):
+        failures.append(f"T10 error={t10.get('error')}")
+    probes = t10.get("probes") or []
+    iperf_bytes = probes[0].get("bytes") if probes else None
+    if not isinstance(iperf_bytes, int) or iperf_bytes <= 0:
+        failures.append("T10 additional_bytes missing")
+    if cost.get("total_additional_packets") is None:
+        failures.append("total_additional_packets unset")
+    if cost.get("total_additional_bytes") is None:
+        failures.append("total_additional_bytes unset")
+    if failures:
+        print("live OAM cost: FAIL " + "; ".join(failures))
+        return 1
+    print("live OAM cost: PASS")
+    return 0
 
 
 def live_diamond():
@@ -819,4 +947,9 @@ def live_diamond():
 if __name__ == "__main__":
     if "--live" in sys.argv:
         sys.exit(live_diamond())
+    if "--live-cost" in sys.argv:
+        sys.exit(live_oam_cost())
+    if "--aggregate-costs" in sys.argv:
+        print(json.dumps(aggregate_episode_costs(), indent=2))
+        sys.exit(0)
     _self_check()
