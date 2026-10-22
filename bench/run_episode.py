@@ -11,6 +11,7 @@ if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import json
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -84,6 +85,29 @@ def assess_recheck(approved_snapshot, current_snapshot, proposal):
         if not up:
             return {"state_verified": False, "reason": f"{choice} path is down"}
     return {"state_verified": True, "reason": None}
+
+
+def _call_timed(fn):
+    started = time.monotonic()
+    try:
+        return fn(), time.monotonic() - started, None
+    except Exception as exc:
+        return None, time.monotonic() - started, exc
+
+
+def _agent_cost(proposal, elapsed):
+    """Wall time of the agent call, plus token counts when the model returned them."""
+    raw = {}
+    if isinstance(proposal, dict):
+        found = proposal.pop("_cost", None)
+        if isinstance(found, dict):
+            raw = found
+    return {
+        "latency_seconds": elapsed,
+        "model_latency_seconds": raw.get("latency_seconds"),
+        "prompt_tokens": raw.get("prompt_tokens"),
+        "completion_tokens": raw.get("completion_tokens"),
+    }
 
 
 def screen_proposal(proposal):
@@ -263,6 +287,9 @@ def run_episode(
             "correlation_ids": correlation_ids,
             "network_snapshot": snapshot,
             "oam": oam_bundle,
+            "oam_cost": oam.summarize_costs(
+                oam_bundle.get("results") if isinstance(oam_bundle, dict) else None
+            ),
             "agent_proposal": None,
             "agent_error": None,
             "gate_decision": None,
@@ -283,12 +310,13 @@ def run_episode(
             return record
 
         if agent_fn:
-            try:
-                record["agent_proposal"] = agent_fn(snapshot)
-            except Exception as exc:
-                record["agent_error"] = f"{type(exc).__name__}: {exc}"
+            proposal, elapsed, agent_exc = _call_timed(lambda: agent_fn(snapshot))
+            record["agent_cost"] = _agent_cost(proposal, elapsed)
+            if agent_exc is not None:
+                record["agent_error"] = f"{type(agent_exc).__name__}: {agent_exc}"
                 record["completed_at"] = datetime.now(timezone.utc).isoformat()
                 return record
+            record["agent_proposal"] = proposal
             rejection = screen_proposal(record["agent_proposal"])
             if rejection:
                 record.update(rejection)
@@ -296,13 +324,14 @@ def run_episode(
                 return record
 
         if gate_fn:
-            try:
-                record["gate_decision"] = gate_fn(record)
-            except Exception as exc:
-                record["gate_error"] = f"{type(exc).__name__}: {exc}"
+            decision, elapsed, gate_exc = _call_timed(lambda: gate_fn(record))
+            record["gate_cost"] = {"latency_seconds": elapsed}
+            if gate_exc is not None:
+                record["gate_error"] = f"{type(gate_exc).__name__}: {gate_exc}"
                 record["execution_error"] = f"gate error: {record['gate_error']}"
                 record["completed_at"] = datetime.now(timezone.utc).isoformat()
                 return record
+            record["gate_decision"] = decision
             if record["gate_decision"] is not None:
                 gate_ok, gate_errors = validate_record("gate_decision", record["gate_decision"])
                 if not gate_ok:
@@ -680,6 +709,36 @@ def _self_check():
     assert skipped == []
     assert invalid_gate["execution_attempted"] is False
     assert str(invalid_gate["execution_error"]).startswith("gate error:")
+
+    oam._check_costs()
+    priced = {
+        "action": "DO_NOTHING",
+        "target": "HostA_to_HostB",
+        "reason": "priced",
+        "_cost": {
+            "latency_seconds": 0.25,
+            "prompt_tokens": 11,
+            "completion_tokens": 4,
+        },
+    }
+    priced_cost = _agent_cost(priced, 0.4)
+    assert "_cost" not in priced
+    assert priced_cost["latency_seconds"] == 0.4
+    assert priced_cost["model_latency_seconds"] == 0.25
+    assert priced_cost["prompt_tokens"] == 11 and priced_cost["completion_tokens"] == 4
+    bare = _agent_cost({"action": "DO_NOTHING"}, 0.1)
+    assert bare["prompt_tokens"] is None and bare["model_latency_seconds"] is None
+
+    assert connected["agent_cost"]["prompt_tokens"] is None
+    assert connected["agent_cost"]["latency_seconds"] >= 0
+    assert connected["gate_cost"]["latency_seconds"] >= 0
+    assert connected["oam_cost"]["test_count"] == 1
+    assert connected["oam_cost"]["total_additional_bytes"] is None
+    compared = connected["gate_decision"]["cost"]
+    assert compared["full_battery"]["test_count"] == 1
+    assert compared["selected_tests"]["test_count"] == 0
+    assert compared["selected_tests"]["total_duration_seconds"] == 0.0
+    assert compared["tests_executed"]["total_duration_seconds"] is None
 
     print("execution boundary: PASS")
 

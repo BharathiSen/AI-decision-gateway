@@ -51,10 +51,10 @@ def decide(
     try:
         action = normalize_action(proposal.get("action"))
     except ValueError:
-        return _audit("block", proposal, [], {}, "invalid action")
+        return _audit("block", proposal, [], {}, "invalid action", supplied=test_results)
 
     if action not in RISKY_ACTIONS:
-        return _audit("allow", proposal, test_results, {}, "non-risky pass-through")
+        return _audit("allow", proposal, test_results, {}, "non-risky pass-through", supplied=test_results)
 
     ai_causes = [c.get("cause_id") for c in proposal.get("causes", []) if c.get("cause_id")]
     primary = ai_causes[0] if ai_causes else "AI_PRIMARY"
@@ -65,6 +65,7 @@ def decide(
     ruled_out = []
     tests_run = list(test_results)
     ran_ids = {r["test_id"] for r in tests_run} | set(already_ran)
+    selected_ids = _selected_test_ids(primary, alts)
 
     if mode == "full":
         for alt in alts:
@@ -105,26 +106,48 @@ def decide(
     }
 
     if not safety.get("passed"):
-        return _audit("block", proposal, tests_run, check_bundle, "safety failed")
+        return _audit("block", proposal, tests_run, check_bundle, "safety failed", supplied=test_results, selected_ids=selected_ids)
     if not consistency.get("passed"):
-        return _audit("block", proposal, tests_run, check_bundle, "consistency failed")
+        return _audit("block", proposal, tests_run, check_bundle, "consistency failed", supplied=test_results, selected_ids=selected_ids)
 
     if mode == "full":
         if not discrimination.get("passed"):
             if not any(selector.separating_tests(primary, a) for a in alts):
-                return _audit("escalate", proposal, tests_run, check_bundle, "inseparable")
-            return _audit("escalate", proposal, tests_run, check_bundle, "no discrimination")
+                return _audit("escalate", proposal, tests_run, check_bundle, "inseparable", supplied=test_results, selected_ids=selected_ids)
+            return _audit("escalate", proposal, tests_run, check_bundle, "no discrimination", supplied=test_results, selected_ids=selected_ids)
     else:
         check_bundle["discrimination"] = {"passed": True, "skipped": "pilot_v0"}
 
-    return _audit("allow", proposal, tests_run, check_bundle, "all checks passed")
+    return _audit("allow", proposal, tests_run, check_bundle, "all checks passed", supplied=test_results, selected_ids=selected_ids)
 
 
-def _audit(decision, proposal, tests_run, checks_out, reason):
+def _selected_test_ids(primary, alternatives):
+    """Cheapest separator for each alternative. Does not run those tests."""
+    chosen = []
+    for alt in alternatives:
+        if not selector.needs_different_fixes(primary, alt):
+            continue
+        tid = selector.pick_cheapest_separating_test(primary, alt)
+        if tid and tid not in chosen:
+            chosen.append(tid)
+    return chosen
+
+
+def _audit(decision, proposal, tests_run, checks_out, reason, supplied=None, selected_ids=None):
+    supplied = list(supplied if supplied is not None else tests_run)
+    by_id = {}
+    for result in tests_run:
+        if isinstance(result, dict):
+            by_id.setdefault(result.get("test_id"), result)
+    selected = [by_id.get(tid) or {"test_id": tid} for tid in (selected_ids or [])]
     return {
         "decision": decision,
         "reason": reason,
         "proposal_action": proposal.get("action"),
         "tests_run": [t.get("test_id") for t in tests_run],
         "checks": checks_out,
+        "cost": {
+            **oam.compare_costs(supplied, selected),
+            "tests_executed": oam.summarize_costs(tests_run),
+        },
     }

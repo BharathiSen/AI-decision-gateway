@@ -6,8 +6,12 @@ executes the full battery (T10 last).
 """
 
 import re
+import sys
 import time
 from datetime import datetime, timezone
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 try:
     from network import controller as ctl
@@ -54,6 +58,22 @@ def _counter(text):
     return int(nums[-1]) if nums else 0
 
 
+# Linux `ping` with no -s sends 56 bytes of ICMP data. The 8-byte ICMP
+# header is part of that echo request. T4 passes a different -s size.
+_ICMP_HEADER = 8
+_PING_DATA_BYTES = 56
+
+
+def _icmp_probe(count, data_bytes=_PING_DATA_BYTES):
+    """Echo requests this test transmits. Replies are not added again."""
+    count = int(count)
+    return {
+        "kind": "icmp_echo",
+        "packets": count,
+        "bytes": count * (_ICMP_HEADER + int(data_bytes)),
+    }
+
+
 def T1_e2e_ping(net, count=10, interval=0.2):
     t0 = time.monotonic()
     out = run_in_node(
@@ -63,6 +83,7 @@ def T1_e2e_ping(net, count=10, interval=0.2):
     parsed = _parse_ping(out)
     parsed["connectivity"] = parsed["packet_loss_percent"] < 100.0
     parsed["duration_seconds"] = time.monotonic() - t0
+    parsed["probes"] = [_icmp_probe(count)]
     return {"test_id": "T1_e2e_ping", **parsed}
 
 
@@ -97,13 +118,19 @@ def T2_hop_ping(net, path="primary", count=10, interval=0.2):
         "hops_primary": primary,
         "hops_backup": backup,
         "duration_seconds": time.monotonic() - t0,
+        "probes": [_icmp_probe((len(HOPS) + len(HOPS_BACKUP)) * count)],
     }
 
 
 def T4_mtu(net):
     t0 = time.monotonic()
     hostB = net.get("hostB").IP()
-    out = run_in_node(net.get("hostA"), f"ping -c 5 -i 0.2 -M do -s 1400 -W 2 {hostB}")
+    payload = 1400
+    count = 5
+    out = run_in_node(
+        net.get("hostA"),
+        f"ping -c {count} -i 0.2 -M do -s {payload} -W 2 {hostB}",
+    )
     # Match the loss number. A substring check treats "100% packet loss"
     # as success because it contains "0% packet loss".
     loss = _parse_ping(out)["packet_loss_percent"]
@@ -112,6 +139,7 @@ def T4_mtu(net):
         "df_ping_ok": loss == 0.0,
         "raw": out,
         "duration_seconds": time.monotonic() - t0,
+        "probes": [_icmp_probe(count, payload)],
     }
 
 
@@ -162,7 +190,13 @@ def T5_if_errors(net, probe_count=0):
         _hop_ping(net, "hostA", hostB.IP(), count=probe_count, interval=0.05)
         delta = max(0, _snmp_input_errors(hostB) - before)
         stats["hostB/icmp"] = {"rx_errors": delta, "tx_errors": 0}
-    return {"test_id": "T5_if_errors", "interfaces": stats, "duration_seconds": time.monotonic() - t0}
+    probes = [_icmp_probe(probe_count)] if probe_count else []
+    return {
+        "test_id": "T5_if_errors",
+        "interfaces": stats,
+        "duration_seconds": time.monotonic() - t0,
+        "probes": probes,
+    }
 
 
 def T6_queue_stats(net):
@@ -193,7 +227,12 @@ def T6_queue_stats(net):
             else:
                 chunk.append(line)
         store(current, chunk)
-    return {"test_id": "T6_queue_stats", "queues": queues, "duration_seconds": time.monotonic() - t0}
+    return {
+        "test_id": "T6_queue_stats",
+        "queues": queues,
+        "duration_seconds": time.monotonic() - t0,
+        "probes": [],
+    }
 
 
 def T7_route_check(net):
@@ -216,6 +255,7 @@ def T7_route_check(net):
         "r4_to_src": r4,
         "active_path": active,
         "duration_seconds": time.monotonic() - t0,
+        "probes": [],
     }
 
 
@@ -236,6 +276,7 @@ def T8_tcp_vs_ping(net):
         "tcp_ok": tcp_ok,
         "tcp_raw": tcp_out,
         "duration_seconds": time.monotonic() - t0,
+        "probes": list(ping.get("probes") or []) + [{"kind": "tcp_connect", "packets": 1}],
     }
 
 
@@ -248,6 +289,7 @@ def T9_oneway_loss(net, count=10, interval=0.2):
         "hostA_to_hostB": a2b,
         "hostB_to_hostA": b2a,
         "duration_seconds": time.monotonic() - t0,
+        "probes": [_icmp_probe(count * 2)],
     }
 
 
@@ -282,6 +324,27 @@ def _summary_mbit(output, seconds):
     if chosen is None or chosen <= 0 or chosen > _link_mbit():
         return None
     return chosen
+
+
+_SUMMARY_BYTES = re.compile(
+    r"(\d+\.\d+)-(\d+\.\d+)\s+sec\s+([\d.]+)\s+([KMG]?)Bytes"
+)
+
+
+def _summary_bytes(output, seconds):
+    """Bytes on the iperf3 summary that covers this transfer. No estimate."""
+    if not output or "unable to send" in output or "error -" in output or "interrupt -" in output:
+        return None
+    scale = {"": 1, "K": 1024, "M": 1024 ** 2, "G": 1024 ** 3}
+    chosen = None
+    for match in _SUMMARY_BYTES.finditer(output):
+        start, end, value, unit = match.groups()
+        if abs((float(end) - float(start)) - float(seconds)) > 0.25:
+            continue
+        chosen = float(value) * scale[unit]
+    if chosen is None or chosen <= 0:
+        return None
+    return int(chosen)
 
 
 def _parse_mbit(output):
@@ -353,6 +416,7 @@ def T10_speed(net, duration=3, interval=None):
         "intervals": intervals,
         "raw": out[-2000:] if len(out) > 2000 else out,
         "duration_seconds": time.monotonic() - t0,
+        "probes": [{"kind": "iperf3", "bytes": _summary_bytes(out, 1 if interval else duration)}],
     }
 
 
@@ -387,6 +451,85 @@ def run_test(net, test_id, **kwargs):
     return TEST_FUNCS[test_id](net, **kwargs)
 
 
+def _probe_total(probes, field):
+    """Sum probes that reported this field. None if a reported value is unknown.
+
+    A probe may omit a field it does not measure, such as a TCP connect
+    with no byte size. An empty probe list is a local test: it sent nothing.
+    """
+    if not probes:
+        return 0
+    total = 0
+    reported = False
+    for probe in probes:
+        if field not in probe:
+            continue
+        value = probe[field]
+        if value is None or isinstance(value, bool) or not isinstance(value, int):
+            return None
+        reported = True
+        total += value
+    if not reported:
+        return None
+    return total
+
+
+def summarize_costs(results):
+    """Sum elapsed time and reported probe traffic. Missing fields stay unknown."""
+    rows = []
+    total_duration = 0.0
+    total_packets = 0
+    total_bytes = 0
+    duration_known = True
+    packets_known = True
+    bytes_known = True
+    for result in results or []:
+        result = result or {}
+        duration = result.get("duration_seconds")
+        if isinstance(duration, bool) or not isinstance(duration, (int, float)):
+            duration_known = False
+            duration = None
+        else:
+            duration = float(duration)
+            total_duration += duration
+        probes = result.get("probes")
+        if not isinstance(probes, list):
+            packets = None
+            byte_count = None
+        else:
+            packets = _probe_total(probes, "packets")
+            byte_count = _probe_total(probes, "bytes")
+        if packets is None:
+            packets_known = False
+        else:
+            total_packets += packets
+        if byte_count is None:
+            bytes_known = False
+        else:
+            total_bytes += byte_count
+        rows.append({
+            "test_id": result.get("test_id"),
+            "duration_seconds": duration,
+            "additional_packets": packets,
+            "additional_bytes": byte_count,
+        })
+    return {
+        "tests": rows,
+        "test_count": len(rows),
+        "total_duration_seconds": total_duration if duration_known else None,
+        "total_additional_packets": total_packets if packets_known else None,
+        "total_additional_bytes": total_bytes if bytes_known else None,
+    }
+
+
+def compare_costs(full_results, selected_results):
+    """Full battery versus a subset of the same result objects. No second run."""
+    return {
+        "full_battery": summarize_costs(full_results),
+        "selected_tests": summarize_costs(selected_results),
+    }
+
+
 def run_all(net, test_ids=None, ping_count=None, error_probe=None, ping_interval=None, speed_seconds=None):
     """Run full OAM battery; T10 always last.
 
@@ -410,7 +553,12 @@ def run_all(net, test_ids=None, ping_count=None, error_probe=None, ping_interval
         if speed_seconds and tid == "T10_speed":
             kwargs["duration"] = speed_seconds
         results.append(run_test(net, tid, **kwargs))
-    return {"started_at": started, "completed_at": datetime.now(timezone.utc).isoformat(), "results": results}
+    return {
+        "started_at": started,
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+        "results": results,
+        "cost": summarize_costs(results),
+    }
 
 
 def load_thresholds(noise_id="N0"):
@@ -438,3 +586,66 @@ def evaluate_against_thresholds(test_results, noise_id="N0"):
             alarms.append(f"{tid}_degraded")
             seen.add(tid)
     return alarms
+
+
+def _check_costs():
+    """Accounting only. Does not start Mininet."""
+    ping = {
+        "test_id": "T1_e2e_ping",
+        "duration_seconds": 1.5,
+        "probes": [_icmp_probe(10)],
+    }
+    route = {
+        "test_id": "T7_route_check",
+        "duration_seconds": 0.2,
+        "probes": [],
+    }
+    speed = {
+        "test_id": "T10_speed",
+        "duration_seconds": 1.0,
+        "probes": [{"kind": "iperf3", "bytes": None}],
+    }
+    known = summarize_costs([ping, route])
+    assert known["total_additional_packets"] == 10
+    assert known["total_additional_bytes"] == 10 * (_ICMP_HEADER + _PING_DATA_BYTES)
+    assert known["total_duration_seconds"] == 1.7
+    missing = summarize_costs([ping, speed])
+    assert missing["total_additional_bytes"] is None
+    assert missing["total_additional_packets"] is None
+    assert missing["tests"][0]["additional_packets"] == 10
+    assert missing["tests"][0]["additional_bytes"] == 640
+    measured = summarize_costs([ping, {
+        "test_id": "T10_speed",
+        "duration_seconds": 1.0,
+        "probes": [{"kind": "iperf3", "bytes": 1024 ** 2}],
+    }])
+    assert measured["total_additional_bytes"] == 640 + 1024 ** 2
+    assert measured["total_additional_packets"] is None
+    compared = compare_costs([ping, route, speed], [ping])
+    assert compared["selected_tests"]["total_duration_seconds"] == 1.5
+    assert compared["selected_tests"]["total_duration_seconds"] < compared["full_battery"]["total_duration_seconds"]
+    assert compared["full_battery"]["total_additional_bytes"] is None
+    unmeasured = compare_costs([ping, route], [ping, {"test_id": "T2_hop_ping"}])
+    assert unmeasured["selected_tests"]["total_additional_bytes"] is None
+    assert unmeasured["selected_tests"]["tests"][0]["additional_bytes"] == 640
+    text = "[  5]   0.00-1.00   sec  1.00 MBytes  8.39 Mbits/sec\n"
+    assert _summary_bytes(text, 1) == 1024 ** 2
+    assert _summary_bytes("unable to send control message", 1) is None
+    longer = (
+        "[  5]   0.00-1.00   sec  1.00 MBytes  8.39 Mbits/sec\n"
+        "[  5]   0.00-3.00   sec  3.00 MBytes  8.39 Mbits/sec\n"
+    )
+    assert _summary_bytes(longer, 3) == 3 * 1024 ** 2
+    assert _icmp_probe(5, 1400)["bytes"] == 5 * (_ICMP_HEADER + 1400)
+    tcp = summarize_costs([{
+        "test_id": "T8_tcp_vs_ping",
+        "duration_seconds": 0.4,
+        "probes": [_icmp_probe(5), {"kind": "tcp_connect", "packets": 1}],
+    }])
+    assert tcp["total_additional_packets"] == 6
+    assert tcp["total_additional_bytes"] == 5 * (_ICMP_HEADER + _PING_DATA_BYTES)
+
+
+if __name__ == "__main__":
+    _check_costs()
+    print("test cost: PASS")

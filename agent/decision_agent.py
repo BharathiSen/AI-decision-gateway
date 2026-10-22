@@ -16,6 +16,7 @@ network.fault_injector).
 
 import json
 import os
+import time
 from pathlib import Path
 
 import yaml
@@ -26,6 +27,25 @@ from bench.contracts import TEST_IDS, llm_proposal_schema
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 MODEL = "openai/gpt-4o-mini"
+
+
+def _model_cost(response, started):
+    """Latency and token counts from a completed model call. Unknown stays null."""
+    usage = getattr(response, "usage", None)
+
+    def field(name):
+        if usage is None:
+            return None
+        value = usage.get(name) if isinstance(usage, dict) else getattr(usage, name, None)
+        if isinstance(value, bool) or not isinstance(value, int):
+            return None
+        return value
+
+    return {
+        "latency_seconds": time.monotonic() - started,
+        "prompt_tokens": field("prompt_tokens"),
+        "completion_tokens": field("completion_tokens"),
+    }
 
 DEFAULT_ALLOWED_ACTIONS = ["REROUTE", "DO_NOTHING", "ESCALATE"]
 DEFAULT_OAM_CATALOG = list(TEST_IDS)
@@ -105,6 +125,7 @@ def propose_decision(
         "target": target,
     }
 
+    started = time.monotonic()
     response = client.chat.completions.create(
         model=MODEL,
         messages=[
@@ -132,6 +153,7 @@ def propose_decision(
     if not ok:
         raise ValueError(f"invalid agent output: {errors}")
 
+    decision["_cost"] = _model_cost(response, started)
     return decision
 
 
@@ -166,6 +188,7 @@ def propose_with_predictions(
         "ticket_text": ticket_text,
     }
 
+    started = time.monotonic()
     response = client.chat.completions.create(
         model=MODEL,
         messages=[
@@ -189,4 +212,5 @@ def propose_with_predictions(
     ok, errors = validate_proposal(decision, allowed_actions=allowed_actions)
     if not ok:
         raise ValueError(f"invalid agent output: {errors}")
+    decision["_cost"] = _model_cost(response, started)
     return decision
