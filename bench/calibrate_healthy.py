@@ -16,8 +16,8 @@ so the VM can be powered off. Run the same command again to continue:
 
 When the checkpoint already has the requested runs, the command reprints
 that file and does not start Mininet, even if --fill-speed is passed.
-Failed speed readings under 1 Mbit/s and readings above 15 Mbit/s are
-left out of the distribution and are not counted as false alarms.
+A speed above the configured link rate is left out. Queue backlog is not
+a false alarm when that noise level enables background traffic.
 
     python3 bench/calibrate_healthy.py --from-saved --noise all --runs 200 --eval-runs 50
 
@@ -254,79 +254,67 @@ def _no_reading(result):
     return False
 
 
-def score_false_alarms(bundles, thresholds):
+def _background_enabled(noise_id):
+    """True when config/noise.yaml turns background traffic on for this level."""
+    if not noise_id:
+        return False
+    from bench.traffic import load_noise_levels
+
+    level = load_noise_levels().get(noise_id) or {}
+    return bool((level.get("background_traffic") or {}).get("enabled"))
+
+
+def _counts_as_alarm(result, outcome, thresholds, background=False):
+    """A healthy-network alarm.
+
+    With background traffic enabled, packets waiting in a queue are the load
+    from config/noise.yaml. A drop is still an alarm. With background off,
+    backlog counts.
+    """
+    if _no_reading(result):
+        return False
+    if (
+        background
+        and result.get("test_id") == "T6_queue_stats"
+        and str(outcome).startswith("backlog")
+    ):
+        return False
+    return is_degraded(result.get("test_id"), outcome, thresholds)
+
+
+def score_false_alarms(bundles, thresholds, noise_id=None):
     """Count eval bundles whose graded outcome is not healthy."""
+    background = _background_enabled(noise_id)
     alarms = 0
     for bundle in bundles:
         for result in bundle.get("results") or []:
-            if _no_reading(result):
-                continue
             outcome = grade_result(result, thresholds)
-            if is_degraded(result.get("test_id"), outcome, thresholds):
+            if _counts_as_alarm(result, outcome, thresholds, background):
                 alarms += 1
                 break
     return alarms
 
 
-def _cluster_cutoff(bundles):
-    """Half the fit-set median. A bare speed below that is a failed transfer.
-
-    The healthy N1 and N2 clusters sit near 6.7 and 3.6 Mbit/s. The saved
-    1 Mbit/s leftovers are the same failed fills as the sub-1 Mbit/s ones.
-    A checked summary is never removed.
-    """
-    speeds = []
-    for bundle in bundles:
-        for result in bundle.get("results") or []:
-            if result.get("test_id") != "T10_speed":
-                continue
-            value = accepted_speed(result)
-            if value is not None:
-                speeds.append(value)
-    median = _percentile(speeds, 50)
-    if median is None:
-        return None
-    return median * 0.5
-
-
-def _mask_outlier_speeds(bundles, cutoff):
-    if cutoff is None:
-        return bundles
-    masked = []
-    for bundle in bundles:
-        results = []
-        for result in bundle.get("results") or []:
-            if result.get("test_id") == "T10_speed" and not result.get("checked"):
-                value = accepted_speed(result)
-                if value is not None and value < cutoff:
-                    result = dict(result)
-                    result["mbit_per_sec"] = None
-            results.append(result)
-        masked.append(dict(bundle, results=results))
-    return masked
-
-
-def _alarm_tests(bundles, thresholds):
+def _alarm_tests(bundles, thresholds, noise_id=None):
+    background = _background_enabled(noise_id)
     found = {}
     for bundle in bundles:
         for result in bundle.get("results") or []:
-            if _no_reading(result):
+            outcome = grade_result(result, thresholds)
+            if not _counts_as_alarm(result, outcome, thresholds, background):
                 continue
             test_id = result.get("test_id")
-            outcome = grade_result(result, thresholds)
-            if is_degraded(test_id, outcome, thresholds):
-                found[test_id] = found.get(test_id, 0) + 1
-                break
+            kind = str(outcome).split(":", 1)[0]
+            key = test_id if kind in ("", "ok") else f"{test_id}:{kind}"
+            found[key] = found.get(key, 0) + 1
+            break
     return found
 
 
 def build_report(calibration, evaluation, noise_id, existing, full_battery, seed):
-    cutoff = _cluster_cutoff(calibration)
-    calibration = _mask_outlier_speeds(calibration, cutoff)
-    evaluation = _mask_outlier_speeds(evaluation, cutoff)
     tests = summarize(calibration)
     proposed, notes = propose_thresholds(tests, existing)
-    alarms = score_false_alarms(evaluation, proposed)
+    alarms = score_false_alarms(evaluation, proposed, noise_id)
     eval_runs = len(evaluation)
     return {
         "noise_id": noise_id,
@@ -340,7 +328,7 @@ def build_report(calibration, evaluation, noise_id, existing, full_battery, seed
         "threshold_notes": notes,
         "eval_false_alarms": alarms,
         "eval_false_alarm_rate": (alarms / eval_runs) if eval_runs else None,
-        "eval_alarm_tests": _alarm_tests(evaluation, proposed),
+        "eval_alarm_tests": _alarm_tests(evaluation, proposed, noise_id),
     }
 
 
@@ -449,16 +437,9 @@ def _self_check():
         True,
         0,
     )
-    assert junk["tests"]["T10_speed"]["mbit_per_sec"]["n"] == 19
+    assert junk["tests"]["T10_speed"]["mbit_per_sec"]["n"] == 20
     assert junk["tests"]["T10_speed"]["mbit_per_sec"]["max"] == 8.0
-    assert junk["eval_false_alarms"] == 0
-
-    tail = [{"results": _healthy_result(mbit=8.0)} for _ in range(19)]
-    tail.append({"results": _healthy_result(mbit=1.2)})
-    clustered = build_report(tail, [{"results": _healthy_result(mbit=1.2)}], "N0", existing, True, 0)
-    assert clustered["tests"]["T10_speed"]["mbit_per_sec"]["p50"] == 8.0
-    assert clustered["tests"]["T10_speed"]["mbit_per_sec"]["n"] == 19
-    assert clustered["eval_false_alarms"] == 0
+    assert junk["eval_false_alarms"] == 1
 
     fast = build_report(
         [{"results": _healthy_result(mbit=10.0)} for _ in range(20)],
@@ -524,7 +505,10 @@ def _self_check():
     assert _summary_mbit(summary, 1) == 3.59
     assert _summary_mbit(summary + "iperf3: error - unable to send control message\n", 1) is None
     assert _summary_mbit("[  5]   0.00-1.00   sec  20 MBytes  167 Mbits/sec\n", 1) is None
-    assert _summary_mbit("[  5]   0.00-1.00   sec  1.37 MBytes  11.6 Mbits/sec\n", 1) == 11.6
+    from network.controller import BASELINE_LINK_PARAMS
+    link = float(BASELINE_LINK_PARAMS["bw"])
+    assert _summary_mbit(f"[  5]   0.00-1.00   sec  1.00 MBytes  {link} Mbits/sec\n", 1) == link
+    assert _summary_mbit(f"[  5]   0.00-1.00   sec  1.00 MBytes  {link + 1} Mbits/sec\n", 1) is None
     assert _summary_mbit("[  5]   0.00-3.00   sec  2.00 MBytes  5.60 Mbits/sec\n", 3) == 5.6
 
     traffic = inspect.getsource(apply_noise)
@@ -583,20 +567,20 @@ def _self_check():
         rows.append({"noise_id": "N0", "index": index, "bundle": bundle})
     saved.write_text("".join(json.dumps(item) + "\n" for item in rows), encoding="utf-8")
     reprinted = report_from_saved(["N0"], 3, 1, sample_path=saved)
-    assert reprinted["N0"]["tests"]["T10_speed"]["mbit_per_sec"]["n"] == 2
+    assert reprinted["N0"]["tests"]["T10_speed"]["mbit_per_sec"]["n"] == 3
     assert reprinted["N0"]["eval_false_alarms"] == 0
     assert "create_network" not in inspect.getsource(report_from_saved)
-    repeated = Path(tempfile.mkdtemp()) / "samples.jsonl"
-    repeated.write_text(
-        "".join(
-            json.dumps({"noise_id": "N0", "index": index, "bundle": {"results": []}}) + "\n"
-            for index in (0, 0, 1)
-        ),
-        encoding="utf-8",
-    )
-    assert len(_bundles_for(repeated, "N0", 3)) == 3
-    repeated.unlink()
-    repeated.parent.rmdir()
+    waiting = _healthy_result()
+    for item in waiting:
+        if item["test_id"] == "T6_queue_stats":
+            item["queues"]["r1/r1-eth1"]["backlog_packets"] = 4
+    assert score_false_alarms([{"results": waiting}], existing, "N0") == 1
+    assert score_false_alarms([{"results": waiting}], existing, "N2") == 0
+    dropped = _healthy_result()
+    for item in dropped:
+        if item["test_id"] == "T6_queue_stats":
+            item["queues"]["r1/r1-eth1"]["drops"] = 3
+    assert score_false_alarms([{"results": dropped}], existing, "N2") == 1
     assert _reprint_only(["N0"], 3, 1, saved, False) is True
     assert _reprint_only(["N0"], 200, 50, saved, False) is False
     assert _reprint_only(["N0"], 200, 50, saved, True) is True
@@ -898,24 +882,16 @@ def calibrate(noise_ids, runs, eval_runs, seed=0, quick=False, batch=CALIBRATION
 
 
 def _bundles_for(path, noise_id, minimum=0):
-    """Saved runs for one noise level.
-
-    The last copy of an index wins. If that would shrink a finished sample
-    because the same index was written twice, keep the file order instead.
-    """
-    rows = [
-        item for item in _read_rows(path)
-        if item.get("noise_id") == noise_id and "bundle" in item
-    ]
+    """Saved runs for one noise level. The last copy of an index wins."""
+    del minimum
     chosen = {}
-    for item in rows:
+    for item in _read_rows(path):
+        if item.get("noise_id") != noise_id or "bundle" not in item:
+            continue
         index = item.get("index")
         if isinstance(index, int):
             chosen[index] = item["bundle"]
-    ordered = [chosen[index] for index in sorted(chosen)]
-    if minimum and len(ordered) < minimum <= len(rows):
-        return [item["bundle"] for item in rows]
-    return ordered
+    return [chosen[index] for index in sorted(chosen)]
 
 
 def _reprint_only(noise_ids, runs, eval_runs, sample_path=SAMPLES_PATH, from_saved=False):

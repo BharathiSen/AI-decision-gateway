@@ -251,22 +251,22 @@ def T9_oneway_loss(net, count=10, interval=0.2):
     }
 
 
-# The diamond links are 10 Mbit/s. iperf3 can print a little over that.
-# 167 and 2930 are a short-interval token, not a completed transfer.
-SPEED_MBIT_MAX = 15.0
-# A bare saved number with no checked summary. The broken fills were under
-# 1 Mbit/s; the healthy clusters were above it. A new checked summary may be slower.
-UNVERIFIED_MIN_MBIT = 1.0
 _SUMMARY_LINE = re.compile(
     r"(\d+\.\d+)-(\d+\.\d+)\s+sec\s+[\d.]+\s+[KMG]?Bytes\s+([\d.]+)\s*([KMG])bits/sec"
 )
+
+
+def _link_mbit():
+    """Configured diamond link rate. A faster reading is not a completed transfer."""
+    return float(ctl.BASELINE_LINK_PARAMS["bw"])
 
 
 def _summary_mbit(output, seconds):
     """Bitrate from the iperf3 summary that covers this transfer.
 
     The last bits/sec token is not used. A short interval can say Gbits/sec
-    and was parsed as 2930 Mbit/s.
+    and was parsed as 2930 Mbit/s. Anything above the configured link rate
+    is rejected.
     """
     if not output:
         return None
@@ -279,7 +279,7 @@ def _summary_mbit(output, seconds):
         if abs((float(end) - float(start)) - float(seconds)) > 0.25:
             continue
         chosen = float(value) * scale[unit]
-    if chosen is None or chosen <= 0 or chosen > SPEED_MBIT_MAX:
+    if chosen is None or chosen <= 0 or chosen > _link_mbit():
         return None
     return chosen
 
@@ -290,23 +290,14 @@ def _parse_mbit(output):
 
 
 def accepted_speed(result):
-    """A bitrate that can enter the healthy distribution.
-
-    A checked summary is a completed transfer, including a slow one.
-    A bare saved number under 1 Mbit/s, or above the 10 Mbit/s path, is
-    remeasured.
-    """
+    """A positive bitrate at or under the configured link rate."""
     if not isinstance(result, dict):
         return None
     try:
         mbit = float(result.get("mbit_per_sec"))
     except (TypeError, ValueError):
         return None
-    if mbit != mbit or mbit <= 0 or mbit > SPEED_MBIT_MAX:
-        return None
-    if result.get("checked"):
-        return mbit
-    if mbit < UNVERIFIED_MIN_MBIT:
+    if mbit != mbit or mbit <= 0 or mbit > _link_mbit():
         return None
     return mbit
 
