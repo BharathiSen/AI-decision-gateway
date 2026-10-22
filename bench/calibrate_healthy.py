@@ -1103,7 +1103,7 @@ def main():
             f"No checkpoint at {sample_path}.\n"
             "On the VM, samples live under ~/AI-decision-gateway/results/calibration_samples.jsonl.\n"
             "Copy that file here, then run:\n"
-            "  python bench/calibrate_healthy.py --from-saved --legacy-samples --noise all --runs 200 --eval-runs 50",
+            "  python3 bench/calibrate_healthy.py --from-saved --noise all --runs 200 --eval-runs 50",
             file=sys.stderr,
         )
         sys.exit(2)
