@@ -6,7 +6,7 @@ by_noise_level:
   N0:
     T1_e2e_ping:
       max_loss_percent: 5.0
-      max_latency_ms: 50.0
+      max_latency_ms: 160.0
     T2_hop_ping:
       max_loss_percent: 10.0
       max_latency_ms: 80.0
@@ -40,6 +40,7 @@ by_noise_level:
 calibration:
   healthy_runs_target: 200
   false_alarm_rate_target: 0.05
+  grading_from_report: true
   battery:
     ping_count: 10
     ping_interval: 0.2

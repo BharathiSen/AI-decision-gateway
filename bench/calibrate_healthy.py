@@ -39,17 +39,22 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from bench.contracts import TEST_IDS
-from bench.tests import EPISODE_PING_COUNT, EPISODE_PING_INTERVAL, EPISODE_SPEED_SECONDS
+from bench.tests import (
+    EPISODE_BATTERY,
+    EPISODE_PING_COUNT,
+    EPISODE_PING_INTERVAL,
+    EPISODE_SPEED_SECONDS,
+    LEGACY_BATTERY,
+)
 from bench.outcomes import grade_result, is_degraded, load_thresholds
 from bench.tests import accepted_speed
 
 ROOT = Path(__file__).resolve().parent.parent
 THRESHOLDS_PATH = ROOT / "config" / "thresholds.yaml"
 SAMPLES_PATH = ROOT / "results" / "calibration_samples.jsonl"
+SAMPLES_EPISODE_PATH = ROOT / "results" / "calibration_samples_episode.jsonl"
 FULL_BATTERY = list(TEST_IDS)
 MIN_CALIBRATION_RUNS = 200
-# Saved runs collected before this used ping_count=3 and speed_seconds=1.
-LEGACY_BATTERY = {"ping_count": 3, "ping_interval": 0.2, "speed_seconds": 1}
 CALIBRATION_BATCH = 10
 SAMPLE_TIMEOUT_SECONDS = 90
 SPEED_FILL_CAP = 30
@@ -313,11 +318,33 @@ def _alarm_tests(bundles, thresholds, noise_id=None):
     return found
 
 
+def _battery_profile(bundles):
+    for bundle in bundles or []:
+        battery = bundle.get("battery")
+        if isinstance(battery, dict) and battery.get("ping_count") is not None:
+            return dict(battery)
+    return dict(LEGACY_BATTERY)
+
+
+def _episode_battery(profile):
+    return (
+        profile.get("ping_count") == EPISODE_PING_COUNT
+        and profile.get("speed_seconds") == EPISODE_SPEED_SECONDS
+    )
+
+
+def _false_alarm_target():
+    with THRESHOLDS_PATH.open(encoding="utf-8") as handle:
+        doc = yaml.safe_load(handle)
+    return float((doc.get("calibration") or {}).get("false_alarm_rate_target", 0.05))
+
+
 def build_report(calibration, evaluation, noise_id, existing, full_battery, seed):
     tests = summarize(calibration)
     proposed, notes = propose_thresholds(tests, existing)
     alarms = score_false_alarms(evaluation, proposed, noise_id)
     eval_runs = len(evaluation)
+    battery_profile = _battery_profile(calibration)
     return {
         "noise_id": noise_id,
         "calibration_runs": len(calibration),
@@ -325,31 +352,50 @@ def build_report(calibration, evaluation, noise_id, existing, full_battery, seed
         "full_battery": full_battery,
         "seed": seed,
         "used_evaluation_faults": False,
+        "battery_profile": battery_profile,
+        "episode_aligned_battery": _episode_battery(battery_profile),
         "tests": tests,
         "proposed_thresholds": proposed,
         "threshold_notes": notes,
         "eval_false_alarms": alarms,
         "eval_false_alarm_rate": (alarms / eval_runs) if eval_runs else None,
         "eval_alarm_tests": _alarm_tests(evaluation, proposed, noise_id),
+        "false_alarm_rate_target": _false_alarm_target(),
     }
 
 
 def ready_to_write(report):
+    target = report.get("false_alarm_rate_target", _false_alarm_target())
+    rate = report.get("eval_false_alarm_rate")
     return (
         report.get("full_battery") is True
         and report.get("calibration_runs", 0) >= MIN_CALIBRATION_RUNS
         and report.get("eval_runs", 0) > 0
         and report.get("used_evaluation_faults") is False
+        and report.get("episode_aligned_battery") is True
+        and rate is not None
+        and rate <= target
     )
 
 
 def update_thresholds_yaml(reports, path=THRESHOLDS_PATH):
     """Replace limits for levels that passed the write guard."""
-    refused = [noise for noise, report in reports.items() if not ready_to_write(report)]
+    refused = []
+    for noise, report in reports.items():
+        if ready_to_write(report):
+            continue
+        rate = report.get("eval_false_alarm_rate")
+        target = report.get("false_alarm_rate_target", _false_alarm_target())
+        if not report.get("episode_aligned_battery"):
+            refused.append(f"{noise} (legacy 3-ping/1s battery; re-collect to {SAMPLES_EPISODE_PATH.name})")
+        elif rate is None or rate > target:
+            refused.append(f"{noise} (false-alarm rate {rate} > target {target})")
+        else:
+            refused.append(noise)
     if refused:
         raise ValueError(
             "refusing to write thresholds for " + ", ".join(refused)
-            + ": need a full battery, 200 calibration runs, and a separate eval set"
+            + ": need episode-aligned battery, 200 fit runs, eval set, and false-alarm rate at or below target"
         )
     with path.open(encoding="utf-8") as handle:
         doc = yaml.safe_load(handle)
@@ -535,6 +581,18 @@ def _self_check():
     assert "timeout 20 iperf3" in battery
 
     assert ready_to_write(report) is False
+    high_far = dict(report)
+    high_far.update(
+        {
+            "full_battery": True,
+            "calibration_runs": MIN_CALIBRATION_RUNS,
+            "eval_runs": 50,
+            "episode_aligned_battery": True,
+            "eval_false_alarm_rate": 0.25,
+            "false_alarm_rate_target": 0.05,
+        }
+    )
+    assert ready_to_write(high_far) is False
     try:
         update_thresholds_yaml({"N0": report}, THRESHOLDS_PATH)
         raise AssertionError("short sample was written")
@@ -589,6 +647,33 @@ def _self_check():
     saved.unlink()
     saved.parent.rmdir()
 
+    import bench.outcomes as outcomes
+
+    report_path = Path(tempfile.mkdtemp()) / "calibration_report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "levels": {
+                    "N0": {
+                        "proposed_thresholds": {
+                            "T1_e2e_ping": {"max_loss_percent": 9.0, "max_latency_ms": 99.0},
+                        }
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    previous = outcomes._REPORT
+    outcomes._REPORT = report_path
+    try:
+        assert load_thresholds("N0")["T1_e2e_ping"]["max_latency_ms"] == 99.0
+    finally:
+        outcomes._REPORT = previous
+    report_path.unlink()
+    report_path.parent.rmdir()
+
     print("healthy calibration: PASS")
 
 
@@ -632,10 +717,13 @@ def _load_samples(path, noise_id):
     return [item["bundle"] for item in kept if item.get("noise_id") == noise_id]
 
 
-def _append_sample(path, noise_id, index, bundle):
+def _append_sample(path, noise_id, index, bundle, battery=None):
     path.parent.mkdir(parents=True, exist_ok=True)
+    row = {"noise_id": noise_id, "index": index, "bundle": bundle}
+    if battery:
+        row["battery"] = battery
     with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps({"noise_id": noise_id, "index": index, "bundle": bundle}) + "\n")
+        handle.write(json.dumps(row) + "\n")
         handle.flush()
         os.fsync(handle.fileno())
 
@@ -785,27 +873,47 @@ def collect_healthy(net, runs, test_ids, noise_id="N0", sample_path=SAMPLES_PATH
         print(f"  run {index + 1}/{runs} ...", flush=True)
         started = time.monotonic()
         try:
-            bundle = _call_with_timeout(
+            raw = _call_with_timeout(
                 SAMPLE_TIMEOUT_SECONDS,
-                lambda: _slim(oam.run_all(
+                lambda: oam.run_all(
                     net,
                     test_ids=test_ids,
                     ping_count=EPISODE_PING_COUNT,
                     ping_interval=EPISODE_PING_INTERVAL,
                     speed_seconds=EPISODE_SPEED_SECONDS,
-                )),
+                ),
             )
+            bundle = _slim(raw)
+            bundle["battery"] = dict(EPISODE_BATTERY)
         except (UnicodeDecodeError, TimeoutError) as exc:
             print(f"  run {index + 1}/{runs} skipped: {exc}", flush=True)
             recover_net(net)
             continue
-        _append_sample(sample_path, noise_id, index, bundle)
+        _append_sample(sample_path, noise_id, index, bundle, battery=EPISODE_BATTERY)
         bundles.append(bundle)
         print(f"  run {index + 1}/{runs} done in {time.monotonic() - started:.0f}s", flush=True)
     return bundles
 
 
-def calibrate(noise_ids, runs, eval_runs, seed=0, quick=False, batch=CALIBRATION_BATCH, fill_speed=False):
+def resolve_sample_path(args):
+    if args.samples:
+        path = Path(args.samples)
+        return path if path.is_absolute() else ROOT / path
+    if args.legacy_samples or args.from_saved:
+        return SAMPLES_PATH
+    return SAMPLES_EPISODE_PATH
+
+
+def calibrate(
+    noise_ids,
+    runs,
+    eval_runs,
+    seed=0,
+    quick=False,
+    batch=CALIBRATION_BATCH,
+    fill_speed=False,
+    sample_path=SAMPLES_EPISODE_PATH,
+):
     from network.topology import create_network
     from bench import inject as inj
     from bench.traffic import apply_noise, clear_noise
@@ -829,10 +937,12 @@ def calibrate(noise_ids, runs, eval_runs, seed=0, quick=False, batch=CALIBRATION
             noise_applied = apply_noise(net, noise_id, state["links"])
             speed_left = False
             try:
-                collected = collect_healthy(net, total, test_ids, noise_id=noise_id, batch=batch)
+                collected = collect_healthy(
+                    net, total, test_ids, noise_id=noise_id, batch=batch, sample_path=sample_path,
+                )
                 if fill_speed and len(collected) >= total:
                     collected, speed_left = fill_missing_speed(
-                        net, collected, noise_id, batch=batch,
+                        net, collected, noise_id, batch=batch, sample_path=sample_path,
                     )
             finally:
                 try:
@@ -939,6 +1049,21 @@ def report_from_saved(noise_ids, runs, eval_runs, seed=0, sample_path=SAMPLES_PA
             f"({report['eval_false_alarm_rate']}) {report['eval_alarm_tests']}",
             flush=True,
         )
+        if not report.get("episode_aligned_battery"):
+            print(
+                f"  {noise_id}: legacy battery profile {report.get('battery_profile')}. "
+                f"Episode grading uses 10 pings and 3 s speed. Re-collect into "
+                f"{SAMPLES_EPISODE_PATH.name} before --write-thresholds.",
+                flush=True,
+            )
+        target = report.get("false_alarm_rate_target", _false_alarm_target())
+        rate = report.get("eval_false_alarm_rate")
+        if rate is not None and rate > target:
+            print(
+                f"  {noise_id}: false-alarm rate {rate} is above target {target}. "
+                "Thresholds will not be written until this improves.",
+                flush=True,
+            )
     return reports
 
 
@@ -958,16 +1083,39 @@ def main():
     parser.add_argument("--batch", type=int, default=CALIBRATION_BATCH, help="new samples to collect before exiting")
     parser.add_argument("--fill-speed", action="store_true", help="measure T10 only where a saved run has no bitrate")
     parser.add_argument("--from-saved", action="store_true", help="reprint the report from saved runs; does not start Mininet")
+    parser.add_argument(
+        "--legacy-samples",
+        action="store_true",
+        help=f"read/write {SAMPLES_PATH.name} (VM checkpoint with 3 ping / 1 s speed)",
+    )
+    parser.add_argument(
+        "--samples",
+        type=str,
+        default="",
+        help="checkpoint jsonl path (default: legacy file for --from-saved, episode file for new collection)",
+    )
     args = parser.parse_args()
+    sample_path = resolve_sample_path(args)
 
     noise_ids = ["N0", "N1", "N2"] if args.noise == "all" else [args.noise]
-    if _reprint_only(noise_ids, args.runs, args.eval_runs, from_saved=args.from_saved):
+    if args.from_saved and not sample_path.is_file():
+        print(
+            f"No checkpoint at {sample_path}.\n"
+            "On the VM, samples live under ~/AI-decision-gateway/results/calibration_samples.jsonl.\n"
+            "Copy that file here, then run:\n"
+            "  python bench/calibrate_healthy.py --from-saved --legacy-samples --noise all --runs 200 --eval-runs 50",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    if _reprint_only(noise_ids, args.runs, args.eval_runs, sample_path=sample_path, from_saved=args.from_saved):
         if args.write_thresholds:
             print("Refusing --write-thresholds on a reprint. Paste the report first.", file=sys.stderr)
             sys.exit(2)
         if not args.from_saved:
             print("Saved runs already cover this sample. Reprinting. Mininet will not start.", flush=True)
-        reports = report_from_saved(noise_ids, args.runs, args.eval_runs, seed=args.seed)
+        reports = report_from_saved(
+            noise_ids, args.runs, args.eval_runs, seed=args.seed, sample_path=sample_path,
+        )
         if not reports:
             return
         payload = {"version": 1, "levels": reports}
@@ -983,6 +1131,7 @@ def main():
         print("calibrate_healthy.py collects on the Mininet VM as root.", file=sys.stderr)
         sys.exit(2)
 
+    print(f"Saving episode-aligned samples to {sample_path}", flush=True)
     reports = calibrate(
         noise_ids,
         args.runs,
@@ -991,6 +1140,7 @@ def main():
         quick=args.quick,
         batch=args.batch,
         fill_speed=args.fill_speed,
+        sample_path=sample_path,
     )
     if reports is None:
         return

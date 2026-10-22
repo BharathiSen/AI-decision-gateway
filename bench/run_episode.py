@@ -867,6 +867,12 @@ def live_oam_cost():
     if failures:
         print("live OAM cost: FAIL " + "; ".join(failures))
         return 1
+    evidence = Path(__file__).resolve().parent.parent / "results" / "live_oam_cost.json"
+    evidence.parent.mkdir(parents=True, exist_ok=True)
+    evidence.write_text(
+        json.dumps({"status": "pass", "cost": cost, "T10": t10}, indent=2),
+        encoding="utf-8",
+    )
     print("live OAM cost: PASS")
     return 0
 

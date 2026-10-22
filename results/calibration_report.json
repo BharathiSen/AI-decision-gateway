@@ -1,7 +1,6 @@
 {
-  "noise_id": "N0",
-  "runs": 0,
-  "false_alarm_rate": null,
-  "status": "pending_mininet",
-  "note": "Healthy-run calibration requires Mininet. Run: sudo python3 bench/calibrate_healthy.py --runs 200 (or scripts/finish_evaluation.py --mode live)."
+  "version": 1,
+  "status": "awaiting_vm_sync",
+  "note": "No calibration_samples.jsonl on this host. Copy from the Mininet VM, then reprint: python bench/calibrate_healthy.py --from-saved --noise all --runs 200 --eval-runs 50 --legacy-samples",
+  "levels": {}
 }

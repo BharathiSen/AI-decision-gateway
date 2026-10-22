@@ -1,15 +1,20 @@
 """Grade OAM results into compact outcomes that can separate faults.
 
 Outcomes are strings the observability matrix and the consistency check
-both use. Thresholds come from config/thresholds.yaml (per traffic level).
+both use. Thresholds come from config/thresholds.yaml (per traffic level),
+or from results/calibration_report.json proposed limits when that file
+exists (see calibration.grading_from_report in thresholds.yaml).
 """
 
+import json
 import re
 from pathlib import Path
 
 import yaml
 
-_CONFIG = Path(__file__).resolve().parent.parent / "config"
+_ROOT = Path(__file__).resolve().parent.parent
+_CONFIG = _ROOT / "config"
+_REPORT = _ROOT / "results" / "calibration_report.json"
 
 HOP_NAMES = {
     "10.0.1.1": "hostA-r1",
@@ -32,9 +37,28 @@ _HEALTHY = {
 }
 
 
+def _thresholds_from_report(noise_id):
+    if not _REPORT.is_file():
+        return None
+    try:
+        doc = json.loads(_REPORT.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    level = (doc.get("levels") or {}).get(noise_id) or {}
+    proposed = level.get("proposed_thresholds")
+    if isinstance(proposed, dict) and proposed:
+        return proposed
+    return None
+
+
 def load_thresholds(noise_id="N0"):
     with (_CONFIG / "thresholds.yaml").open(encoding="utf-8") as f:
         doc = yaml.safe_load(f)
+    calibration = doc.get("calibration") or {}
+    if calibration.get("grading_from_report", True):
+        from_report = _thresholds_from_report(noise_id)
+        if from_report is not None:
+            return from_report
     return doc["by_noise_level"].get(noise_id, doc["by_noise_level"]["N0"])
 
 

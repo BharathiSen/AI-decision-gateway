@@ -47,6 +47,12 @@ HOPS_BACKUP = [
 EPISODE_PING_COUNT = 10
 EPISODE_PING_INTERVAL = 0.2
 EPISODE_SPEED_SECONDS = 3
+EPISODE_BATTERY = {
+    "ping_count": EPISODE_PING_COUNT,
+    "ping_interval": EPISODE_PING_INTERVAL,
+    "speed_seconds": EPISODE_SPEED_SECONDS,
+}
+LEGACY_BATTERY = {"ping_count": 3, "ping_interval": 0.2, "speed_seconds": 1}
 
 def _parse_ping(output):
     loss_match = re.search(r"(\d+)% packet loss", output)
