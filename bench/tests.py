@@ -470,7 +470,7 @@ def _probe_total(probes, field):
         reported = True
         total += value
     if not reported:
-        return None
+        return 0
     return total
 
 
@@ -543,6 +543,10 @@ def run_all(net, test_ids=None, ping_count=None, error_probe=None, ping_interval
         ids = [i for i in ids if i != "T10_speed"] + ["T10_speed"]
     started = datetime.now(timezone.utc).isoformat()
     results = []
+    if "T10_speed" in ids:
+        from bench.mininet_util import ensure_iperf3_server
+
+        ensure_iperf3_server(net)
     for tid in ids:
         kwargs = {}
         if ping_count and tid in ("T1_e2e_ping", "T2_hop_ping", "T9_oneway_loss"):
@@ -611,7 +615,7 @@ def _check_costs():
     assert known["total_duration_seconds"] == 1.7
     missing = summarize_costs([ping, speed])
     assert missing["total_additional_bytes"] is None
-    assert missing["total_additional_packets"] is None
+    assert missing["total_additional_packets"] == 10
     assert missing["tests"][0]["additional_packets"] == 10
     assert missing["tests"][0]["additional_bytes"] == 640
     measured = summarize_costs([ping, {
@@ -620,7 +624,7 @@ def _check_costs():
         "probes": [{"kind": "iperf3", "bytes": 1024 ** 2}],
     }])
     assert measured["total_additional_bytes"] == 640 + 1024 ** 2
-    assert measured["total_additional_packets"] is None
+    assert measured["total_additional_packets"] == 10
     compared = compare_costs([ping, route, speed], [ping])
     assert compared["selected_tests"]["total_duration_seconds"] == 1.5
     assert compared["selected_tests"]["total_duration_seconds"] < compared["full_battery"]["total_duration_seconds"]
