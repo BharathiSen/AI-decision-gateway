@@ -6,6 +6,7 @@ executes the full battery (T10 last).
 """
 
 import re
+import statistics
 import sys
 import time
 from datetime import datetime, timezone
@@ -54,12 +55,24 @@ EPISODE_BATTERY = {
 }
 LEGACY_BATTERY = {"ping_count": 3, "ping_interval": 0.2, "speed_seconds": 1}
 
+_REPLY_RTT = re.compile(r"time[=<]([\d.]+) ms")
+
+
 def _parse_ping(output):
+    """latency_ms is the median reply RTT. One VM scheduler stall moves the
+    average of 10 pings by tens of ms; a delay fault moves every reply.
+    The ping summary average is the fallback when no reply lines parse.
+    """
+    output = output or ""
     loss_match = re.search(r"(\d+)% packet loss", output)
     rtt_match = re.search(r"= [\d.]+/([\d.]+)/", output)
+    rtts = [float(value) for value in _REPLY_RTT.findall(output)]
+    average = float(rtt_match.group(1)) if rtt_match else None
     return {
         "packet_loss_percent": float(loss_match.group(1)) if loss_match else 100.0,
-        "latency_ms": float(rtt_match.group(1)) if rtt_match else None,
+        "latency_ms": statistics.median(rtts) if rtts else average,
+        "latency_avg_ms": average,
+        "rtt_ms": rtts,
         "raw": output,
     }
 
@@ -756,6 +769,21 @@ def _check_costs():
     }])
     assert tcp["total_additional_packets"] == 6
     assert tcp["total_additional_bytes"] == 5 * (_ICMP_HEADER + _PING_DATA_BYTES)
+
+    replies = "".join(
+        f"64 bytes from 10.0.4.2: icmp_seq={i} ttl=61 time={t} ms\n"
+        for i, t in enumerate([20.1, 20.3, 240.0, 20.2, 20.4], 1)
+    )
+    stalled = _parse_ping(
+        replies + "5 packets transmitted, 5 received, 0% packet loss, time 812ms\n"
+        "rtt min/avg/max/mdev = 20.1/64.2/240.0/87.9 ms\n"
+    )
+    assert stalled["latency_ms"] == 20.3 and stalled["latency_avg_ms"] == 64.2, stalled
+    assert len(stalled["rtt_ms"]) == 5
+    summary_only = _parse_ping("1 received, 0% packet loss\nrtt min/avg/max/mdev = 1.0/2.0/3.0/0.1 ms\n")
+    assert summary_only["latency_ms"] == 2.0 and summary_only["rtt_ms"] == []
+    lost = _parse_ping("3 packets transmitted, 0 received, 100% packet loss, time 2030ms\n")
+    assert lost["latency_ms"] is None and lost["packet_loss_percent"] == 100.0
 
 
 if __name__ == "__main__":

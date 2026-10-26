@@ -47,7 +47,7 @@ from bench.tests import (
     LEGACY_BATTERY,
 )
 from bench.outcomes import grade_result, is_degraded, load_thresholds, load_yaml_thresholds
-from bench.tests import accepted_speed
+from bench.tests import _parse_ping, accepted_speed
 
 ROOT = Path(__file__).resolve().parent.parent
 THRESHOLDS_PATH = ROOT / "config" / "thresholds.yaml"
@@ -379,6 +379,11 @@ def build_report(calibration, evaluation, noise_id, existing, full_battery, seed
     alarms = score_false_alarms(evaluation, proposed, noise_id)
     eval_runs = len(evaluation)
     battery_profile = _battery_profile(calibration)
+    average_runs = _average_latency_runs(list(calibration) + list(evaluation))
+    if average_runs:
+        notes = list(notes) + [
+            f"{average_runs} saved run(s) have no per-reply RTTs; their ping latency is the average, not the median"
+        ]
     return {
         "noise_id": noise_id,
         "calibration_runs": len(calibration),
@@ -392,6 +397,7 @@ def build_report(calibration, evaluation, noise_id, existing, full_battery, seed
         "proposed_thresholds": proposed,
         "fit_quantile": fit_quantile,
         "fit_false_alarm_rate": fit_rate,
+        "latency_average_runs": average_runs,
         "threshold_notes": notes,
         "eval_false_alarms": alarms,
         "eval_false_alarm_rate": (alarms / eval_runs) if eval_runs else None,
@@ -772,6 +778,23 @@ def _self_check():
     merged_path.parent.rmdir()
     assert THRESHOLDS_PATH.read_text(encoding="utf-8") == before
 
+    stall = "".join(f"icmp_seq={i} ttl=63 time={t} ms\n" for i, t in enumerate([11.0, 11.2, 240.0], 1))
+    stall += "rtt min/avg/max/mdev = 11.0/87.4/240.0/107.9 ms\n"
+    saved = _median_latency({"results": [
+        {"test_id": "T1_e2e_ping", "latency_ms": 87.4, "packet_loss_percent": 0.0},
+        {"test_id": "T2_hop_ping", "hops_primary": [{"latency_ms": 87.4, "raw": stall}]},
+        {"test_id": "T9_oneway_loss", "hostA_to_hostB": {"latency_ms": 87.4, "raw": stall}},
+    ]})
+    t1, t2, t9 = saved["results"]
+    assert t1["latency_ms"] == 87.4 and t1["latency_basis"] == "average"
+    assert t2["hops_primary"][0]["latency_ms"] == 11.2
+    assert t9["hostA_to_hostB"]["latency_ms"] == 11.2
+    fresh = {"test_id": "T1_e2e_ping", "latency_ms": 11.2, "rtt_ms": [11.0, 11.2, 240.0]}
+    _median_latency({"results": [fresh]})
+    assert "latency_basis" not in fresh
+    assert _average_latency_runs([saved, {"results": [fresh]}]) == 1
+    assert "rtt_ms" in _slim({"results": [dict(fresh, raw="x")]})["results"][0]
+
     print("healthy calibration: PASS")
 
 
@@ -788,6 +811,49 @@ def _slim(bundle):
             }
         results.append(item)
     return {"results": results}
+
+
+def _median_row(row):
+    """Re-derive latency_ms as the median reply RTT for a row saved before
+    that change. A row without raw ping output keeps the ping average."""
+    if not isinstance(row, dict) or "rtt_ms" in row or row.get("latency_ms") is None:
+        return
+    if not row.get("raw"):
+        row["latency_basis"] = "average"
+        return
+    parsed = _parse_ping(row["raw"])
+    for key in ("latency_ms", "latency_avg_ms", "rtt_ms"):
+        row[key] = parsed[key]
+
+
+def _median_latency(bundle):
+    """Saved T2 hops and T9 directions kept raw output. Saved T1 did not."""
+    for result in bundle.get("results") or []:
+        test_id = result.get("test_id")
+        if test_id == "T1_e2e_ping":
+            _median_row(result)
+        elif test_id == "T2_hop_ping":
+            for key in ("hops", "hops_primary", "hops_backup"):
+                for hop in result.get(key) or []:
+                    _median_row(hop)
+        elif test_id == "T9_oneway_loss":
+            for key in ("hostA_to_hostB", "hostB_to_hostA"):
+                _median_row(result.get(key))
+    return bundle
+
+
+def _average_latency_runs(bundles):
+    """Runs where some ping latency is still the average, not the median."""
+    def _marked(result):
+        rows = [result, result.get("hostA_to_hostB"), result.get("hostB_to_hostA")]
+        for key in ("hops", "hops_primary", "hops_backup"):
+            rows += list(result.get(key) or [])
+        return any(isinstance(row, dict) and row.get("latency_basis") == "average" for row in rows)
+
+    return sum(
+        1 for bundle in bundles
+        if any(_marked(result) for result in bundle.get("results") or [])
+    )
 
 
 def _load_samples(path, noise_id):
@@ -812,7 +878,7 @@ def _load_samples(path, noise_id):
     if skipped:
         print(f"  ignored {skipped} unreadable checkpoint line(s) in {path.name}", flush=True)
         path.write_text("".join(json.dumps(item) + "\n" for item in kept), encoding="utf-8")
-    return [item["bundle"] for item in kept if item.get("noise_id") == noise_id]
+    return [_median_latency(item["bundle"]) for item in kept if item.get("noise_id") == noise_id]
 
 
 def _append_sample(path, noise_id, index, bundle, battery=None):

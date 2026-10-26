@@ -151,6 +151,9 @@ def create_network():
     # r1/r4 are where path selection actually happens. Start on primary.
     ctl.set_active_path(net, "primary")
 
+    for link in links.values():
+        ctl.wait_link_up(link)
+
     return {"net": net, "links": links}
 
 

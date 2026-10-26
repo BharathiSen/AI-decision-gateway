@@ -9,6 +9,8 @@ decision controller (once built) all go through here instead of poking
 Mininet objects directly.
 """
 
+import time
+
 # Which next-hop/interface r1 and r4 use to reach the *far* edge LAN,
 # for each of the two paths. This -- not any pre-installed backup route
 # -- is what "reroute traffic" means in this project: replacing these
@@ -116,6 +118,19 @@ def is_link_up(link):
     return _intf_is_up(link.intf1) and _intf_is_up(link.intf2)
 
 
+def wait_link_up(link, timeout=3.0):
+    """Poll until both ends report up. The kernel's linkwatch updates
+    operstate up to about a second after the interface is set up, so a
+    read right after net.start() or link_up() can still say "down".
+    """
+    deadline = time.monotonic() + timeout
+    while not is_link_up(link):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.1)
+    return True
+
+
 def link_down(link):
     link.intf1.node.cmd(f"ip link set dev {link.intf1.name} down")
     link.intf2.node.cmd(f"ip link set dev {link.intf2.name} down")
@@ -124,6 +139,7 @@ def link_down(link):
 def link_up(link):
     link.intf1.node.cmd(f"ip link set dev {link.intf1.name} up")
     link.intf2.node.cmd(f"ip link set dev {link.intf2.name} up")
+    wait_link_up(link)
 
 
 def configure_link(link, bw=None, delay=None, loss=None):
