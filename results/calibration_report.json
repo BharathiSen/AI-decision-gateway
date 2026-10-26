@@ -1,6 +1,572 @@
 {
   "version": 1,
-  "status": "awaiting_vm_sync",
-  "note": "No calibration_samples.jsonl on this host. Copy from the Mininet VM, then reprint: python bench/calibrate_healthy.py --from-saved --noise all --runs 200 --eval-runs 50 --legacy-samples",
-  "levels": {}
+  "levels": {
+    "N0": {
+      "noise_id": "N0",
+      "calibration_runs": 200,
+      "eval_runs": 50,
+      "full_battery": true,
+      "seed": 0,
+      "used_evaluation_faults": false,
+      "battery_profile": {
+        "ping_count": 10,
+        "ping_interval": 0.2,
+        "speed_seconds": 3
+      },
+      "episode_aligned_battery": true,
+      "tests": {
+        "T1_e2e_ping": {
+          "n": 200,
+          "latency_ms": {
+            "n": 200,
+            "min": 41.75,
+            "p005": 41.799749999999996,
+            "p01": 41.899,
+            "p05": 42.1475,
+            "p50": 43.9,
+            "p95": 47.5075,
+            "p99": 48.854,
+            "p995": 49.254749999999994,
+            "max": 50.2
+          },
+          "packet_loss_percent": {
+            "n": 200,
+            "min": 0.0,
+            "p005": 0.0,
+            "p01": 0.0,
+            "p05": 0.0,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "p995": 0.0,
+            "max": 0.0
+          }
+        },
+        "T2_hop_ping": {
+          "n": 200,
+          "latency_ms": {
+            "n": 200,
+            "min": 10.6,
+            "p005": 10.6,
+            "p01": 10.6,
+            "p05": 10.649999999999999,
+            "p50": 11.8,
+            "p95": 12.602500000000003,
+            "p99": 13.105999999999995,
+            "p995": 13.72049999999998,
+            "max": 17.8
+          },
+          "packet_loss_percent": {
+            "n": 200,
+            "min": 0.0,
+            "p005": 0.0,
+            "p01": 0.0,
+            "p05": 0.0,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "p995": 0.0,
+            "max": 0.0
+          }
+        },
+        "T4_mtu": {
+          "n": 200,
+          "df_ping_ok": {
+            "True": 200
+          }
+        },
+        "T5_if_errors": {
+          "n": 200,
+          "errors": {
+            "n": 200,
+            "min": 0,
+            "p005": 0.0,
+            "p01": 0.0,
+            "p05": 0.0,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "p995": 0.0,
+            "max": 0
+          }
+        },
+        "T6_queue_stats": {
+          "n": 200,
+          "drops": {
+            "n": 200,
+            "min": 0,
+            "p005": 0.0,
+            "p01": 0.0,
+            "p05": 0.0,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "p995": 0.0,
+            "max": 0
+          }
+        },
+        "T7_route_check": {
+          "n": 200,
+          "active_path": {
+            "primary": 200
+          }
+        },
+        "T8_tcp_vs_ping": {
+          "n": 200,
+          "ping_ok": {
+            "True": 200
+          },
+          "tcp_ok": {
+            "True": 200
+          }
+        },
+        "T9_oneway_loss": {
+          "n": 200,
+          "a2b_loss": {
+            "n": 200,
+            "min": 0.0,
+            "p005": 0.0,
+            "p01": 0.0,
+            "p05": 0.0,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "p995": 0.0,
+            "max": 0.0
+          },
+          "b2a_loss": {
+            "n": 200,
+            "min": 0.0,
+            "p005": 0.0,
+            "p01": 0.0,
+            "p05": 0.0,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "p995": 0.0,
+            "max": 0.0
+          }
+        },
+        "T10_speed": {
+          "n": 200,
+          "mbit_per_sec": {
+            "n": 200,
+            "min": 7.0,
+            "p005": 7.06965,
+            "p01": 7.8521,
+            "p05": 8.9895,
+            "p50": 9.01,
+            "p95": 9.07,
+            "p99": 9.08,
+            "p995": 9.08,
+            "max": 9.08
+          }
+        }
+      },
+      "proposed_thresholds": {
+        "T1_e2e_ping": {
+          "max_loss_percent": 5.0,
+          "max_latency_ms": 160.0
+        },
+        "T2_hop_ping": {
+          "max_loss_percent": 10.0,
+          "max_latency_ms": 80.0
+        },
+        "T8_tcp_vs_ping": {
+          "tcp_must_succeed": true
+        },
+        "T10_speed": {
+          "min_mbit": 8.09055
+        }
+      },
+      "fit_quantile": "p95",
+      "fit_false_alarm_rate": 0.015,
+      "latency_average_runs": 0,
+      "failed_read_runs": 0,
+      "threshold_notes": [],
+      "eval_false_alarms": 0,
+      "eval_false_alarm_rate": 0.0,
+      "eval_alarm_tests": {},
+      "eval_alarm_runs": [],
+      "false_alarm_rate_target": 0.05
+    },
+    "N1": {
+      "noise_id": "N1",
+      "calibration_runs": 200,
+      "eval_runs": 50,
+      "full_battery": true,
+      "seed": 0,
+      "used_evaluation_faults": false,
+      "battery_profile": {
+        "ping_count": 10,
+        "ping_interval": 0.2,
+        "speed_seconds": 3
+      },
+      "episode_aligned_battery": true,
+      "tests": {
+        "T1_e2e_ping": {
+          "n": 200,
+          "latency_ms": {
+            "n": 200,
+            "min": 44.0,
+            "p005": 44.09949999999999,
+            "p01": 44.1,
+            "p05": 44.495,
+            "p50": 45.45,
+            "p95": 48.605,
+            "p99": 51.00699999999999,
+            "p995": 51.70125,
+            "max": 51.95
+          },
+          "packet_loss_percent": {
+            "n": 200,
+            "min": 0.0,
+            "p005": 0.0,
+            "p01": 0.0,
+            "p05": 0.0,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "p995": 0.0,
+            "max": 0.0
+          }
+        },
+        "T2_hop_ping": {
+          "n": 200,
+          "latency_ms": {
+            "n": 200,
+            "min": 11.25,
+            "p005": 11.25,
+            "p01": 11.2995,
+            "p05": 11.45,
+            "p50": 11.8,
+            "p95": 12.75,
+            "p99": 13.200499999999998,
+            "p995": 13.251,
+            "max": 13.45
+          },
+          "packet_loss_percent": {
+            "n": 200,
+            "min": 0.0,
+            "p005": 0.0,
+            "p01": 0.0,
+            "p05": 0.0,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "p995": 0.0,
+            "max": 0.0
+          }
+        },
+        "T4_mtu": {
+          "n": 200,
+          "df_ping_ok": {
+            "True": 200
+          }
+        },
+        "T5_if_errors": {
+          "n": 200,
+          "errors": {
+            "n": 200,
+            "min": 0,
+            "p005": 0.0,
+            "p01": 0.0,
+            "p05": 0.0,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "p995": 0.0,
+            "max": 0
+          }
+        },
+        "T6_queue_stats": {
+          "n": 200,
+          "drops": {
+            "n": 200,
+            "min": 0,
+            "p005": 0.0,
+            "p01": 0.0,
+            "p05": 0.0,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "p995": 0.0,
+            "max": 0
+          }
+        },
+        "T7_route_check": {
+          "n": 200,
+          "active_path": {
+            "primary": 200
+          }
+        },
+        "T8_tcp_vs_ping": {
+          "n": 200,
+          "ping_ok": {
+            "True": 200
+          },
+          "tcp_ok": {
+            "True": 200
+          }
+        },
+        "T9_oneway_loss": {
+          "n": 200,
+          "a2b_loss": {
+            "n": 200,
+            "min": 0.0,
+            "p005": 0.0,
+            "p01": 0.0,
+            "p05": 0.0,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "p995": 0.0,
+            "max": 0.0
+          },
+          "b2a_loss": {
+            "n": 200,
+            "min": 0.0,
+            "p005": 0.0,
+            "p01": 0.0,
+            "p05": 0.0,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "p995": 0.0,
+            "max": 0.0
+          }
+        },
+        "T10_speed": {
+          "n": 200,
+          "mbit_per_sec": {
+            "n": 200,
+            "min": 7.02,
+            "p005": 7.308549999999999,
+            "p01": 7.31,
+            "p05": 7.32,
+            "p50": 7.33,
+            "p95": 9.07,
+            "p99": 9.0701,
+            "p995": 9.08025,
+            "max": 9.13
+          }
+        }
+      },
+      "proposed_thresholds": {
+        "T1_e2e_ping": {
+          "max_loss_percent": 10.0,
+          "max_latency_ms": 120.0
+        },
+        "T2_hop_ping": {
+          "max_loss_percent": 15.0,
+          "max_latency_ms": 150.0
+        },
+        "T8_tcp_vs_ping": {
+          "tcp_must_succeed": true
+        },
+        "T10_speed": {
+          "min_mbit": 6.588
+        }
+      },
+      "fit_quantile": "p95",
+      "fit_false_alarm_rate": 0.0,
+      "latency_average_runs": 0,
+      "failed_read_runs": 0,
+      "threshold_notes": [],
+      "eval_false_alarms": 0,
+      "eval_false_alarm_rate": 0.0,
+      "eval_alarm_tests": {},
+      "eval_alarm_runs": [],
+      "false_alarm_rate_target": 0.05
+    },
+    "N2": {
+      "noise_id": "N2",
+      "calibration_runs": 200,
+      "eval_runs": 50,
+      "full_battery": true,
+      "seed": 0,
+      "used_evaluation_faults": false,
+      "battery_profile": {
+        "ping_count": 10,
+        "ping_interval": 0.2,
+        "speed_seconds": 3
+      },
+      "episode_aligned_battery": true,
+      "tests": {
+        "T1_e2e_ping": {
+          "n": 200,
+          "latency_ms": {
+            "n": 200,
+            "min": 43.35,
+            "p005": 43.59875,
+            "p01": 43.6495,
+            "p05": 43.900000000000006,
+            "p50": 45.0,
+            "p95": 49.0625,
+            "p99": 51.86999999999989,
+            "p995": 64.25374999999954,
+            "max": 164.5
+          },
+          "packet_loss_percent": {
+            "n": 200,
+            "min": 0.0,
+            "p005": 0.0,
+            "p01": 0.0,
+            "p05": 0.0,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "p995": 0.0,
+            "max": 0.0
+          }
+        },
+        "T2_hop_ping": {
+          "n": 200,
+          "latency_ms": {
+            "n": 200,
+            "min": 11.1,
+            "p005": 11.1,
+            "p01": 11.100000000000001,
+            "p05": 11.2,
+            "p50": 11.5,
+            "p95": 12.802500000000002,
+            "p99": 13.149999999999999,
+            "p995": 13.329749999999837,
+            "max": 49.1
+          },
+          "packet_loss_percent": {
+            "n": 200,
+            "min": 0.0,
+            "p005": 0.0,
+            "p01": 0.0,
+            "p05": 0.0,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "p995": 0.0,
+            "max": 0.0
+          }
+        },
+        "T4_mtu": {
+          "n": 200,
+          "df_ping_ok": {
+            "True": 200
+          }
+        },
+        "T5_if_errors": {
+          "n": 200,
+          "errors": {
+            "n": 200,
+            "min": 0,
+            "p005": 0.0,
+            "p01": 0.0,
+            "p05": 0.0,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "p995": 0.0,
+            "max": 0
+          }
+        },
+        "T6_queue_stats": {
+          "n": 200,
+          "drops": {
+            "n": 200,
+            "min": 0,
+            "p005": 0.0,
+            "p01": 0.0,
+            "p05": 0.0,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "p995": 0.0,
+            "max": 0
+          }
+        },
+        "T7_route_check": {
+          "n": 200,
+          "active_path": {
+            "primary": 200
+          }
+        },
+        "T8_tcp_vs_ping": {
+          "n": 200,
+          "ping_ok": {
+            "True": 200
+          },
+          "tcp_ok": {
+            "True": 200
+          }
+        },
+        "T9_oneway_loss": {
+          "n": 200,
+          "a2b_loss": {
+            "n": 200,
+            "min": 0.0,
+            "p005": 0.0,
+            "p01": 0.0,
+            "p05": 0.0,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "p995": 0.0,
+            "max": 0.0
+          },
+          "b2a_loss": {
+            "n": 200,
+            "min": 0.0,
+            "p005": 0.0,
+            "p01": 0.0,
+            "p05": 0.0,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "p995": 0.0,
+            "max": 0.0
+          }
+        },
+        "T10_speed": {
+          "n": 200,
+          "mbit_per_sec": {
+            "n": 200,
+            "min": 1.64,
+            "p005": 3.8588500000000003,
+            "p01": 4.167,
+            "p05": 4.65,
+            "p50": 4.96,
+            "p95": 9.07,
+            "p99": 9.07,
+            "p995": 9.07005,
+            "max": 9.08
+          }
+        }
+      },
+      "proposed_thresholds": {
+        "T1_e2e_ping": {
+          "max_loss_percent": 20.0,
+          "max_latency_ms": 200.0
+        },
+        "T2_hop_ping": {
+          "max_loss_percent": 25.0,
+          "max_latency_ms": 250.0
+        },
+        "T8_tcp_vs_ping": {
+          "tcp_must_succeed": false
+        },
+        "T10_speed": {
+          "min_mbit": 4.1850000000000005
+        }
+      },
+      "fit_quantile": "p95",
+      "fit_false_alarm_rate": 0.015,
+      "latency_average_runs": 0,
+      "failed_read_runs": 0,
+      "threshold_notes": [],
+      "eval_false_alarms": 0,
+      "eval_false_alarm_rate": 0.0,
+      "eval_alarm_tests": {},
+      "eval_alarm_runs": [],
+      "false_alarm_rate_target": 0.05
+    }
+  }
 }
