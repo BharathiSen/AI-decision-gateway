@@ -46,7 +46,7 @@ from bench.tests import (
     EPISODE_SPEED_SECONDS,
     LEGACY_BATTERY,
 )
-from bench.outcomes import grade_result, is_degraded, load_thresholds
+from bench.outcomes import grade_result, is_degraded, load_thresholds, load_yaml_thresholds
 from bench.tests import accepted_speed
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -976,7 +976,7 @@ def calibrate(
                 collected[:runs],
                 collected[runs:],
                 noise_id,
-                load_thresholds(noise_id),
+                load_yaml_thresholds(noise_id),
                 full_battery,
                 seed,
             )
@@ -1004,6 +1004,22 @@ def _bundles_for(path, noise_id, minimum=0):
         if isinstance(index, int):
             chosen[index] = item["bundle"]
     return [chosen[index] for index in sorted(chosen)]
+
+
+def _missing_t10_in_checkpoint(sample_path, noise_id, total):
+    bundles = _bundles_for(sample_path, noise_id, total)
+    if len(bundles) < total:
+        return 0
+    return sum(1 for bundle in bundles if _t10_mbit(bundle) is None)
+
+
+def _needs_speed_fill(noise_ids, runs, eval_runs, sample_path):
+    """Saved runs are complete but some T10 bitrates are still missing."""
+    total = runs + eval_runs
+    for noise_id in noise_ids:
+        if _missing_t10_in_checkpoint(sample_path, noise_id, total) > 0:
+            return True
+    return False
 
 
 def _reprint_only(noise_ids, runs, eval_runs, sample_path=SAMPLES_PATH, from_saved=False):
@@ -1037,7 +1053,7 @@ def report_from_saved(noise_ids, runs, eval_runs, seed=0, sample_path=SAMPLES_PA
             bundles[:runs],
             bundles[runs:],
             noise_id,
-            load_thresholds(noise_id),
+            load_yaml_thresholds(noise_id),
             True,
             seed,
         )
@@ -1107,7 +1123,23 @@ def main():
             file=sys.stderr,
         )
         sys.exit(2)
-    if _reprint_only(noise_ids, args.runs, args.eval_runs, sample_path=sample_path, from_saved=args.from_saved):
+    if args.fill_speed and not args.from_saved:
+        missing = {
+            noise_id: _missing_t10_in_checkpoint(sample_path, noise_id, args.runs + args.eval_runs)
+            for noise_id in noise_ids
+        }
+        if any(missing.values()):
+            print(
+                "Checkpoint has missing T10 bitrates; starting Mininet speed fill "
+                f"(up to {SPEED_FILL_CAP} per launch): {missing}",
+                flush=True,
+            )
+        else:
+            print("No missing T10 bitrates in the checkpoint. Reprinting.", flush=True)
+            args.from_saved = True
+    if _reprint_only(
+        noise_ids, args.runs, args.eval_runs, sample_path=sample_path, from_saved=args.from_saved,
+    ) and not (args.fill_speed and not args.from_saved):
         if args.write_thresholds:
             print("Refusing --write-thresholds on a reprint. Paste the report first.", file=sys.stderr)
             sys.exit(2)

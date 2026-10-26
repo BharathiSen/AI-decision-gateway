@@ -51,6 +51,13 @@ def _thresholds_from_report(noise_id):
     return None
 
 
+def load_yaml_thresholds(noise_id="N0"):
+    """Placeholder limits from config/thresholds.yaml (calibration fit floors only)."""
+    with (_CONFIG / "thresholds.yaml").open(encoding="utf-8") as f:
+        doc = yaml.safe_load(f)
+    return doc["by_noise_level"].get(noise_id, doc["by_noise_level"]["N0"])
+
+
 def load_thresholds(noise_id="N0"):
     with (_CONFIG / "thresholds.yaml").open(encoding="utf-8") as f:
         doc = yaml.safe_load(f)
@@ -59,7 +66,7 @@ def load_thresholds(noise_id="N0"):
         from_report = _thresholds_from_report(noise_id)
         if from_report is not None:
             return from_report
-    return doc["by_noise_level"].get(noise_id, doc["by_noise_level"]["N0"])
+    return load_yaml_thresholds(noise_id)
 
 
 def parse_qdisc_stats(text):
