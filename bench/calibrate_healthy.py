@@ -274,9 +274,21 @@ def fit_thresholds(calibration, existing, noise_id, target):
     return tests, upper, proposed, notes, rate
 
 
+def _failed_read(row):
+    """Saved ping output with no summary line: the read failed, ping did not report loss."""
+    return isinstance(row, dict) and isinstance(row.get("raw"), str) and "packet loss" not in row["raw"]
+
+
 def _no_reading(result):
     """A probe that did not return a usable number is not a false alarm."""
     test_id = result.get("test_id")
+    if test_id == "T2_hop_ping":
+        hops = list(result.get("hops_primary") or []) + list(result.get("hops_backup") or [])
+        if any(_failed_read(hop) for hop in hops):
+            return True
+    if test_id == "T9_oneway_loss":
+        if any(_failed_read(result.get(key)) for key in ("hostA_to_hostB", "hostB_to_hostA")):
+            return True
     if test_id == "T10_speed":
         return accepted_speed(result) is None
     if test_id == "T1_e2e_ping":
@@ -353,11 +365,14 @@ def _alarm_values(result):
     """The numbers behind one alarm, so a stall, a lost reply and a real fault can be told apart."""
     def _ping(row):
         row = row or {}
-        return {
+        values = {
             key: row.get(key)
             for key in ("latency_ms", "latency_avg_ms", "packet_loss_percent", "rtt_ms", "latency_basis")
             if row.get(key) is not None
         }
+        if not row.get("rtt_ms") and isinstance(row.get("raw"), str):
+            values["raw"] = row["raw"][:300]
+        return values
 
     test_id = result.get("test_id")
     if test_id == "T1_e2e_ping":
@@ -448,6 +463,13 @@ def build_report(calibration, evaluation, noise_id, existing, full_battery, seed
         "fit_quantile": fit_quantile,
         "fit_false_alarm_rate": fit_rate,
         "latency_average_runs": average_runs,
+        "failed_read_runs": sum(
+            1 for bundle in list(calibration) + list(evaluation)
+            if any(
+                result.get("test_id") in ("T2_hop_ping", "T9_oneway_loss") and _no_reading(result)
+                for result in bundle.get("results") or []
+            )
+        ),
         "threshold_notes": notes,
         "eval_false_alarms": alarms,
         "eval_false_alarm_rate": (alarms / eval_runs) if eval_runs else None,
@@ -862,6 +884,23 @@ def _self_check():
     flagged = _alarm_runs([lossy], {"T2_hop_ping": {"max_loss_percent": 10.0, "max_latency_ms": 80.0}}, first_index=200)
     assert flagged[0]["run"] == 200 and flagged[0]["alarm"].endswith("=loss"), flagged
     assert flagged[0]["values"]["primary:10.0.12.2"]["packet_loss_percent"] == 30.0
+    empty_read = {"results": [{"test_id": "T2_hop_ping", "hops_primary": [
+        {"dst_ip": "10.0.1.1", "latency_ms": None, "packet_loss_percent": 100.0, "raw": ""},
+        {"dst_ip": "10.0.12.2", "latency_ms": 11.0, "packet_loss_percent": 0.0, "raw": stall},
+    ]}]}
+    real_loss = {"results": [{"test_id": "T2_hop_ping", "hops_primary": [
+        {"dst_ip": "10.0.1.1", "latency_ms": None, "packet_loss_percent": 100.0,
+         "raw": "10 packets transmitted, 0 received, 100% packet loss, time 9000ms\n"},
+        {"dst_ip": "10.0.12.2", "latency_ms": 11.0, "packet_loss_percent": 0.0, "raw": stall},
+    ]}]}
+    summary = stall + "3 packets transmitted, 3 received, 0% packet loss, time 400ms\n"
+    for bundle in (empty_read, real_loss):
+        bundle["results"][0]["hops_primary"][1]["raw"] = summary
+    limits = {"T2_hop_ping": {"max_loss_percent": 10.0, "max_latency_ms": 80.0}}
+    assert score_false_alarms([empty_read], limits) == 0
+    assert score_false_alarms([real_loss], limits) == 1
+    assert _alarm_runs([real_loss], limits)[0]["values"]["primary:10.0.1.1"]["raw"].startswith("10 packets")
+    assert build_report([empty_read], [real_loss], "N0", {}, True, 0)["failed_read_runs"] == 1
 
     print("healthy calibration: PASS")
 

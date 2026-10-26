@@ -45,29 +45,40 @@ def recover_shell(node):
         pass
 
 
-def run_in_node(node, command):
+RUN_DIR = Path("/tmp")
+
+
+def run_in_node(node, command, timeout=60.0):
     """Run a command and return its output from a file, not the Mininet PTY.
 
-    node.cmd() sometimes returns leftover output from the previous command
-    (a ping still in the shell buffer). The command's own stdout is written
-    to /tmp and read from the host, which shares that directory with the node.
+    node.cmd() can return on the previous command's prompt while this one
+    is still running, so the output file is read empty. Completion is the
+    marker file the shell writes after the command exits, not the prompt.
+    The host shares /tmp with the node.
     """
-    path = Path(f"/tmp/adg-{node.name}-{uuid.uuid4().hex}.out")
-    try:
-        path.unlink(missing_ok=True)
-    except OSError:
-        pass
+    stem = (RUN_DIR / f"adg-{node.name}-{uuid.uuid4().hex}").as_posix()
+    path = Path(f"{stem}.out")
+    done = Path(f"{stem}.done")
     recover_shell(node)
-    quoted = shlex.quote(command)
+    line = f"bash -c {shlex.quote(command)} > {path} 2>&1; echo $? > {done}"
     try:
-        node.cmd(f"bash -c {quoted} > {path} 2>&1")
+        node.cmd(line)
     except UnicodeDecodeError:
         recover_shell(node)
-        node.cmd(f"bash -c {quoted} > {path} 2>&1")
+        node.cmd(line)
+    deadline = time.monotonic() + timeout
+    while not done.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
     try:
         return path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
+    finally:
+        for leftover in (path, done):
+            try:
+                leftover.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def stop_iperf_clients(net, host="hostA"):

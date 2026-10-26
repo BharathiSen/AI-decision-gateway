@@ -785,6 +785,34 @@ def _check_costs():
     lost = _parse_ping("3 packets transmitted, 0 received, 100% packet loss, time 2030ms\n")
     assert lost["latency_ms"] is None and lost["packet_loss_percent"] == 100.0
 
+    import tempfile
+    import threading
+
+    class _EarlyNode:
+        """cmd() returns at once; the command finishes 0.3 s later."""
+        name = "hostA"
+        stdout = None
+
+        def cmd(self, line):
+            out, done = re.search(r"> (\S+\.out) 2>&1; echo \$\? > (\S+\.done)", line).groups()
+
+            def _finish():
+                time.sleep(0.3)
+                Path(out).write_text("5 packets transmitted, 5 received, 0% packet loss\n", encoding="utf-8")
+                Path(done).write_text("0\n", encoding="utf-8")
+
+            threading.Thread(target=_finish, daemon=True).start()
+            return ""
+
+    saved_dir = mu.RUN_DIR
+    mu.RUN_DIR = Path(tempfile.gettempdir())
+    try:
+        late = mu.run_in_node(_EarlyNode(), "ping -c 5 10.0.1.1", timeout=5)
+        assert "0% packet loss" in late, late
+        assert not list(mu.RUN_DIR.glob("adg-hostA-*")), "run_in_node left files behind"
+    finally:
+        mu.RUN_DIR = saved_dir
+
 
 if __name__ == "__main__":
     _check_costs()
