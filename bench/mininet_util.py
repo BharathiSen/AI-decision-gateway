@@ -207,6 +207,27 @@ def start_one_off_iperf3(net, host="hostB", port=5201):
     return proc
 
 
+def wait_for_listener(net, port, host="hostB", timeout=3.0):
+    """True once something listens on this TCP port inside the node."""
+    node = net.get(host)
+    deadline = time.monotonic() + timeout
+    while True:
+        if run_in_node(node, f"ss -ltnH 'sport = :{int(port)}'").strip():
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.1)
+
+
+def one_off_log_tail(port, lines=8):
+    """Last lines of the one-off server's log, for a transfer that failed."""
+    try:
+        text = Path(f"/tmp/iperf3-oneoff-{int(port)}.log").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    return "\n".join(text.strip().splitlines()[-lines:])
+
+
 def finish_one_off(proc):
     if proc is not None and proc.poll() is None:
         proc.kill()

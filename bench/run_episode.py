@@ -441,35 +441,20 @@ def run_episode(
 
 
 def aggregate_episode_costs(directory=None):
-    """Sum oam_cost, agent_cost and gate_cost across saved episode JSON files."""
+    """Sum oam_cost, agent_cost and gate_cost across saved episode JSON files.
+
+    Each block is summed over the episodes that recorded it (`episodes`).
+    Each field is summed over the episodes where it was measured, and
+    `<field>_known` says how many that was. An unmeasured value is not
+    counted as zero.
+    """
     directory = Path(directory or EPISODE_DIR)
     if not directory.is_dir():
         return {"episodes": 0, "oam": None, "agent": None, "gate": None}
 
-    def _sum_block(totals, flags, block):
-        if not isinstance(block, dict):
-            for key in totals:
-                flags[key] = False
-            return
-        for key in totals:
-            value = block.get(key)
-            if value is None or isinstance(value, bool) or not isinstance(value, (int, float)):
-                flags[key] = False
-            elif flags[key]:
-                totals[key] += float(value)
-
-    oam = {"total_duration_seconds": 0.0, "total_additional_packets": 0, "total_additional_bytes": 0}
-    oam_ok = {key: True for key in oam}
-    agent = {"latency_seconds": 0.0, "model_latency_seconds": 0.0, "prompt_tokens": 0, "completion_tokens": 0}
-    agent_ok = {key: True for key in agent}
-    gate = {"latency_seconds": 0.0}
-    gate_ok = {"latency_seconds": True}
-    full = {"total_duration_seconds": 0.0, "total_additional_packets": 0, "total_additional_bytes": 0}
-    full_ok = {key: True for key in full}
-    selected = dict(full)
-    selected_ok = {key: True for key in selected}
+    battery_fields = ("total_duration_seconds", "total_additional_packets", "total_additional_bytes")
+    blocks = {"oam": [], "agent": [], "gate": [], "full_battery": [], "selected_tests": []}
     episodes = 0
-    gated = 0
     for path in sorted(directory.glob("*.json")):
         try:
             record = json.loads(path.read_text(encoding="utf-8"))
@@ -478,28 +463,41 @@ def aggregate_episode_costs(directory=None):
         if not isinstance(record, dict) or "episode_id" not in record:
             continue
         episodes += 1
-        _sum_block(oam, oam_ok, record.get("oam_cost"))
-        _sum_block(agent, agent_ok, record.get("agent_cost"))
-        _sum_block(gate, gate_ok, record.get("gate_cost"))
+        for name, block in (
+            ("oam", record.get("oam_cost")),
+            ("agent", record.get("agent_cost")),
+            ("gate", record.get("gate_cost")),
+        ):
+            if isinstance(block, dict):
+                blocks[name].append(block)
         selection = (record.get("gate_decision") or {}).get("cost")
         if isinstance(selection, dict):
-            gated += 1
-            _sum_block(full, full_ok, selection.get("full_battery"))
-            _sum_block(selected, selected_ok, selection.get("selected_tests"))
+            for name in ("full_battery", "selected_tests"):
+                if isinstance(selection.get(name), dict):
+                    blocks[name].append(selection[name])
 
-    for totals, flags in ((oam, oam_ok), (agent, agent_ok), (gate, gate_ok), (full, full_ok), (selected, selected_ok)):
-        for key, ok in flags.items():
-            if not ok:
-                totals[key] = None
+    def rollup(found, fields):
+        if not found:
+            return None
+        out = {"episodes": len(found)}
+        for field in fields:
+            values = [
+                block.get(field)
+                for block in found
+                if isinstance(block.get(field), (int, float)) and not isinstance(block.get(field), bool)
+            ]
+            out[field] = sum(values) if values else None
+            out[f"{field}_known"] = len(values)
+        return out
+
     return {
         "episodes": episodes,
-        "oam": oam if episodes else None,
-        "agent": agent if episodes else None,
-        "gate": gate if episodes else None,
+        "oam": rollup(blocks["oam"], battery_fields),
+        "agent": rollup(blocks["agent"], ("latency_seconds", "model_latency_seconds", "prompt_tokens", "completion_tokens")),
+        "gate": rollup(blocks["gate"], ("latency_seconds",)),
         "gate_test_selection": {
-            "episodes": gated,
-            "full_battery": full if gated else None,
-            "selected_tests": selected if gated else None,
+            "full_battery": rollup(blocks["full_battery"], battery_fields),
+            "selected_tests": rollup(blocks["selected_tests"], battery_fields),
         },
     }
 
@@ -1019,11 +1017,22 @@ def _self_check():
     save_episode(connected, rollup_dir)
     save_episode(dict(connected, episode_id="second"), rollup_dir)
     (rollup_dir / "_batch_state.json").write_text(json.dumps({"completed": 2}), encoding="utf-8")
+    batch_only = {
+        "episode_id": "batch",
+        "oam_cost": {"total_duration_seconds": 20.0, "total_additional_packets": 300, "total_additional_bytes": None},
+    }
+    save_episode(batch_only, rollup_dir)
     rolled = aggregate_episode_costs(rollup_dir)
-    assert rolled["episodes"] == 2, rolled
-    assert rolled["oam"]["total_duration_seconds"] is None
+    assert rolled["episodes"] == 3, rolled
+    assert rolled["oam"]["episodes"] == 3
+    assert rolled["oam"]["total_duration_seconds"] == 20.0
+    assert rolled["oam"]["total_duration_seconds_known"] == 1
+    assert rolled["oam"]["total_additional_bytes"] is None
+    assert rolled["agent"]["episodes"] == 2 and rolled["agent"]["latency_seconds_known"] == 2
+    assert rolled["agent"]["prompt_tokens"] is None
+    assert rolled["gate"]["episodes"] == 2 and rolled["gate"]["latency_seconds"] is not None
     selection = rolled["gate_test_selection"]
-    assert selection["episodes"] == 2
+    assert selection["full_battery"]["episodes"] == 2
     assert selection["full_battery"]["total_additional_packets"] is None
     assert selection["selected_tests"]["total_duration_seconds"] == 0.0
     assert selection["selected_tests"]["total_additional_bytes"] == 0
@@ -1087,6 +1096,12 @@ def live_oam_cost():
         failures.append("total_additional_bytes unset")
     if failures:
         print("live OAM cost: FAIL " + "; ".join(failures))
+        print(f"  T10 mbit={t10.get('mbit_per_sec')} duration={t10.get('duration_seconds')} "
+              f"server_listening={t10.get('server_listening')}")
+        tail = [line for line in (t10.get("raw") or "").strip().splitlines() if line.strip()][-6:]
+        print("  T10 client output:" + ("\n    " + "\n    ".join(tail) if tail else " (empty)"))
+        if t10.get("server_log"):
+            print("  T10 server log:\n    " + t10["server_log"].replace("\n", "\n    "))
         return 1
     evidence = Path(__file__).resolve().parent.parent / "results" / "live_oam_cost.json"
     evidence.parent.mkdir(parents=True, exist_ok=True)

@@ -57,7 +57,8 @@ def main():
             link = links[link_name]
             up = ctl.is_link_up(link)
             got = {ip for ip in (link.intf1.IP(), link.intf2.IP()) if ip}
-            _check(failures, f"link {link_name} up", up, f"operstate not up")
+            states = f"{link.intf1.name}={ctl.intf_operstate(link.intf1)!r} {link.intf2.name}={ctl.intf_operstate(link.intf2)!r}"
+            _check(failures, f"link {link_name} up", up, f"operstate not up: {states}")
             _check(
                 failures,
                 f"link {link_name} addresses",

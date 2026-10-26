@@ -93,8 +93,22 @@ def _intf_is_up(intf):
     a real restore. /sys/class/net/<intf>/operstate has no such
     dependency: it's the kernel's own state, always present.
     """
-    operstate = intf.node.cmd(f"cat /sys/class/net/{intf.name}/operstate").strip()
-    return operstate == "up"
+    return intf_operstate(intf) == "up"
+
+
+def intf_operstate(intf):
+    """sysfs operstate, read in its own process when the node supports it.
+
+    node.cmd() shares the node's interactive shell and can hand back
+    output left over from an earlier command.
+    """
+    path = f"/sys/class/net/{intf.name}/operstate"
+    if hasattr(intf.node, "pexec"):
+        out, _err, _code = intf.node.pexec(["cat", path])
+    else:
+        out = intf.node.cmd(f"cat {path}")
+    lines = (out or "").strip().splitlines()
+    return lines[-1].strip() if lines else ""
 
 
 def is_link_up(link):

@@ -410,9 +410,15 @@ def measure_speed_once(net, port=5201):
     port_arg = "" if int(port) == 5201 else f"-p {int(port)} "
     out = run_in_node(
         net.get("hostA"),
-        f"timeout 8 iperf3 -c {dest} {port_arg}-t 1 --connect-timeout 2000",
+        f"{_IPERF_TIMEOUT} 8 iperf3 -c {dest} {port_arg}-t 1 --connect-timeout 2000",
     )
     return _parse_mbit(out), out
+
+
+# SIGINT, not the default SIGTERM: iperf3 writes to a file block-buffered,
+# and only an interrupt makes a hung client flush what it printed. -k
+# kills a client that ignores the interrupt.
+_IPERF_TIMEOUT = "timeout -s INT -k 3"
 
 
 def T10_speed(net, duration=3, interval=None):
@@ -424,7 +430,7 @@ def T10_speed(net, duration=3, interval=None):
     else:
         out = run_in_node(
             net.get("hostA"),
-            f"timeout 20 iperf3 -c {hostB} -t {duration} --connect-timeout 2000",
+            f"{_IPERF_TIMEOUT} 20 iperf3 -c {hostB} -t {duration} --connect-timeout 2000",
         )
         mbit = _summary_mbit(out, duration)
         intervals = []
@@ -581,12 +587,16 @@ def run_all(net, test_ids=None, ping_count=None, error_probe=None, ping_interval
                 # The long-lived 5201 server stops answering after a few
                 # clients (and after T8's bare connect). T10 gets its own.
                 server = mu.start_one_off_iperf3(net, port=5201)
-                time.sleep(0.2)
+                listening = mu.wait_for_listener(net, 5201)
                 try:
                     row = run_test(net, tid, **kwargs)
                 finally:
                     mu.finish_one_off(server)
                     mu.free_tcp_port(net, 5201)
+                if isinstance(row, dict):
+                    row["server_listening"] = listening
+                    if row.get("mbit_per_sec") is None:
+                        row["server_log"] = mu.one_off_log_tail(5201)
             else:
                 row = run_test(net, tid, **kwargs)
             if isinstance(row, dict) and "error" not in row:
@@ -704,6 +714,8 @@ def _check_costs():
         "start_one_off_iperf3": lambda net, *a, **k: calls.append("one_off") or "server",
         "finish_one_off": lambda proc: calls.append(f"finish:{proc}"),
         "free_tcp_port": lambda net, port, *a, **k: calls.append(f"free:{port}"),
+        "wait_for_listener": lambda net, port, *a, **k: calls.append(f"listen:{port}") or True,
+        "one_off_log_tail": lambda port: "",
     }
     saved_mu = {name: getattr(mu, name) for name in patched}
     saved_tests = {tid: TEST_FUNCS[tid] for tid in ("T7_route_check", "T8_tcp_vs_ping", "T10_speed")}
@@ -725,8 +737,13 @@ def _check_costs():
         assert calls == ["ensure", "T8"], calls
         calls.clear()
         crashed = run_all(object(), test_ids=["T10_speed", "T8_tcp_vs_ping"])
-        assert calls == ["ensure", "T8", "one_off", "T10", "finish:server", "free:5201"], calls
+        assert calls == ["ensure", "T8", "one_off", "listen:5201", "T10", "finish:server", "free:5201"], calls
         assert crashed["results"][-1]["error"] == "RuntimeError: iperf3 died"
+        calls.clear()
+        TEST_FUNCS["T10_speed"] = lambda _net, **_k: {"test_id": "T10_speed", "mbit_per_sec": None}
+        silent = run_all(object(), test_ids=["T10_speed"])["results"][0]
+        assert silent["server_listening"] is True and silent["server_log"] == ""
+        assert silent["error"] is None
     finally:
         for name, fn in saved_mu.items():
             setattr(mu, name, fn)

@@ -76,14 +76,25 @@ def _percentile(values, p):
 def _numeric(values):
     present = [value for value in values if value is not None]
     if not present:
-        return {"n": 0, "p05": None, "p50": None, "p95": None, "max": None}
+        return {key: (0 if key == "n" else None) for key in ("n", "min", "p005", "p01", "p05", "p50", "p95", "p99", "p995", "max")}
     return {
         "n": len(present),
+        "min": min(present),
+        "p005": _percentile(present, 0.5),
+        "p01": _percentile(present, 1),
         "p05": _percentile(present, 5),
         "p50": _percentile(present, 50),
         "p95": _percentile(present, 95),
+        "p99": _percentile(present, 99),
+        "p995": _percentile(present, 99.5),
         "max": max(present),
     }
+
+
+# Upper-tail quantile for latency/loss limits, with the matching lower
+# tail for the speed floor. A run alarms if any of the nine tests does,
+# so a per-test p95 cannot hold a per-run rate of 5%.
+FIT_QUANTILES = (("p95", "p05"), ("p99", "p01"), ("p995", "p005"), ("max", "min"))
 
 
 def _counts(values):
@@ -191,11 +202,13 @@ def _upper(measured, floor):
     return max(floor, measured * 1.1)
 
 
-def propose_thresholds(tests, existing):
+def propose_thresholds(tests, existing, upper="p95", lower="p05"):
     """Turn calibration distributions into one noise level's limits.
 
-    Existing floors stay in place when the healthy tail is healthier
-    than the floor, and when the speed tail is below the configured floor.
+    upper is the fit quantile for latency and loss limits, lower the one
+    for the speed floor. Existing floors stay in place when the healthy
+    tail is healthier than the floor, and when the speed tail is below
+    the configured floor.
     """
     existing = existing or {}
     notes = []
@@ -204,11 +217,11 @@ def propose_thresholds(tests, existing):
     proposed = {
         "T1_e2e_ping": {
             "max_loss_percent": _upper(
-                (t1_fit.get("packet_loss_percent") or {}).get("p95"),
+                (t1_fit.get("packet_loss_percent") or {}).get(upper),
                 t1.get("max_loss_percent", 5.0),
             ),
             "max_latency_ms": _upper(
-                (t1_fit.get("latency_ms") or {}).get("p95"),
+                (t1_fit.get("latency_ms") or {}).get(upper),
                 t1.get("max_latency_ms", 50.0),
             ),
         }
@@ -217,11 +230,11 @@ def propose_thresholds(tests, existing):
     t2_fit = tests.get("T2_hop_ping") or {}
     proposed["T2_hop_ping"] = {
         "max_loss_percent": _upper(
-            (t2_fit.get("packet_loss_percent") or {}).get("p95"),
+            (t2_fit.get("packet_loss_percent") or {}).get(upper),
             t2.get("max_loss_percent", 10.0),
         ),
         "max_latency_ms": _upper(
-            (t2_fit.get("latency_ms") or {}).get("p95"),
+            (t2_fit.get("latency_ms") or {}).get(upper),
             t2.get("max_latency_ms", 80.0),
         ),
     }
@@ -229,16 +242,36 @@ def propose_thresholds(tests, existing):
     proposed["T8_tcp_vs_ping"] = {"tcp_must_succeed": bool(t8.get("tcp_must_succeed", True))}
     t10 = existing.get("T10_speed") or {}
     floor = t10.get("min_mbit", 1.0)
-    p05 = ((tests.get("T10_speed") or {}).get("mbit_per_sec") or {}).get("p05")
-    if p05 is None:
+    tail = ((tests.get("T10_speed") or {}).get("mbit_per_sec") or {}).get(lower)
+    if tail is None:
         proposed["T10_speed"] = {"min_mbit": floor}
         notes.append("T10 had no bitrate; speed floor was not changed")
-    elif p05 * 0.9 < floor:
+    elif tail * 0.9 < floor:
         proposed["T10_speed"] = {"min_mbit": floor}
         notes.append("T10 min_mbit kept at the configured floor")
     else:
-        proposed["T10_speed"] = {"min_mbit": p05 * 0.9}
+        proposed["T10_speed"] = {"min_mbit": tail * 0.9}
     return proposed, notes
+
+
+def fit_thresholds(calibration, existing, noise_id, target):
+    """Smallest fit quantile whose fit-set per-run alarm rate meets target.
+
+    Uses the calibration bundles only. Falls back to the max/min fit.
+    """
+    tests = summarize(calibration)
+    runs = len(calibration)
+    chosen = None
+    for upper, lower in FIT_QUANTILES:
+        proposed, notes = propose_thresholds(tests, existing, upper, lower)
+        rate = (score_false_alarms(calibration, proposed, noise_id) / runs) if runs else None
+        chosen = (upper, proposed, notes, rate)
+        if rate is not None and rate <= target:
+            break
+    upper, proposed, notes, rate = chosen
+    if rate is None or rate > target:
+        notes = list(notes) + [f"fit-set alarm rate {rate} stays above {target} at the max fit"]
+    return tests, upper, proposed, notes, rate
 
 
 def _no_reading(result):
@@ -341,8 +374,8 @@ def _false_alarm_target():
 
 
 def build_report(calibration, evaluation, noise_id, existing, full_battery, seed):
-    tests = summarize(calibration)
-    proposed, notes = propose_thresholds(tests, existing)
+    target = _false_alarm_target()
+    tests, fit_quantile, proposed, notes, fit_rate = fit_thresholds(calibration, existing, noise_id, target)
     alarms = score_false_alarms(evaluation, proposed, noise_id)
     eval_runs = len(evaluation)
     battery_profile = _battery_profile(calibration)
@@ -357,11 +390,13 @@ def build_report(calibration, evaluation, noise_id, existing, full_battery, seed
         "episode_aligned_battery": _episode_battery(battery_profile),
         "tests": tests,
         "proposed_thresholds": proposed,
+        "fit_quantile": fit_quantile,
+        "fit_false_alarm_rate": fit_rate,
         "threshold_notes": notes,
         "eval_false_alarms": alarms,
         "eval_false_alarm_rate": (alarms / eval_runs) if eval_runs else None,
         "eval_alarm_tests": _alarm_tests(evaluation, proposed, noise_id),
-        "false_alarm_rate_target": _false_alarm_target(),
+        "false_alarm_rate_target": target,
     }
 
 
@@ -408,6 +443,7 @@ def update_thresholds_yaml(reports, path=THRESHOLDS_PATH):
             "calibration_runs": report["calibration_runs"],
             "eval_runs": report["eval_runs"],
             "eval_false_alarm_rate": report["eval_false_alarm_rate"],
+            "fit_quantile": report.get("fit_quantile"),
             "threshold_notes": report["threshold_notes"],
         }
         for noise, report in reports.items()
@@ -525,6 +561,28 @@ def _self_check():
     assert partial["proposed_thresholds"]["T1_e2e_ping"]["max_loss_percent"] == 22.0
     assert partial["proposed_thresholds"]["T2_hop_ping"]["max_loss_percent"] == 22.0
     assert partial["eval_false_alarms"] == 1
+    assert report["fit_quantile"] == "p95" and report["fit_false_alarm_rate"] == 0.0
+
+    # Five T1 tails and five different T2 tails: each test is under its p95
+    # limit 95% of the time, but 10% of runs alarm. p99 holds the target.
+    tails = (300.0, 400.0, 500.0, 600.0, 700.0)
+    spread = []
+    for index in range(100):
+        rows = _healthy_result()
+        if index < 5:
+            rows[0]["latency_ms"] = tails[index]
+        if 5 <= index < 10:
+            rows[1] = dict(rows[1], hops_primary=[{"dst_ip": "10.0.12.2", "latency_ms": tails[index - 5], "packet_loss_percent": 0.0}])
+        spread.append({"results": rows})
+    quiet_eval = [{"results": _healthy_result()}]
+    loud_eval = [{"results": _healthy_result(latency=10000.0)}]
+    wide = build_report(spread, quiet_eval, "N0", existing, True, 0)
+    assert wide["fit_quantile"] == "p99", wide["fit_quantile"]
+    assert wide["fit_false_alarm_rate"] == 0.02, wide["fit_false_alarm_rate"]
+    assert score_false_alarms(spread, propose_thresholds(wide["tests"], existing)[0], "N0") == 10
+    loud = build_report(spread, loud_eval, "N0", existing, True, 0)
+    assert loud["proposed_thresholds"] == wide["proposed_thresholds"]
+    assert loud["eval_false_alarms"] == 1 and wide["eval_false_alarms"] == 0
 
     blank = _healthy_result()
     for item in blank:
@@ -575,11 +633,13 @@ def _self_check():
     from bench.mininet_util import start_one_off_iperf3
     assert '"-s", "-1"' in inspect.getsource(start_one_off_iperf3)
     assert "free_tcp_port" in inspect.getsource(start_one_off_iperf3)
-    from bench.tests import T10_speed, measure_speed_once
+    from bench.tests import _IPERF_TIMEOUT, T10_speed, measure_speed_once
     once = inspect.getsource(measure_speed_once)
-    assert "timeout 8" in once and "-t 1" in once and "-i 1" not in once
+    assert "_IPERF_TIMEOUT} 8 iperf3" in once and "-t 1" in once and "-i 1" not in once
     battery = inspect.getsource(T10_speed)
-    assert "timeout 20 iperf3" in battery
+    assert "_IPERF_TIMEOUT} 20 iperf3" in battery
+    assert _IPERF_TIMEOUT.startswith("timeout -s INT -k ")
+    assert "wait_for_listener" in filler
 
     assert ready_to_write(report) is False
     high_far = dict(report)
@@ -601,9 +661,15 @@ def _self_check():
         pass
     assert THRESHOLDS_PATH.read_text(encoding="utf-8") == before
 
-    logic = inspect.getsource(summarize) + inspect.getsource(propose_thresholds) + inspect.getsource(score_false_alarms)
+    logic = (
+        inspect.getsource(summarize)
+        + inspect.getsource(propose_thresholds)
+        + inspect.getsource(score_false_alarms)
+        + inspect.getsource(fit_thresholds)
+    )
     assert "observability" not in logic
     assert "faults.yaml" not in logic
+    assert "evaluation" not in inspect.getsource(fit_thresholds)
     live = inspect.getsource(collect_healthy)
     assert "inject(" not in live
     assert "reset_all" in live and "run_all" in live
@@ -833,9 +899,11 @@ def _store_speeds(bundles, indexes, intervals):
 
 
 def _print_iperf_tail(raw):
-    lines = [line.strip() for line in (raw or "").splitlines() if "error" in line.lower()]
+    text = [line.strip() for line in (raw or "").splitlines() if line.strip()]
+    lines = [line for line in text if "error" in line.lower() or "interrupt" in line.lower()]
     if not lines:
-        print("  no bitrate", flush=True)
+        tail = " | ".join(text[-2:])
+        print(f"  no bitrate{': ' + tail if tail else ' (no client output)'}", flush=True)
         return
     for line in lines[-2:]:
         print(f"  {line}", flush=True)
@@ -849,7 +917,14 @@ def fill_missing_speed(net, bundles, noise_id, sample_path=SAMPLES_PATH, batch=C
     """
     del batch
     from bench import tests as oam
-    from bench.mininet_util import finish_one_off, free_tcp_port, start_one_off_iperf3, stop_iperf3_server
+    from bench.mininet_util import (
+        finish_one_off,
+        free_tcp_port,
+        one_off_log_tail,
+        start_one_off_iperf3,
+        stop_iperf3_server,
+        wait_for_listener,
+    )
 
     missing = [index for index, bundle in enumerate(bundles) if _t10_mbit(bundle) is None]
     if not missing:
@@ -868,7 +943,7 @@ def fill_missing_speed(net, bundles, noise_id, sample_path=SAMPLES_PATH, batch=C
     while len(found) < count and attempts < count + 8 and time.monotonic() < deadline:
         attempts += 1
         server = start_one_off_iperf3(net, port=5201)
-        time.sleep(0.2)
+        listening = wait_for_listener(net, 5201)
         try:
             mbit, raw = oam.measure_speed_once(net, port=5201)
         finally:
@@ -876,7 +951,12 @@ def fill_missing_speed(net, bundles, noise_id, sample_path=SAMPLES_PATH, batch=C
             free_tcp_port(net, 5201)
         failed = mbit is None or "unable to send" in (raw or "") or "error -" in (raw or "")
         if failed:
+            if not listening:
+                print("  server was not listening on 5201", flush=True)
             _print_iperf_tail(raw)
+            server_tail = one_off_log_tail(5201, lines=2)
+            if server_tail:
+                print("  server: " + server_tail.replace("\n", " | "), flush=True)
             continue
         print(f"  {len(found) + 1}/{count}  {mbit:.2f} Mbit/s", flush=True)
         slot = missing[len(found)]
