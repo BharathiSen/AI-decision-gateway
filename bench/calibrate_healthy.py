@@ -374,6 +374,8 @@ def _false_alarm_target():
 
 
 def build_report(calibration, evaluation, noise_id, existing, full_battery, seed):
+    calibration = [_median_latency(bundle) for bundle in calibration]
+    evaluation = [_median_latency(bundle) for bundle in evaluation]
     target = _false_alarm_target()
     tests, fit_quantile, proposed, notes, fit_rate = fit_thresholds(calibration, existing, noise_id, target)
     alarms = score_false_alarms(evaluation, proposed, noise_id)
@@ -794,6 +796,13 @@ def _self_check():
     assert "latency_basis" not in fresh
     assert _average_latency_runs([saved, {"results": [fresh]}]) == 1
     assert "rtt_ms" in _slim({"results": [dict(fresh, raw="x")]})["results"][0]
+    old_run = {"results": [
+        {"test_id": "T1_e2e_ping", "latency_ms": 87.4, "packet_loss_percent": 0.0},
+        {"test_id": "T2_hop_ping", "hops_primary": [{"latency_ms": 87.4, "packet_loss_percent": 0.0, "raw": stall}]},
+    ]}
+    from_disk = build_report([json.loads(json.dumps(old_run))], [json.loads(json.dumps(old_run))], "N0", {}, True, 0)
+    assert from_disk["tests"]["T2_hop_ping"]["latency_ms"]["max"] == 11.2, from_disk["tests"]["T2_hop_ping"]
+    assert from_disk["latency_average_runs"] == 2
 
     print("healthy calibration: PASS")
 
@@ -878,7 +887,7 @@ def _load_samples(path, noise_id):
     if skipped:
         print(f"  ignored {skipped} unreadable checkpoint line(s) in {path.name}", flush=True)
         path.write_text("".join(json.dumps(item) + "\n" for item in kept), encoding="utf-8")
-    return [_median_latency(item["bundle"]) for item in kept if item.get("noise_id") == noise_id]
+    return [item["bundle"] for item in kept if item.get("noise_id") == noise_id]
 
 
 def _append_sample(path, noise_id, index, bundle, battery=None):
