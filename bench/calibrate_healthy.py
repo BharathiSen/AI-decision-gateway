@@ -57,7 +57,8 @@ FULL_BATTERY = list(TEST_IDS)
 MIN_CALIBRATION_RUNS = 200
 CALIBRATION_BATCH = 10
 SAMPLE_TIMEOUT_SECONDS = 90
-SPEED_FILL_CAP = 30
+SPEED_FILL_CAP = 10
+FILL_SITTING_SECONDS = 90
 
 
 def _percentile(values, p):
@@ -568,7 +569,8 @@ def _self_check():
     )
     assert parsed == [8.0, 7.5]
     filler = inspect.getsource(fill_missing_speed)
-    assert "measure_speed_once" in filler and "start_one_off_iperf3" in filler
+    assert "measure_speed_once" in filler and "ensure_iperf3_server" in filler
+    assert "start_one_off_iperf3" not in filler
     assert "SPEED_FILL_CAP" in filler
     assert "_call_with_timeout" not in filler
     from bench.mininet_util import start_one_off_iperf3
@@ -795,9 +797,15 @@ def _print_iperf_tail(raw):
 
 
 def fill_missing_speed(net, bundles, noise_id, sample_path=SAMPLES_PATH, batch=CALIBRATION_BATCH):
-    """Fill missing T10 readings, then return so the VM can stop."""
+    """Fill missing T10 readings, then return so the VM can stop.
+
+    Reuses the long-lived iperf3 on 5201. Starting a one-off server on the
+    same port made most attempts print "no bitrate" and kept Mininet up
+    long enough for the guest to lock or freeze.
+    """
+    del batch
     from bench import tests as oam
-    from bench.mininet_util import finish_one_off, start_one_off_iperf3
+    from bench.mininet_util import ensure_iperf3_server
 
     missing = [index for index, bundle in enumerate(bundles) if _t10_mbit(bundle) is None]
     if not missing:
@@ -805,24 +813,19 @@ def fill_missing_speed(net, bundles, noise_id, sample_path=SAMPLES_PATH, batch=C
     count = min(len(missing), SPEED_FILL_CAP)
     print(
         f"  {noise_id} has {len(missing)} saved runs with no T10 bitrate. "
-        f"Collecting {count}, then this command exits.",
+        f"Collecting up to {count} in {FILL_SITTING_SECONDS}s, then this command exits.",
         flush=True,
     )
+    ensure_iperf3_server(net)
     found = []
     attempts = 0
-    attempt_limit = count + 20
-    while len(found) < count and attempts < attempt_limit:
+    deadline = time.monotonic() + FILL_SITTING_SECONDS
+    while len(found) < count and attempts < count + 5 and time.monotonic() < deadline:
         attempts += 1
-        server = start_one_off_iperf3(net, port=5201)
-        time.sleep(0.25)
-        try:
-            mbit, raw = oam.measure_speed_once(net, port=5201)
-        finally:
-            finish_one_off(server)
+        mbit, raw = oam.measure_speed_once(net, port=5201)
         failed = mbit is None or "unable to send" in (raw or "") or "error -" in (raw or "")
         if failed:
             _print_iperf_tail(raw)
-            time.sleep(0.3)
             continue
         print(f"  {len(found) + 1}/{count}  {mbit:.2f} Mbit/s", flush=True)
         slot = missing[len(found)]
