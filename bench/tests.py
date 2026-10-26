@@ -329,6 +329,13 @@ _SUMMARY_LINE = re.compile(
 )
 
 
+def _covers(start, end, seconds):
+    """The summary spans this transfer. The receiver line runs past the
+    requested time while the link queue drains after the sender stops."""
+    span = float(end) - float(start)
+    return -0.25 <= span - float(seconds) <= 0.5
+
+
 def _link_mbit():
     """Configured diamond link rate. A faster reading is not a completed transfer."""
     return float(ctl.BASELINE_LINK_PARAMS["bw"])
@@ -349,7 +356,7 @@ def _summary_mbit(output, seconds):
     chosen = None
     for match in _SUMMARY_LINE.finditer(output):
         start, end, value, unit = match.groups()
-        if abs((float(end) - float(start)) - float(seconds)) > 0.25:
+        if not _covers(start, end, seconds):
             continue
         chosen = float(value) * scale[unit]
     if chosen is None or chosen <= 0 or chosen > _link_mbit():
@@ -370,7 +377,7 @@ def _summary_bytes(output, seconds):
     chosen = None
     for match in _SUMMARY_BYTES.finditer(output):
         start, end, value, unit = match.groups()
-        if abs((float(end) - float(start)) - float(seconds)) > 0.25:
+        if not _covers(start, end, seconds):
             continue
         chosen = float(value) * scale[unit]
     if chosen is None or chosen <= 0:
@@ -705,6 +712,9 @@ def _check_costs():
         "[  5]   0.00-3.00   sec  3.00 MBytes  8.39 Mbits/sec\n"
     )
     assert _summary_bytes(longer, 3) == 3 * 1024 ** 2
+    drained = "[  5]   0.00-1.26   sec  1.25 MBytes  8.32 Mbits/sec                  receiver\n"
+    assert _summary_mbit(drained, 1) == 8.32
+    assert _summary_mbit("[  5]   0.00-2.00   sec  2.00 MBytes  8.39 Mbits/sec  receiver\n", 1) is None
     assert _icmp_probe(5, 1400)["bytes"] == 5 * (_ICMP_HEADER + 1400)
 
     def _boom(_net, **_kwargs):

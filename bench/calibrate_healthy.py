@@ -517,7 +517,7 @@ def update_thresholds_yaml(reports, path=THRESHOLDS_PATH):
     levels = doc.setdefault("by_noise_level", {})
     for noise, report in reports.items():
         levels[noise] = report["proposed_thresholds"]
-    doc.setdefault("calibration", {})["last_run"] = {
+    doc.setdefault("calibration", {}).setdefault("last_run", {}).update({
         noise: {
             "calibration_runs": report["calibration_runs"],
             "eval_runs": report["eval_runs"],
@@ -526,7 +526,7 @@ def update_thresholds_yaml(reports, path=THRESHOLDS_PATH):
             "threshold_notes": report["threshold_notes"],
         }
         for noise, report in reports.items()
-    }
+    })
     with path.open("w", encoding="utf-8") as handle:
         yaml.safe_dump(doc, handle, sort_keys=False)
 
@@ -1088,7 +1088,6 @@ def fill_missing_speed(net, bundles, noise_id, sample_path=SAMPLES_PATH, batch=C
     A long-lived iperf3 on 5201 dies after a few clients (Broken pipe).
     Each fill uses a one-off `iperf3 -s -1` after freeing that port.
     """
-    del batch
     from bench import tests as oam
     from bench.mininet_util import (
         finish_one_off,
@@ -1102,18 +1101,24 @@ def fill_missing_speed(net, bundles, noise_id, sample_path=SAMPLES_PATH, batch=C
     missing = [index for index, bundle in enumerate(bundles) if _t10_mbit(bundle) is None]
     if not missing:
         return bundles, False
-    count = min(len(missing), SPEED_FILL_CAP)
-    print(
-        f"  {noise_id} has {len(missing)} saved runs with no T10 bitrate. "
-        f"Collecting up to {count} in {FILL_SITTING_SECONDS}s, then this command exits.",
-        flush=True,
-    )
+    if batch is None:
+        count = len(missing)
+        deadline = float("inf")
+        print(f"  {noise_id} has {len(missing)} saved runs with no T10 bitrate. Filling all of them.", flush=True)
+    else:
+        count = min(len(missing), SPEED_FILL_CAP)
+        deadline = time.monotonic() + FILL_SITTING_SECONDS
+        print(
+            f"  {noise_id} has {len(missing)} saved runs with no T10 bitrate. "
+            f"Collecting up to {count} in {FILL_SITTING_SECONDS}s, then this command exits.",
+            flush=True,
+        )
     stop_iperf3_server(net, port=5201)
     free_tcp_port(net, 5201)
     found = []
     attempts = 0
-    deadline = time.monotonic() + FILL_SITTING_SECONDS
-    while len(found) < count and attempts < count + 8 and time.monotonic() < deadline:
+    max_attempts = count * 2 + 8
+    while len(found) < count and attempts < max_attempts and time.monotonic() < deadline:
         attempts += 1
         server = start_one_off_iperf3(net, port=5201)
         listening = wait_for_listener(net, 5201)
@@ -1364,7 +1369,13 @@ def _emit_reports(reports, report_path, write_thresholds=False):
     out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     print(json.dumps(payload, indent=2))
     if write_thresholds:
-        update_thresholds_yaml(reports)
+        passing = {noise: report for noise, report in reports.items() if ready_to_write(report)}
+        for noise in reports:
+            if noise not in passing:
+                print(f"  {noise}: not written to {THRESHOLDS_PATH.name}; it did not pass the write guard.", flush=True)
+        if passing:
+            update_thresholds_yaml(passing)
+            print(f"  wrote {', '.join(passing)} to {THRESHOLDS_PATH.name}", flush=True)
 
 
 def report_from_saved(noise_ids, runs, eval_runs, seed=0, sample_path=SAMPLES_PATH):
@@ -1435,6 +1446,11 @@ def main():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--batch", type=int, default=CALIBRATION_BATCH, help="new samples to collect before exiting")
     parser.add_argument("--fill-speed", action="store_true", help="measure T10 only where a saved run has no bitrate")
+    parser.add_argument(
+        "--until-done",
+        action="store_true",
+        help="one sitting: collect every missing run, fill every T10 bitrate, then report",
+    )
     parser.add_argument("--from-saved", action="store_true", help="reprint the report from saved runs; does not start Mininet")
     parser.add_argument(
         "--legacy-samples",
@@ -1448,6 +1464,9 @@ def main():
         help="checkpoint jsonl path (default: legacy file for --from-saved, episode file for new collection)",
     )
     args = parser.parse_args()
+    if args.until_done:
+        args.batch = None
+        args.fill_speed = True
     sample_path = resolve_sample_path(args)
 
     noise_ids = ["N0", "N1", "N2"] if args.noise == "all" else [args.noise]
@@ -1504,7 +1523,7 @@ def main():
 
 
 if __name__ == "__main__":
-    live_flags = ("-h", "--help", "--from-saved", "--fill-speed", "--write-thresholds")
+    live_flags = ("-h", "--help", "--from-saved", "--fill-speed", "--until-done", "--write-thresholds")
     if any(flag in sys.argv for flag in live_flags):
         main()
     elif "--check" in sys.argv:
