@@ -11,6 +11,7 @@ if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import json
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -26,6 +27,27 @@ EPISODE_DIR = Path(__file__).resolve().parent.parent / "results" / "episodes"
 GATE_DECISIONS = {"allow", "block", "escalate"}
 CONTROL_ROUTES = (("r1", "10.0.4.0/24"), ("r4", "10.0.1.0/24"))
 PATH_LINKS = ("r1-r2", "r2-r4", "r1-r3", "r3-r4")
+PATH_INTERFACES = (
+    ("r1", "r1-eth1"),
+    ("r2", "r2-eth0"),
+    ("r2", "r2-eth1"),
+    ("r4", "r4-eth0"),
+    ("r1", "r1-eth2"),
+    ("r3", "r3-eth0"),
+    ("r3", "r3-eth1"),
+    ("r4", "r4-eth1"),
+)
+_QDISC_COUNTERS = re.compile(r"\b(direct_packets_stat|refcnt|seed)\s+\d+")
+
+
+def qdisc_config(text):
+    """The configured qdisc lines of `tc qdisc show`, without counters."""
+    lines = []
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if line.startswith("qdisc "):
+            lines.append(" ".join(_QDISC_COUNTERS.sub("", line).split()))
+    return "|".join(lines)
 
 
 def normalize_gate_decision(gate_decision):
@@ -58,7 +80,8 @@ def execution_fingerprint(snapshot):
         name = link.get("name")
         if name in PATH_LINKS:
             links[name] = bool(link.get("up"))
-    return {"routes": routes, "links": links}
+    qdiscs = (snapshot or {}).get("qdiscs")
+    return {"routes": routes, "links": links, "qdiscs": qdiscs if isinstance(qdiscs, dict) else None}
 
 
 def assess_recheck(approved_snapshot, current_snapshot, proposal):
@@ -74,6 +97,12 @@ def assess_recheck(approved_snapshot, current_snapshot, proposal):
         return {"state_verified": False, "reason": "route changed since the gate decision"}
     if approved["links"] != current["links"]:
         return {"state_verified": False, "reason": "path state changed since the gate decision"}
+    if current["qdiscs"] is not None and approved["qdiscs"] is None:
+        return {"state_verified": False, "reason": "gate snapshot has no path qdisc fingerprint"}
+    if approved["qdiscs"] is not None and current["qdiscs"] is None:
+        return {"state_verified": False, "reason": "execution recheck could not read path qdiscs"}
+    if approved["qdiscs"] != current["qdiscs"]:
+        return {"state_verified": False, "reason": "path qdisc changed since the gate decision"}
     from gate.checks import path_links_up, reroute_choice
 
     choice = reroute_choice(proposal)
@@ -143,7 +172,7 @@ def screen_proposal(proposal, snapshot=None):
 
 
 def read_execution_state(net, links=None):
-    """Re-read the routes and path links a remediation is allowed to depend on."""
+    """Re-read the routes, path links and path qdiscs a remediation depends on."""
     from bench.mininet_util import run_in_node
     from network import controller as ctl
 
@@ -152,11 +181,28 @@ def read_execution_state(net, links=None):
         route = run_in_node(net.get(node_name), f"ip route show {prefix}").strip()
         routes.append({"node": node_name, "prefix": prefix, "route": route})
     link_states = [ctl.link_status(net, name, links) for name in PATH_LINKS]
+    qdiscs = {
+        f"{node_name}/{intf}": qdisc_config(run_in_node(net.get(node_name), f"tc qdisc show dev {intf}"))
+        for node_name, intf in PATH_INTERFACES
+    }
     return {
         "routes": routes,
         "links": link_states,
-        "metrics": {"active_path": ctl.get_active_path(net)},
+        "qdiscs": qdiscs,
+        "metrics": {"active_path": ctl.path_from_route("r1", routes[0]["route"])},
     }
+
+
+def _routes_on_path(snapshot, path):
+    """True when both r1 and r4 point at this path's next hops."""
+    from network import controller as ctl
+
+    found = {
+        item.get("node"): ctl.path_from_route(item.get("node"), item.get("route"))
+        for item in (snapshot or {}).get("routes") or []
+        if (item.get("node"), item.get("prefix")) in CONTROL_ROUTES
+    }
+    return found.get("r1") == path and found.get("r4") == path
 
 
 def apply_authorized_action(gate_decision, proposal, execute_fn, approved_snapshot, read_state):
@@ -210,8 +256,7 @@ def apply_authorized_action(gate_decision, proposal, execute_fn, approved_snapsh
                 outcome["remediation_succeeded"] = False
                 outcome["execution_error"] = f"partial remediation: {type(exc).__name__}: {exc}"
                 return outcome
-            active = ((after or {}).get("metrics") or {}).get("active_path")
-            if active != requested:
+            if not _routes_on_path(after, requested):
                 outcome["remediation_succeeded"] = False
                 outcome["execution_error"] = "partial remediation"
     return outcome
@@ -292,6 +337,12 @@ def run_episode(
             fault_label = "H0"
 
         snapshot = parts["telemetry"](net, links)
+        try:
+            baseline = parts["read_state"](net, links)
+            baseline_error = None
+        except Exception as exc:
+            baseline = None
+            baseline_error = f"{type(exc).__name__}: {exc}"
         oam_bundle = parts["tests"](net) if run_oam else None
 
         record = {
@@ -302,6 +353,10 @@ def run_episode(
             "seed": seed,
             "correlation_ids": correlation_ids,
             "network_snapshot": snapshot,
+            "execution_baseline": {
+                "qdiscs": (baseline or {}).get("qdiscs") if isinstance(baseline, dict) else None,
+                "error": baseline_error,
+            },
             "oam": oam_bundle,
             "oam_cost": oam.summarize_costs(
                 oam_bundle.get("results") if isinstance(oam_bundle, dict) else None
@@ -365,11 +420,13 @@ def run_episode(
                 action, payload = proposal_to_action(proposal or {})
                 return _execute(_net, action, payload)
 
+        approved = dict(record.get("network_snapshot") or {})
+        approved["qdiscs"] = record["execution_baseline"]["qdiscs"]
         record.update(apply_authorized_action(
             record.get("gate_decision"),
             record.get("agent_proposal") or {},
             execute_fn,
-            record.get("network_snapshot") or {},
+            approved,
             lambda: parts["read_state"](net, links),
         ))
         result_ok, result_errors = validate_record("execution_result", _execution_view(record))
@@ -407,31 +464,43 @@ def aggregate_episode_costs(directory=None):
     agent_ok = {key: True for key in agent}
     gate = {"latency_seconds": 0.0}
     gate_ok = {"latency_seconds": True}
+    full = {"total_duration_seconds": 0.0, "total_additional_packets": 0, "total_additional_bytes": 0}
+    full_ok = {key: True for key in full}
+    selected = dict(full)
+    selected_ok = {key: True for key in selected}
     episodes = 0
+    gated = 0
     for path in sorted(directory.glob("*.json")):
         try:
             record = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
+        if not isinstance(record, dict) or "episode_id" not in record:
+            continue
         episodes += 1
         _sum_block(oam, oam_ok, record.get("oam_cost"))
         _sum_block(agent, agent_ok, record.get("agent_cost"))
         _sum_block(gate, gate_ok, record.get("gate_cost"))
+        selection = (record.get("gate_decision") or {}).get("cost")
+        if isinstance(selection, dict):
+            gated += 1
+            _sum_block(full, full_ok, selection.get("full_battery"))
+            _sum_block(selected, selected_ok, selection.get("selected_tests"))
 
-    for key, ok in oam_ok.items():
-        if not ok:
-            oam[key] = None
-    for key, ok in agent_ok.items():
-        if not ok:
-            agent[key] = None
-    for key, ok in gate_ok.items():
-        if not ok:
-            gate[key] = None
+    for totals, flags in ((oam, oam_ok), (agent, agent_ok), (gate, gate_ok), (full, full_ok), (selected, selected_ok)):
+        for key, ok in flags.items():
+            if not ok:
+                totals[key] = None
     return {
         "episodes": episodes,
         "oam": oam if episodes else None,
         "agent": agent if episodes else None,
         "gate": gate if episodes else None,
+        "gate_test_selection": {
+            "episodes": gated,
+            "full_battery": full if gated else None,
+            "selected_tests": selected if gated else None,
+        },
     }
 
 
@@ -443,11 +512,11 @@ def save_episode(record, directory=None):
     return path
 
 
-def _snapshot(r1_via="10.0.12.2", backup_up=True, primary_up=True, active_path="backup"):
-    return {
+def _snapshot(r1_via="10.0.12.2", backup_up=True, primary_up=True, active_path="backup", r4_via="10.0.24.1", qdiscs=None):
+    snap = {
         "routes": [
             {"node": "r1", "prefix": "10.0.4.0/24", "route": f"10.0.4.0/24 via {r1_via} dev r1-eth1"},
-            {"node": "r4", "prefix": "10.0.1.0/24", "route": "10.0.1.0/24 via 10.0.24.1 dev r4-eth0"},
+            {"node": "r4", "prefix": "10.0.1.0/24", "route": f"10.0.1.0/24 via {r4_via} dev r4-eth0"},
         ],
         "links": [
             {"name": "r1-r2", "up": primary_up},
@@ -457,6 +526,19 @@ def _snapshot(r1_via="10.0.12.2", backup_up=True, primary_up=True, active_path="
         ],
         "metrics": {"active_path": active_path},
     }
+    if qdiscs is not None:
+        snap["qdiscs"] = qdiscs
+    return snap
+
+
+def _reads(*snapshots):
+    """read_state stand-in: each call returns the next snapshot, then the last one."""
+    queue = list(snapshots)
+
+    def read():
+        return queue.pop(0) if len(queue) > 1 else queue[0]
+
+    return read
 
 
 def _self_check():
@@ -475,7 +557,7 @@ def _self_check():
         calls.append(item)
         return {"executed": True, "action": "REROUTE"}
 
-    def once(decision, approved, current=None):
+    def once(decision, approved, current=None, after=None):
         calls.clear()
         current = approved if current is None else current
         return apply_authorized_action(
@@ -483,13 +565,34 @@ def _self_check():
             proposal,
             execute,
             approved,
-            lambda: current,
+            _reads(current, after if after is not None else current),
         )
 
     healthy = _snapshot()
-    allowed = once("allow", healthy)
+    on_backup = _snapshot(r1_via="10.0.13.2", r4_via="10.0.34.1")
+    allowed = once("allow", healthy, after=on_backup)
     assert calls == [proposal], calls
-    assert allowed["state_verified"] is True and allowed["remediation_succeeded"] is True
+    assert allowed["state_verified"] is True and allowed["remediation_succeeded"] is True, allowed
+
+    one_sided = once("allow", healthy, after=_snapshot(r1_via="10.0.13.2"))
+    assert one_sided["execution_attempted"] is True and one_sided["remediation_succeeded"] is False
+    assert one_sided["execution_error"] == "partial remediation"
+
+    shaped = {"r1/r1-eth2": "qdisc netem 10: parent 5:1 limit 1000 delay 5ms"}
+    lossy = {"r1/r1-eth2": "qdisc netem 10: parent 5:1 limit 1000 delay 5ms loss 20%"}
+    changed_qdisc = once("allow", _snapshot(qdiscs=shaped), _snapshot(qdiscs=lossy))
+    assert calls == [] and changed_qdisc["execution_error"] == "path qdisc changed since the gate decision"
+    no_fingerprint = once("allow", healthy, _snapshot(qdiscs=shaped))
+    assert calls == [] and no_fingerprint["execution_error"] == "gate snapshot has no path qdisc fingerprint"
+    unread = once("allow", _snapshot(qdiscs=shaped), healthy)
+    assert calls == [] and unread["execution_error"] == "execution recheck could not read path qdiscs"
+    same_qdisc = once("allow", _snapshot(qdiscs=shaped), _snapshot(qdiscs=dict(shaped)), after=on_backup)
+    assert same_qdisc["remediation_succeeded"] is True, same_qdisc
+
+    htb = "qdisc htb 5: root refcnt 2 r2q 10 default 0x1 direct_packets_stat {} direct_qlen 1000\n Sent 9 bytes 1 pkt"
+    assert qdisc_config(htb.format(0)) == qdisc_config(htb.format(812))
+    assert "Sent" not in qdisc_config(htb.format(0))
+    assert qdisc_config("qdisc netem 10: delay 5ms") != qdisc_config("qdisc netem 10: delay 5ms loss 5%")
 
     for decision in ("block", "escalate", None, "approve"):
         outcome = once(decision, healthy)
@@ -540,6 +643,22 @@ def _self_check():
     assert check_safety(backup, _snapshot(backup_up=False))["passed"] is False
     assert check_safety(primary, _snapshot(primary_up=False))["passed"] is False
     assert check_safety(backup, healthy)["passed"] is True
+    from gate.checks import reroute_choice
+
+    conflicted = dict(backup, path="backup", proposed_path=["r1", "r2", "r4"])
+    assert reroute_choice(conflicted) is None
+    assert check_safety(conflicted, healthy)["passed"] is False
+    assert reroute_choice(dict(backup, path="backup")) == "backup"
+    assert reroute_choice({"action": "REROUTE", "path": "sideways"}) is None
+    blackholed = _snapshot()
+    for link in blackholed["links"]:
+        link["packet_loss_percent"] = 100.0 if link["name"] == "r3-r4" else 0.0
+    dead = check_safety(backup, blackholed)
+    assert dead["passed"] is False and dead["reason"] == "backup path is unreachable", dead
+    assert check_safety(primary, blackholed)["passed"] is True
+
+    wrong_flow = screen_proposal({"action": "DO_NOTHING", "target": "HostC_to_HostD", "reason": "x"})
+    assert wrong_flow and "not a supported flow" in wrong_flow["agent_error"]
 
     calls.clear()
     primary_down = _snapshot(primary_up=False, active_path="primary")
@@ -718,6 +837,7 @@ def _self_check():
             (record.get("oam") or {}).get("results") or [],
             mode="pilot_v0",
             run_missing_tests=False,
+            noise_id=record["noise_id"],
         )
 
     def local_execute(proposal):
@@ -778,6 +898,79 @@ def _self_check():
     assert invalid_gate["execution_attempted"] is False
     assert str(invalid_gate["execution_error"]).startswith("gate error:")
 
+    def reroute_agent(state):
+        return {
+            "action": "REROUTE",
+            "target": "HostA_to_HostB",
+            "reason": "primary degraded",
+            "proposed_path": ["r1", "r3", "r4"],
+        }
+
+    def allow_gate(record):
+        return {"decision": "allow", "reason": "test", "proposal_action": "REROUTE", "tests_run": [], "checks": {}}
+
+    def stateful(*snapshots):
+        read = _reads(*snapshots)
+        return lambda net, links=None: read()
+
+    with_q = dict(full, qdiscs=shaped)
+    injected_between = run_episode(
+        object(), {}, fault_id="H0", run_oam=False,
+        agent_fn=reroute_agent, gate_fn=allow_gate,
+        execute_fn=lambda proposal: skipped.append("execute"),
+        _components=dict(fakes, read_state=stateful(with_q, dict(full, qdiscs=lossy))),
+    )
+    assert skipped == [] and injected_between["execution_attempted"] is False
+    assert injected_between["execution_error"] == "path qdisc changed since the gate decision"
+    assert injected_between["execution_baseline"]["qdiscs"] == shaped
+
+    def broken_read(net, links=None):
+        raise RuntimeError("tc missing")
+
+    reads_left = [broken_read, lambda net, links=None: with_q]
+
+    def flaky_read(net, links=None):
+        return reads_left.pop(0)(net, links)
+
+    no_baseline = run_episode(
+        object(), {}, fault_id="H0", run_oam=False,
+        agent_fn=reroute_agent, gate_fn=allow_gate,
+        execute_fn=lambda proposal: skipped.append("execute"),
+        _components=dict(fakes, read_state=flaky_read),
+    )
+    assert skipped == [] and no_baseline["execution_attempted"] is False
+    assert no_baseline["execution_baseline"]["error"] == "RuntimeError: tc missing"
+    assert no_baseline["execution_error"] == "gate snapshot has no path qdisc fingerprint"
+
+    rerouted = run_episode(
+        object(), {}, fault_id="H0", run_oam=False,
+        agent_fn=reroute_agent, gate_fn=allow_gate,
+        execute_fn=lambda proposal: {"executed": True, "action": "REROUTE"},
+        _components=dict(fakes, read_state=stateful(
+            with_q, with_q, dict(full, qdiscs=shaped, routes=on_backup["routes"]),
+        )),
+    )
+    assert rerouted["state_verified"] is True and rerouted["remediation_succeeded"] is True, rerouted
+
+    import bench.outcomes as outcomes
+
+    predicted_ok = dict(
+        backup,
+        causes=[{"cause_id": "F3", "predicted_tests": [{"test_id": "T1_e2e_ping", "expected": "ok"}]}],
+    )
+    slow_ping = [{"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0, "latency_ms": 180.0}]
+    saved_report = outcomes._REPORT
+    outcomes._REPORT = Path(tempfile.gettempdir()) / f"absent-{uuid.uuid4().hex}.json"
+    try:
+        limits = {level: outcomes.load_yaml_thresholds(level)["T1_e2e_ping"]["max_latency_ms"] for level in ("N0", "N2")}
+        assert limits["N0"] < 180.0 < limits["N2"], limits
+        at_n0 = gate_decide(None, predicted_ok, healthy, slow_ping, mode="pilot_v0", run_missing_tests=False)
+        at_n2 = gate_decide(None, predicted_ok, healthy, slow_ping, mode="pilot_v0", run_missing_tests=False, noise_id="N2")
+    finally:
+        outcomes._REPORT = saved_report
+    assert at_n0["decision"] == "block" and at_n0["reason"] == "consistency failed", at_n0
+    assert at_n2["decision"] == "allow", at_n2
+
     oam._check_costs()
     priced = {
         "action": "DO_NOTHING",
@@ -822,6 +1015,22 @@ def _self_check():
     rolled = aggregate_episode_costs(tempfile.mkdtemp())
     assert rolled["episodes"] == 0 and rolled["oam"] is None
 
+    rollup_dir = Path(tempfile.mkdtemp())
+    save_episode(connected, rollup_dir)
+    save_episode(dict(connected, episode_id="second"), rollup_dir)
+    (rollup_dir / "_batch_state.json").write_text(json.dumps({"completed": 2}), encoding="utf-8")
+    rolled = aggregate_episode_costs(rollup_dir)
+    assert rolled["episodes"] == 2, rolled
+    assert rolled["oam"]["total_duration_seconds"] is None
+    selection = rolled["gate_test_selection"]
+    assert selection["episodes"] == 2
+    assert selection["full_battery"]["total_additional_packets"] is None
+    assert selection["selected_tests"]["total_duration_seconds"] == 0.0
+    assert selection["selected_tests"]["total_additional_bytes"] == 0
+    for item in rollup_dir.iterdir():
+        item.unlink()
+    rollup_dir.rmdir()
+
     print("execution boundary: PASS")
 
 
@@ -837,8 +1046,10 @@ def live_oam_cost():
     if not hasattr(os, "geteuid") or os.geteuid() != 0:
         print("live OAM cost check must run as root on the Mininet VM.", file=sys.stderr)
         return 2
+    from bench.mininet_util import mn_cleanup, stop_iperf3_server
     from network.topology import create_network
 
+    mn_cleanup()
     state = create_network()
     net = state["net"]
     try:
@@ -846,16 +1057,26 @@ def live_oam_cost():
         cost = bundle.get("cost") or {}
         results = {row.get("test_id"): row for row in (bundle.get("results") or [])}
     finally:
-        net.stop()
+        try:
+            stop_iperf3_server(net)
+        finally:
+            net.stop()
+            mn_cleanup()
 
     failures = []
     if cost.get("test_count") != 9:
         failures.append(f"test_count={cost.get('test_count')}")
+    for test_id, row in results.items():
+        if row.get("error"):
+            failures.append(f"{test_id} error={row.get('error')}")
+        if not isinstance(row.get("duration_seconds"), (int, float)):
+            failures.append(f"{test_id} has no duration")
+    t8 = results.get("T8_tcp_vs_ping") or {}
+    if t8.get("tcp_ok") is not True:
+        failures.append("T8 TCP connect failed (no iperf3 listener on 5201)")
     t10 = results.get("T10_speed") or {}
     if (t10.get("duration_seconds") or 0) < 1.0:
         failures.append("T10 finished too quickly (iperf likely failed)")
-    if t10.get("error"):
-        failures.append(f"T10 error={t10.get('error')}")
     probes = t10.get("probes") or []
     iperf_bytes = probes[0].get("bytes") if probes else None
     if not isinstance(iperf_bytes, int) or iperf_bytes <= 0:
@@ -889,9 +1110,11 @@ def live_diamond():
     if not hasattr(os, "geteuid") or os.geteuid() != 0:
         print("diamond integration must run as root on the Mininet VM.", file=sys.stderr)
         return 2
+    from bench.mininet_util import mn_cleanup
     from network.topology import create_network
 
     parts = default_components()
+    mn_cleanup()
     state = create_network()
     net, links = state["net"], state["links"]
     try:
@@ -912,6 +1135,7 @@ def live_diamond():
                 oam_results,
                 mode="pilot_v0",
                 run_missing_tests=False,
+                noise_id=record["noise_id"],
             )
 
         record = run_episode(
@@ -950,7 +1174,122 @@ def live_diamond():
     return 0
 
 
+def live_recheck():
+    """Execution recheck against the live diamond, one case per stale-state kind.
+
+    On the VM, as root:
+
+        sudo python3 bench/run_episode.py --live-recheck
+
+    Link-down cases run last: taking an interface down deletes the static
+    routes through it, and the earlier cases need the backup path to carry traffic.
+    """
+    import os
+
+    if not hasattr(os, "geteuid") or os.geteuid() != 0:
+        print("live recheck must run as root on the Mininet VM.", file=sys.stderr)
+        return 2
+    from bench.mininet_util import mn_cleanup, run_in_node
+    from control.actions import execute, proposal_to_action
+    from network import controller as ctl
+    from network.topology import create_network
+
+    mn_cleanup()
+    state = create_network()
+    net, links = state["net"], state["links"]
+    proposal = {
+        "action": "REROUTE",
+        "target": "HostA_to_HostB",
+        "reason": "live recheck",
+        "proposed_path": ["r1", "r3", "r4"],
+    }
+    allow = {"decision": "allow"}
+    executed = []
+
+    def read():
+        return read_execution_state(net, links)
+
+    def controller(item):
+        executed.append(item)
+        action, payload = proposal_to_action(item)
+        return execute(net, action, payload)
+
+    def one_sided(item):
+        executed.append(item)
+        run_in_node(net.get("r1"), "ip route replace 10.0.4.0/24 via 10.0.13.2 dev r1-eth2")
+        return {"executed": True, "action": "REROUTE", "path": "backup"}
+
+    def attempt(execute_fn=controller, approved=None):
+        executed.clear()
+        return apply_authorized_action(allow, proposal, execute_fn, approved or read(), read)
+
+    failures = []
+
+    def expect(label, ok, detail=""):
+        print(f"  {'PASS' if ok else 'FAIL'}  {label}" + (f": {detail}" if detail and not ok else ""))
+        if not ok:
+            failures.append(label)
+
+    try:
+        out = attempt()
+        loss = oam._parse_ping(run_in_node(net.get("hostA"), "ping -c 5 -i 0.2 -W 1 10.0.4.2"))["packet_loss_percent"]
+        expect(
+            "allow executes and both routers move to backup",
+            out["state_verified"] and out["remediation_succeeded"] and _routes_on_path(read(), "backup"),
+            str(out),
+        )
+        expect("traffic flows on backup", loss < 100.0, f"loss {loss}%")
+        ctl.set_active_path(net, "primary")
+
+        approved = read()
+        ctl.set_active_path(net, "backup")
+        out = attempt(approved=approved)
+        expect("stale route blocks execution", not executed and out["execution_error"] == "route changed since the gate decision", str(out))
+        ctl.set_active_path(net, "primary")
+
+        approved = read()
+        lossy = ctl.get_link(net, "r1-r3", links)
+        ctl.configure_link(lossy, loss=20)
+        out = attempt(approved=approved)
+        expect("qdisc change blocks execution", not executed and out["execution_error"] == "path qdisc changed since the gate decision", str(out))
+        ctl.configure_link(lossy, **ctl.BASELINE_LINK_PARAMS)
+
+        out = attempt(one_sided)
+        expect(
+            "one-sided reroute is recorded as partial",
+            len(executed) == 1 and out["remediation_succeeded"] is False and out["execution_error"] == "partial remediation",
+            str(out),
+        )
+        ctl.set_active_path(net, "primary")
+        expect("primary restored", _routes_on_path(read(), "primary"))
+
+        approved = read()
+        changed = ctl.get_link(net, "r3-r4", links)
+        ctl.link_down(changed)
+        out = attempt(approved=approved)
+        expect("backup link change blocks execution", not executed and out["execution_error"] == "path state changed since the gate decision", str(out))
+        ctl.link_up(changed)
+
+        down = ctl.get_link(net, "r1-r3", links)
+        ctl.link_down(down)
+        out = attempt()
+        expect("backup already down blocks execution", not executed and out["execution_error"] == "backup path is down", str(out))
+        ctl.link_up(down)
+        expect("routes still on primary after blocked cases", _routes_on_path(read(), "primary"))
+    finally:
+        net.stop()
+        mn_cleanup()
+
+    if failures:
+        print("live recheck: FAIL " + "; ".join(failures))
+        return 1
+    print("live recheck: PASS")
+    return 0
+
+
 if __name__ == "__main__":
+    if "--live-recheck" in sys.argv:
+        sys.exit(live_recheck())
     if "--live" in sys.argv:
         sys.exit(live_diamond())
     if "--live-cost" in sys.argv:

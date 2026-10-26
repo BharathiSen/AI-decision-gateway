@@ -64,16 +64,22 @@ def set_active_path(net, path):
         router.cmd(f"ip route replace {cfg['dest']} via {hop['via']} dev {hop['dev']}")
 
 
+def path_from_route(router_name, route):
+    """primary, backup, or none for one router's route text to the far LAN."""
+    cfg = ROUTE_TARGETS[router_name]
+    route = route or ""
+    if f"via {cfg['primary']['via']} " in route + " ":
+        return "primary"
+    if f"via {cfg['backup']['via']} " in route + " ":
+        return "backup"
+    return "none"
+
+
 def get_active_path(net):
     """Inspect r1's routing table to report which path is active."""
     r1 = net.get("r1")
     route = r1.cmd(f"ip route show {ROUTE_TARGETS['r1']['dest']}")
-
-    if ROUTE_TARGETS["r1"]["primary"]["via"] in route:
-        return "primary"
-    if ROUTE_TARGETS["r1"]["backup"]["via"] in route:
-        return "backup"
-    return "none"
+    return path_from_route("r1", route)
 
 
 def _intf_is_up(intf):

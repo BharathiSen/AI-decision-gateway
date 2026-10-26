@@ -6,6 +6,7 @@ from control.actions import normalize_action, RISKY_ACTIONS, Action
 from gate import catalog, checks, selector
 from gate.grader import grade_test
 from bench import tests as oam
+from bench.outcomes import load_thresholds
 
 
 def _symptoms_from_snapshot(snapshot):
@@ -23,12 +24,12 @@ def _symptoms_from_snapshot(snapshot):
     }
 
 
-def _outcome_for_test(test_result, fault_id, matrix_rows):
+def _outcome_for_test(test_result, fault_id, matrix_rows, thresholds=None):
     tid = test_result["test_id"]
     for row in matrix_rows:
         if row["fault_id"] == fault_id and row["test_id"] == tid:
             return row["outcome"]
-    return checks._summarize_observation(test_result)
+    return checks._summarize_observation(test_result, thresholds)
 
 
 def decide(
@@ -39,14 +40,17 @@ def decide(
     already_ran=None,
     mode="full",
     run_missing_tests=True,
+    noise_id="N0",
 ):
     """
     mode: 'full' | 'pilot_v0' (consistency + safety only)
+    noise_id selects the traffic-level thresholds used to grade results.
     Returns audit dict with decision in {allow, block, escalate}.
     """
     already_ran = list(already_ran or [])
     test_results = list(test_results or [])
     matrix_rows = selector._load_matrix()
+    thresholds = load_thresholds(noise_id)
 
     try:
         action = normalize_action(proposal.get("action"))
@@ -78,7 +82,7 @@ def decide(
                 tests_run.append(oam.run_test(net, tid))
                 ran_ids.add(tid)
             tr = next(r for r in tests_run if r["test_id"] == tid)
-            obs = checks._summarize_observation(tr)
+            obs = checks._summarize_observation(tr, thresholds)
             primary_pred = next(
                 (
                     p
@@ -89,12 +93,12 @@ def decide(
                 ),
                 None,
             )
-            exp_alt = _outcome_for_test(tr, alt, matrix_rows)
+            exp_alt = _outcome_for_test(tr, alt, matrix_rows, thresholds)
             exp_primary = primary_pred["expected"] if primary_pred else obs
             if obs != exp_alt and grade_test(tid, obs, exp_primary) >= 0.5:
                 ruled_out.append({"alternative": alt, "test_id": tid, "observed": obs})
 
-    consistency = checks.check_consistency(proposal, tests_run, primary_cause_id=primary)
+    consistency = checks.check_consistency(proposal, tests_run, primary_cause_id=primary, thresholds=thresholds)
     discrimination = checks.check_discrimination(ruled_out)
     safety = checks.check_safety(proposal, network_snapshot)
 

@@ -17,6 +17,7 @@ from bench.contracts import TEST_IDS
 CANONICAL_ACTIONS = {"REROUTE", "DO_NOTHING", "ESCALATE"}
 ALLOWED_ACTIONS = CANONICAL_ACTIONS
 ALLOWED_TESTS = set(TEST_IDS)
+SUPPORTED_TARGETS = {"HostA_to_HostB"}
 MAX_EXPECTED_LEN = 80
 MAX_PROPOSAL_BYTES = 8 * 1024
 PROPOSAL_MAX_AGE_SECONDS = 120
@@ -70,6 +71,9 @@ def validate_proposal(data, allowed_actions=None, max_causes=5, max_bytes=MAX_PR
             errors.append(f"missing {key}")
         elif not isinstance(data.get(key), str) or not str(data.get(key)).strip():
             errors.append(f"{key} must be a non-empty string")
+    target = data.get("target")
+    if isinstance(target, str) and target.strip() and target not in SUPPORTED_TARGETS:
+        errors.append(f"target {target!r} is not a supported flow")
 
     allowed = set(allowed_actions or CANONICAL_ACTIONS)
     action = data.get("action")

@@ -70,6 +70,11 @@ def main():
     ok, errs = validate_proposal(empty_target)
     check("blank target rejected", not ok, errs)
 
+    other_flow = copy.deepcopy(good)
+    other_flow["target"] = "HostC_to_HostD"
+    ok, errs = validate_proposal(other_flow)
+    check("unsupported target rejected", not ok, errs)
+
     for action in ("REBALANCE", "reroute_traffic", "no_action", "reboot"):
         unsupported = copy.deepcopy(good)
         unsupported["action"] = action
@@ -129,6 +134,10 @@ def main():
         "stale observed_at rejected",
         any("does not match" in err for err in proposal_freshness_errors(stale, {"timestamp": ts})),
     )
+    old = "2020-01-01T00:00:00+00:00"
+    aged = proposal_freshness_errors(dict(no_causes, observed_at=old), {"timestamp": old})
+    check("old proposal rejected even when timestamps match", any("age" in err for err in aged), aged)
+    check("missing observed_at rejected", proposal_freshness_errors(dict(no_causes), {"timestamp": ts}) == ["missing observed_at"])
     print("PASS")
 
 

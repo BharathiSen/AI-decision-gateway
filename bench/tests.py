@@ -562,10 +562,10 @@ def run_all(net, test_ids=None, ping_count=None, error_probe=None, ping_interval
         ids = [i for i in ids if i != "T10_speed"] + ["T10_speed"]
     started = datetime.now(timezone.utc).isoformat()
     results = []
-    if "T10_speed" in ids:
-        from bench.mininet_util import ensure_iperf3_server
+    from bench import mininet_util as mu
 
-        ensure_iperf3_server(net)
+    if "T8_tcp_vs_ping" in ids or "T10_speed" in ids:
+        mu.ensure_iperf3_server(net)
     for tid in ids:
         kwargs = {}
         if ping_count and tid in ("T1_e2e_ping", "T2_hop_ping", "T9_oneway_loss"):
@@ -577,7 +577,18 @@ def run_all(net, test_ids=None, ping_count=None, error_probe=None, ping_interval
             kwargs["duration"] = speed_seconds
         t0 = time.monotonic()
         try:
-            row = run_test(net, tid, **kwargs)
+            if tid == "T10_speed":
+                # The long-lived 5201 server stops answering after a few
+                # clients (and after T8's bare connect). T10 gets its own.
+                server = mu.start_one_off_iperf3(net, port=5201)
+                time.sleep(0.2)
+                try:
+                    row = run_test(net, tid, **kwargs)
+                finally:
+                    mu.finish_one_off(server)
+                    mu.free_tcp_port(net, 5201)
+            else:
+                row = run_test(net, tid, **kwargs)
             if isinstance(row, dict) and "error" not in row:
                 row["error"] = None
             results.append(row)
@@ -684,6 +695,42 @@ def _check_costs():
         assert failed["results"][0]["test_id"] == "T7_route_check"
     finally:
         TEST_FUNCS["T7_route_check"] = saved
+
+    from bench import mininet_util as mu
+
+    calls = []
+    patched = {
+        "ensure_iperf3_server": lambda net, *a, **k: calls.append("ensure"),
+        "start_one_off_iperf3": lambda net, *a, **k: calls.append("one_off") or "server",
+        "finish_one_off": lambda proc: calls.append(f"finish:{proc}"),
+        "free_tcp_port": lambda net, port, *a, **k: calls.append(f"free:{port}"),
+    }
+    saved_mu = {name: getattr(mu, name) for name in patched}
+    saved_tests = {tid: TEST_FUNCS[tid] for tid in ("T7_route_check", "T8_tcp_vs_ping", "T10_speed")}
+    for name, fn in patched.items():
+        setattr(mu, name, fn)
+    TEST_FUNCS["T7_route_check"] = lambda _net, **_k: calls.append("T7") or {"test_id": "T7_route_check"}
+    TEST_FUNCS["T8_tcp_vs_ping"] = lambda _net, **_k: calls.append("T8") or {"test_id": "T8_tcp_vs_ping"}
+
+    def _speed_boom(_net, **_k):
+        calls.append("T10")
+        raise RuntimeError("iperf3 died")
+
+    TEST_FUNCS["T10_speed"] = _speed_boom
+    try:
+        run_all(object(), test_ids=["T7_route_check"])
+        assert calls == ["T7"], calls
+        calls.clear()
+        run_all(object(), test_ids=["T8_tcp_vs_ping"])
+        assert calls == ["ensure", "T8"], calls
+        calls.clear()
+        crashed = run_all(object(), test_ids=["T10_speed", "T8_tcp_vs_ping"])
+        assert calls == ["ensure", "T8", "one_off", "T10", "finish:server", "free:5201"], calls
+        assert crashed["results"][-1]["error"] == "RuntimeError: iperf3 died"
+    finally:
+        for name, fn in saved_mu.items():
+            setattr(mu, name, fn)
+        TEST_FUNCS.update(saved_tests)
 
     tcp = summarize_costs([{
         "test_id": "T8_tcp_vs_ping",

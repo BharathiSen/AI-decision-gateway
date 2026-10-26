@@ -569,8 +569,7 @@ def _self_check():
     )
     assert parsed == [8.0, 7.5]
     filler = inspect.getsource(fill_missing_speed)
-    assert "measure_speed_once" in filler and "ensure_iperf3_server" in filler
-    assert "start_one_off_iperf3" not in filler
+    assert "measure_speed_once" in filler and "start_one_off_iperf3" in filler
     assert "SPEED_FILL_CAP" in filler
     assert "_call_with_timeout" not in filler
     from bench.mininet_util import start_one_off_iperf3
@@ -678,6 +677,35 @@ def _self_check():
     report_path.unlink()
     report_path.parent.rmdir()
 
+    # A run skipped mid-sitting must not make the next sitting reuse an index.
+    gapped = Path(tempfile.mkdtemp()) / "samples.jsonl"
+    gap_rows = [
+        {"noise_id": "N0", "index": index, "bundle": {"results": _healthy_result(mbit=mbit)}}
+        for index, mbit in ((0, 8.0), (1, 8.0), (3, None), (3, 7.0))
+    ]
+    gap_rows.append({"noise_id": "N2", "index": 9, "bundle": {"results": []}})
+    gapped.write_text("".join(json.dumps(item) + "\n" for item in gap_rows), encoding="utf-8")
+    assert len(_bundles_for(gapped, "N0")) == 3
+    assert _next_index(gapped, "N0") == 4 and _next_index(gapped, "N1") == 0
+    assert _t10_mbit(_bundles_for(gapped, "N0")[2]) == 7.0
+    _replace_noise_bundles(gapped, "N0", {2: {"results": _healthy_result(mbit=6.0)}})
+    assert _t10_mbit(_bundles_for(gapped, "N0")[2]) == 6.0
+    assert _t10_mbit(_read_rows(gapped)[2]["bundle"]) is None
+    assert _bundles_for(gapped, "N2") == [{"results": []}]
+    live_source = inspect.getsource(collect_healthy)
+    assert "_next_index" in live_source and "_bundles_for" in live_source
+    gapped.unlink()
+    gapped.parent.rmdir()
+
+    merged_path = Path(tempfile.mkdtemp()) / "calibration_report.json"
+    _emit_reports({"N0": {"proposed_thresholds": {"T10_speed": {"min_mbit": 1.0}}}}, merged_path)
+    _emit_reports({"N2": {"proposed_thresholds": {"T10_speed": {"min_mbit": 0.2}}}}, merged_path)
+    merged = json.loads(merged_path.read_text(encoding="utf-8"))
+    assert set(merged["levels"]) == {"N0", "N2"}, merged
+    merged_path.unlink()
+    merged_path.parent.rmdir()
+    assert THRESHOLDS_PATH.read_text(encoding="utf-8") == before
+
     print("healthy calibration: PASS")
 
 
@@ -759,15 +787,32 @@ def _write_rows(path, rows):
 
 
 def _replace_noise_bundles(path, noise_id, updates):
-    """Replace several saved bundles for one noise level in a single write."""
+    """Replace several saved bundles for one noise level in a single write.
+
+    Keys are positions in the _bundles_for() list. Each maps to a saved
+    run index; the last row with that index is the one replaced.
+    """
     rows = _read_rows(path)
-    positions = [pos for pos, item in enumerate(rows) if item.get("noise_id") == noise_id]
-    for index, bundle in updates.items():
-        if index >= len(positions):
+    last_row = {}
+    for pos, item in enumerate(rows):
+        if item.get("noise_id") == noise_id and isinstance(item.get("index"), int):
+            last_row[item["index"]] = pos
+    ordered = sorted(last_row)
+    for position, bundle in updates.items():
+        if position >= len(ordered):
             continue
-        rows[positions[index]]["bundle"] = bundle
-        rows[positions[index]]["index"] = index
+        rows[last_row[ordered[position]]]["bundle"] = bundle
     _write_rows(path, rows)
+
+
+def _next_index(path, noise_id):
+    """One past the highest saved run index, so a skipped run never reuses one."""
+    indexes = [
+        item["index"]
+        for item in _read_rows(path)
+        if item.get("noise_id") == noise_id and isinstance(item.get("index"), int)
+    ]
+    return max(indexes) + 1 if indexes else 0
 
 
 def _t10_mbit(bundle):
@@ -799,13 +844,12 @@ def _print_iperf_tail(raw):
 def fill_missing_speed(net, bundles, noise_id, sample_path=SAMPLES_PATH, batch=CALIBRATION_BATCH):
     """Fill missing T10 readings, then return so the VM can stop.
 
-    Reuses the long-lived iperf3 on 5201. Starting a one-off server on the
-    same port made most attempts print "no bitrate" and kept Mininet up
-    long enough for the guest to lock or freeze.
+    A long-lived iperf3 on 5201 dies after a few clients (Broken pipe).
+    Each fill uses a one-off `iperf3 -s -1` after freeing that port.
     """
     del batch
     from bench import tests as oam
-    from bench.mininet_util import ensure_iperf3_server
+    from bench.mininet_util import finish_one_off, free_tcp_port, start_one_off_iperf3, stop_iperf3_server
 
     missing = [index for index, bundle in enumerate(bundles) if _t10_mbit(bundle) is None]
     if not missing:
@@ -816,13 +860,20 @@ def fill_missing_speed(net, bundles, noise_id, sample_path=SAMPLES_PATH, batch=C
         f"Collecting up to {count} in {FILL_SITTING_SECONDS}s, then this command exits.",
         flush=True,
     )
-    ensure_iperf3_server(net)
+    stop_iperf3_server(net, port=5201)
+    free_tcp_port(net, 5201)
     found = []
     attempts = 0
     deadline = time.monotonic() + FILL_SITTING_SECONDS
-    while len(found) < count and attempts < count + 5 and time.monotonic() < deadline:
+    while len(found) < count and attempts < count + 8 and time.monotonic() < deadline:
         attempts += 1
-        mbit, raw = oam.measure_speed_once(net, port=5201)
+        server = start_one_off_iperf3(net, port=5201)
+        time.sleep(0.2)
+        try:
+            mbit, raw = oam.measure_speed_once(net, port=5201)
+        finally:
+            finish_one_off(server)
+            free_tcp_port(net, 5201)
         failed = mbit is None or "unable to send" in (raw or "") or "error -" in (raw or "")
         if failed:
             _print_iperf_tail(raw)
@@ -867,15 +918,17 @@ def collect_healthy(net, runs, test_ids, noise_id="N0", sample_path=SAMPLES_PATH
     from bench import tests as oam
     from bench.mininet_util import recover_net
 
-    bundles = _load_samples(sample_path, noise_id)
+    bundles = _bundles_for(sample_path, noise_id)
     goal = _session_goal(len(bundles), runs, batch)
     if len(bundles) >= runs:
         print(f"  {noise_id} already has {len(bundles)} saved runs.", flush=True)
         return bundles[:runs]
     print(f"  resuming {noise_id} at {len(bundles) + 1}/{runs}; this sitting stops at {goal}.", flush=True)
     inj.reset_all(net)
-    for index in range(len(bundles), goal):
-        print(f"  run {index + 1}/{runs} ...", flush=True)
+    next_index = _next_index(sample_path, noise_id)
+    for _attempt in range(goal - len(bundles)):
+        index = next_index
+        print(f"  run {len(bundles) + 1}/{runs} ...", flush=True)
         started = time.monotonic()
         try:
             raw = _call_with_timeout(
@@ -891,12 +944,13 @@ def collect_healthy(net, runs, test_ids, noise_id="N0", sample_path=SAMPLES_PATH
             bundle = _slim(raw)
             bundle["battery"] = dict(EPISODE_BATTERY)
         except (UnicodeDecodeError, TimeoutError) as exc:
-            print(f"  run {index + 1}/{runs} skipped: {exc}", flush=True)
+            print(f"  run {len(bundles) + 1}/{runs} skipped: {exc}", flush=True)
             recover_net(net)
             continue
         _append_sample(sample_path, noise_id, index, bundle, battery=EPISODE_BATTERY)
+        next_index += 1
         bundles.append(bundle)
-        print(f"  run {index + 1}/{runs} done in {time.monotonic() - started:.0f}s", flush=True)
+        print(f"  run {len(bundles)}/{runs} done in {time.monotonic() - started:.0f}s", flush=True)
     return bundles
 
 
@@ -1041,10 +1095,18 @@ def _reprint_only(noise_ids, runs, eval_runs, sample_path=SAMPLES_PATH, from_sav
 def _emit_reports(reports, report_path, write_thresholds=False):
     if not reports:
         return
-    payload = {"version": 1, "levels": reports}
     out = Path(report_path)
     if not out.is_absolute():
         out = ROOT / out
+    levels = {}
+    try:
+        previous = json.loads(out.read_text(encoding="utf-8"))
+        if isinstance(previous.get("levels"), dict):
+            levels.update(previous["levels"])
+    except (OSError, ValueError, AttributeError):
+        pass
+    levels.update(reports)
+    payload = {"version": 1, "levels": levels}
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     print(json.dumps(payload, indent=2))
