@@ -14,16 +14,16 @@ so the VM can be powered off. Run the same command again to continue:
 
     sudo python3 bench/calibrate_healthy.py --noise N0 --runs 200 --eval-runs 50
 
-When the checkpoint already has the requested runs, the command reprints
-that file and does not start Mininet, even if --fill-speed is passed.
-A speed above the configured link rate is left out. Queue backlog is not
-a false alarm when that noise level enables background traffic.
+Episode-aligned collection (10 pings, 3 s T10) writes
+results/calibration_samples_episode.jsonl. Repeat the same command until
+that file has 250 runs and every T10 bitrate is present:
 
-    python3 bench/calibrate_healthy.py --from-saved --noise all --runs 200 --eval-runs 50
+    sudo python3 bench/calibrate_healthy.py --noise N0 --runs 200 --eval-runs 50 --batch 10 --fill-speed --samples results/calibration_samples_episode.jsonl
 
---write-thresholds is refused unless that sample is a full battery of
-at least 200 calibration runs plus a separate eval set. The configured
-speed floor is kept when the healthy low tail sits below it.
+--fill-speed starts Mininet when T10 bitrates are missing. It does not
+reprint. --from-saved reprints without Mininet. --write-thresholds is
+refused unless the episode battery, 200 fit runs, a held-out eval set,
+and false_alarm_rate_target are all met.
 """
 
 import argparse
@@ -644,6 +644,8 @@ def _self_check():
     assert _reprint_only(["N0"], 3, 1, saved, False) is True
     assert _reprint_only(["N0"], 200, 50, saved, False) is False
     assert _reprint_only(["N0"], 200, 50, saved, True) is True
+    assert _checkpoint_complete(["N0"], 3, 1, saved) is True
+    assert _needs_speed_fill(["N0"], 3, 1, saved) is True
     saved.unlink()
     saved.parent.rmdir()
 
@@ -1006,28 +1008,45 @@ def _bundles_for(path, noise_id, minimum=0):
     return [chosen[index] for index in sorted(chosen)]
 
 
-def _missing_t10_in_checkpoint(sample_path, noise_id, total):
-    bundles = _bundles_for(sample_path, noise_id, total)
-    if len(bundles) < total:
+def _missing_t10_in_checkpoint(sample_path, noise_id, total=None):
+    bundles = _bundles_for(sample_path, noise_id)
+    if total is not None and len(bundles) < total:
         return 0
     return sum(1 for bundle in bundles if _t10_mbit(bundle) is None)
+
+
+def _checkpoint_complete(noise_ids, runs, eval_runs, sample_path):
+    total = runs + eval_runs
+    return all(len(_bundles_for(sample_path, noise_id)) >= total for noise_id in noise_ids)
 
 
 def _needs_speed_fill(noise_ids, runs, eval_runs, sample_path):
     """Saved runs are complete but some T10 bitrates are still missing."""
     total = runs + eval_runs
-    for noise_id in noise_ids:
-        if _missing_t10_in_checkpoint(sample_path, noise_id, total) > 0:
-            return True
-    return False
+    if not _checkpoint_complete(noise_ids, runs, eval_runs, sample_path):
+        return False
+    return any(_missing_t10_in_checkpoint(sample_path, noise_id, total) > 0 for noise_id in noise_ids)
 
 
 def _reprint_only(noise_ids, runs, eval_runs, sample_path=SAMPLES_PATH, from_saved=False):
     """True when this launch must not start Mininet."""
     if from_saved:
         return True
-    total = runs + eval_runs
-    return all(len(_bundles_for(sample_path, noise_id, total)) >= total for noise_id in noise_ids)
+    return _checkpoint_complete(noise_ids, runs, eval_runs, sample_path)
+
+
+def _emit_reports(reports, report_path, write_thresholds=False):
+    if not reports:
+        return
+    payload = {"version": 1, "levels": reports}
+    out = Path(report_path)
+    if not out.is_absolute():
+        out = ROOT / out
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    print(json.dumps(payload, indent=2))
+    if write_thresholds:
+        update_thresholds_yaml(reports)
 
 
 def report_from_saved(noise_ids, runs, eval_runs, seed=0, sample_path=SAMPLES_PATH):
@@ -1117,46 +1136,33 @@ def main():
     if args.from_saved and not sample_path.is_file():
         print(
             f"No checkpoint at {sample_path}.\n"
-            "On the VM, samples live under ~/AI-decision-gateway/results/calibration_samples.jsonl.\n"
-            "Copy that file here, then run:\n"
-            "  python3 bench/calibrate_healthy.py --from-saved --noise all --runs 200 --eval-runs 50",
+            "On the VM, episode samples live under results/calibration_samples_episode.jsonl.",
             file=sys.stderr,
         )
         sys.exit(2)
-    if args.fill_speed and not args.from_saved:
-        missing = {
-            noise_id: _missing_t10_in_checkpoint(sample_path, noise_id, args.runs + args.eval_runs)
-            for noise_id in noise_ids
-        }
-        if any(missing.values()):
-            print(
-                "Checkpoint has missing T10 bitrates; starting Mininet speed fill "
-                f"(up to {SPEED_FILL_CAP} per launch): {missing}",
-                flush=True,
-            )
-        else:
-            print("No missing T10 bitrates in the checkpoint. Reprinting.", flush=True)
-            args.from_saved = True
-    if _reprint_only(
-        noise_ids, args.runs, args.eval_runs, sample_path=sample_path, from_saved=args.from_saved,
-    ) and not (args.fill_speed and not args.from_saved):
-        if args.write_thresholds:
-            print("Refusing --write-thresholds on a reprint. Paste the report first.", file=sys.stderr)
-            sys.exit(2)
+
+    total = args.runs + args.eval_runs
+    complete = _checkpoint_complete(noise_ids, args.runs, args.eval_runs, sample_path)
+    missing = {
+        noise_id: _missing_t10_in_checkpoint(sample_path, noise_id, total)
+        for noise_id in noise_ids
+    }
+    fill_now = args.fill_speed and not args.from_saved and complete and any(missing.values())
+    reprint = args.from_saved or (complete and not fill_now)
+
+    if fill_now:
+        print(
+            "Checkpoint has missing T10 bitrates; starting Mininet speed fill "
+            f"(up to {SPEED_FILL_CAP} per launch): {missing}",
+            flush=True,
+        )
+    if reprint:
         if not args.from_saved:
             print("Saved runs already cover this sample. Reprinting. Mininet will not start.", flush=True)
         reports = report_from_saved(
             noise_ids, args.runs, args.eval_runs, seed=args.seed, sample_path=sample_path,
         )
-        if not reports:
-            return
-        payload = {"version": 1, "levels": reports}
-        out = Path(args.report)
-        if not out.is_absolute():
-            out = ROOT / out
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        print(json.dumps(payload, indent=2))
+        _emit_reports(reports, args.report, write_thresholds=args.write_thresholds)
         return
 
     if not _is_root():
@@ -1176,17 +1182,12 @@ def main():
     )
     if reports is None:
         return
-    payload = {"version": 1, "levels": reports}
-    out = Path(args.report)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    print(json.dumps(payload, indent=2))
-    if args.write_thresholds:
-        update_thresholds_yaml(reports)
+    _emit_reports(reports, args.report, write_thresholds=args.write_thresholds)
 
 
 if __name__ == "__main__":
-    if any(flag in sys.argv for flag in ("-h", "--help", "--from-saved")):
+    live_flags = ("-h", "--help", "--from-saved", "--fill-speed", "--write-thresholds")
+    if any(flag in sys.argv for flag in live_flags):
         main()
     elif "--check" in sys.argv:
         _self_check()
