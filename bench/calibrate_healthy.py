@@ -336,19 +336,67 @@ def score_false_alarms(bundles, thresholds, noise_id=None):
     return alarms
 
 
-def _alarm_tests(bundles, thresholds, noise_id=None):
+def _alarm_key(test_id, outcome):
+    """test_id plus the failing part. T2 names each failing hop, e.g. primary:r2=loss."""
+    outcome = str(outcome)
+    if test_id == "T2_hop_ping":
+        bad = []
+        for chunk in outcome.split(";"):
+            path, _, hops = chunk.partition(":")
+            bad += [f"{path}:{part}" for part in hops.split(",") if part and not part.endswith("=ok")]
+        return f"{test_id}:{'+'.join(bad)}" if bad else test_id
+    kind = outcome.split(":", 1)[0]
+    return test_id if kind in ("", "ok") else f"{test_id}:{kind}"
+
+
+def _alarm_values(result):
+    """The numbers behind one alarm, so a stall, a lost reply and a real fault can be told apart."""
+    def _ping(row):
+        row = row or {}
+        return {
+            key: row.get(key)
+            for key in ("latency_ms", "latency_avg_ms", "packet_loss_percent", "rtt_ms", "latency_basis")
+            if row.get(key) is not None
+        }
+
+    test_id = result.get("test_id")
+    if test_id == "T1_e2e_ping":
+        return _ping(result)
+    if test_id == "T2_hop_ping":
+        return {
+            f"{path}:{hop.get('dst_ip')}": _ping(hop)
+            for path in ("primary", "backup")
+            for hop in result.get(f"hops_{path}") or []
+        }
+    if test_id == "T9_oneway_loss":
+        return {key: _ping(result.get(key)) for key in ("hostA_to_hostB", "hostB_to_hostA")}
+    return {}
+
+
+def _alarm_runs(bundles, thresholds, noise_id=None, first_index=0):
+    """One entry per alarming run: its position and the first test that alarmed."""
     background = _background_enabled(noise_id)
-    found = {}
-    for bundle in bundles:
+    runs = []
+    for offset, bundle in enumerate(bundles):
         for result in bundle.get("results") or []:
             outcome = grade_result(result, thresholds)
             if not _counts_as_alarm(result, outcome, thresholds, background):
                 continue
             test_id = result.get("test_id")
-            kind = str(outcome).split(":", 1)[0]
-            key = test_id if kind in ("", "ok") else f"{test_id}:{kind}"
-            found[key] = found.get(key, 0) + 1
+            runs.append({
+                "run": first_index + offset,
+                "alarm": _alarm_key(test_id, outcome),
+                "outcome": outcome,
+                "values": _alarm_values(result),
+            })
             break
+    return runs
+
+
+def _alarm_tests(bundles, thresholds, noise_id=None):
+    found = {}
+    for run in _alarm_runs(bundles, thresholds, noise_id):
+        found[run["alarm"]] = found.get(run["alarm"], 0) + 1
     return found
 
 
@@ -404,6 +452,7 @@ def build_report(calibration, evaluation, noise_id, existing, full_battery, seed
         "eval_false_alarms": alarms,
         "eval_false_alarm_rate": (alarms / eval_runs) if eval_runs else None,
         "eval_alarm_tests": _alarm_tests(evaluation, proposed, noise_id),
+        "eval_alarm_runs": _alarm_runs(evaluation, proposed, noise_id, first_index=len(calibration)),
         "false_alarm_rate_target": target,
     }
 
@@ -803,6 +852,16 @@ def _self_check():
     from_disk = build_report([json.loads(json.dumps(old_run))], [json.loads(json.dumps(old_run))], "N0", {}, True, 0)
     assert from_disk["tests"]["T2_hop_ping"]["latency_ms"]["max"] == 11.2, from_disk["tests"]["T2_hop_ping"]
     assert from_disk["latency_average_runs"] == 2
+    assert _alarm_key("T2_hop_ping", "primary:r1=ok,r2=loss;backup:r1=ok,r3=delay") == (
+        "T2_hop_ping:primary:r2=loss+backup:r3=delay"
+    )
+    assert _alarm_key("T1_e2e_ping", "latency") == "T1_e2e_ping:latency"
+    lossy = {"results": [{"test_id": "T2_hop_ping", "hops_primary": [
+        {"dst_ip": "10.0.12.2", "latency_ms": 11.0, "packet_loss_percent": 30.0, "rtt_ms": [11.0]},
+    ]}]}
+    flagged = _alarm_runs([lossy], {"T2_hop_ping": {"max_loss_percent": 10.0, "max_latency_ms": 80.0}}, first_index=200)
+    assert flagged[0]["run"] == 200 and flagged[0]["alarm"].endswith("=loss"), flagged
+    assert flagged[0]["values"]["primary:10.0.12.2"]["packet_loss_percent"] == 30.0
 
     print("healthy calibration: PASS")
 
