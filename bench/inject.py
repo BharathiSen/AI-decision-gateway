@@ -396,7 +396,21 @@ def _normalize(key, text):
     if key == "qdiscs":
         return sorted(" ".join(_QDISC_COUNTERS.sub("", l).split()) for l in lines if l.startswith("qdisc "))
     if key == "firewall":
-        return [_IPT_COUNTERS.sub("", l) for l in lines if not l.startswith("#")]
+        # A namespace prints nothing until iptables is first used, then empty
+        # tables with ACCEPT built-in chains. Only rules, user chains and
+        # non-default policies count.
+        out, table = [], ""
+        for line in lines:
+            if line.startswith("*"):
+                table = line[1:]
+                continue
+            if line.startswith("#") or line == "COMMIT":
+                continue
+            line = _IPT_COUNTERS.sub("", line)
+            if line.startswith(":") and line.split()[1:2] == ["ACCEPT"]:
+                continue
+            out.append(f"{table} {line}")
+        return out
     return sorted(lines)
 
 
@@ -943,9 +957,14 @@ def ping_loss(text):
     return float(match.group(1)) if match else None
 
 
-def health_check(net, count=3):
-    """(loss percent or None, ping output) for hostA to hostB."""
-    out, _ = _sh(net.get("hostA"), f"ping -c {count} -i 0.2 -W 1 {net.get('hostB').IP()}")
+def health_check(net, count=5, deadline=5):
+    """(loss percent or None, ping output) for hostA to hostB.
+
+    -w makes ping wait for every reply up to the deadline. Without it ping
+    stops about two RTTs after the last send, and a slow reply on the VM
+    counts as lost.
+    """
+    out, _ = _sh(net.get("hostA"), f"ping -c {count} -i 0.2 -w {deadline} {net.get('hostB').IP()}")
     return ping_loss(out), out.strip()
 
 
