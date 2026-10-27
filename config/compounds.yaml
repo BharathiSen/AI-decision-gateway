@@ -22,16 +22,17 @@ compounds:
     injection_order: [F3, F6]
     cleanup_order: [F6, F3]
 
+  # Held-out pairs share no component pair with C1-C3.
   - id: C4
-    description: Held-out combination of primary loss and access-link loss
-    components: [F3, F11]
+    description: Held-out combination of primary latency and access-link loss
+    components: [F5, F11]
     split: held_out
-    injection_order: [F3, F11]
-    cleanup_order: [F11, F3]
+    injection_order: [F5, F11]
+    cleanup_order: [F11, F5]
 
   - id: C5
-    description: Held-out combination of congestion and backup link down
-    components: [F6, F12]
+    description: Held-out combination of primary blackhole and backup link down
+    components: [F9, F12]
     split: held_out
-    injection_order: [F6, F12]
-    cleanup_order: [F12, F6]
+    injection_order: [F9, F12]
+    cleanup_order: [F12, F9]

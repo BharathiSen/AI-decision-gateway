@@ -437,7 +437,7 @@ def run_episode(
         return record
     finally:
         parts["clear_noise"](net, noise_applied, links)
-        parts["reset_all"](net)
+        parts["reset_all"](net, baseline=True)
 
 
 def aggregate_episode_costs(directory=None):
@@ -789,8 +789,8 @@ def _self_check():
     def quiet_clear(net, applied, links=None):
         events.append("clear")
 
-    def quiet_reset(net):
-        events.append("reset")
+    def quiet_reset(net, baseline=False):
+        events.append("reset+baseline" if baseline else "reset")
 
     def quiet_inject(net, fault_id, seed=None):
         events.append("inject")
@@ -859,6 +859,8 @@ def _self_check():
     assert validate_record("execution_result", _execution_view(connected))[0]
     walked = [item for item in events if item in ("inject", "telemetry", "tests", "agent", "gate", "execute")]
     assert walked == ["inject", "telemetry", "tests", "agent", "gate", "execute"], walked
+    assert events[:2] == ["noise", "reset"], events
+    assert events[-2:] == ["clear", "reset+baseline"], events
 
     import tempfile
 

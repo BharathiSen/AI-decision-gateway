@@ -11,6 +11,15 @@ _COSTS = _ROOT / "config" / "costs.yaml"
 _FIXES = _ROOT / "config" / "correct_fixes.yaml"
 
 
+def held_out_ids():
+    """Faults and compounds marked split: held_out. The gate never sees their labels or matrix rows."""
+    out = set()
+    for name, key in (("faults.yaml", "faults"), ("compounds.yaml", "compounds")):
+        with (_ROOT / "config" / name).open() as f:
+            out |= {item["id"] for item in yaml.safe_load(f)[key] if item.get("split") == "held_out"}
+    return out
+
+
 def _load_costs():
     with _COSTS.open() as f:
         return yaml.safe_load(f)["tests"]
@@ -22,14 +31,16 @@ def _load_fixes():
     out = {}
     out.update(doc.get("faults", {}))
     out.update(doc.get("compounds", {}))
-    return out
+    hidden = held_out_ids()
+    return {k: v for k, v in out.items() if k not in hidden}
 
 
 def _load_matrix():
     if not _MATRIX.exists():
         return []
+    hidden = held_out_ids()
     with _MATRIX.open(newline="", encoding="utf-8") as f:
-        return list(csv.DictReader(f))
+        return [row for row in csv.DictReader(f) if row.get("fault_id") not in hidden]
 
 
 def needs_different_fixes(fault_a, fault_b, fixes=None):

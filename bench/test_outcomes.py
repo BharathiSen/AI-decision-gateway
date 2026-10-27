@@ -133,7 +133,7 @@ def test_grades():
 
     alarms = evaluate_against_thresholds([
         {"test_id": "T1_e2e_ping", "packet_loss_percent": 0, "latency_ms": 20},
-        {"test_id": "T10_speed", "mbit_per_sec": 8},
+        {"test_id": "T10_speed", "mbit_per_sec": 9.5},
     ])
     check("healthy battery has no alarms", alarms == [], str(alarms))
     alarms = evaluate_against_thresholds([

@@ -65,5 +65,7 @@ compounds:
     correct: [REROUTE]
   C4:
     correct: [DO_NOTHING, ESCALATE]
+    notes: "Access-link loss remains on either path, as in C1"
   C5:
-    correct: [DO_NOTHING]
+    correct: [ESCALATE]
+    notes: "Primary blackholed and backup down; no path carries traffic"

@@ -1,68 +1,129 @@
 """
-Live Mininet harness: inject → reset each fault 10 times.
+Live Mininet check of the fault emulator (checklist Stage 7).
+
+For every fault and compound, at each noise level, run --iterations
+inject/reset cycles. A cycle passes when:
+
+- the inject changed the network (not required for H0, or for flaps,
+  which change it on their own thread),
+- every reset reports no residual difference on the nodes it touched,
+- the whole network matches the snapshot taken just before the inject,
+- hostA still reaches hostB within the noise level's T1 loss limit.
+
+Even cycles reset with reset()/reset_compound(), odd cycles with
+reset_all(). Held-out faults run here with purpose="validation"; they
+are still refused for calibration, training and tuning.
 
 Run on the Mininet VM as root:
 
     sudo python3 bench/validate_faults.py
-    sudo python3 bench/validate_faults.py --fault F3 --iterations 10
+    sudo python3 bench/validate_faults.py --fault F6 --noise N2 --iterations 3
+
+Writes results/fault_validation.json.
 """
 
 import argparse
+import json
 import os
+import re
 import sys
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from network.topology import create_network
+import yaml
+
 from bench import inject as inj
-from bench.mininet_util import mn_cleanup
+
+ROOT = Path(__file__).resolve().parent.parent
+OUT = ROOT / "results" / "fault_validation.json"
+NOISE_IDS = ("N0", "N1", "N2")
 
 
-def _fault_ids():
-    return sorted(inj._FAULTS.keys())
+def _natural(item_id):
+    return [int(p) if p.isdigit() else p for p in re.split(r"(\d+)", item_id)]
 
 
-def _inject_params(fault_id, seed):
-    """Validation overrides: skip long iperf background during tc stress tests."""
-    if fault_id == "F6":
-        return {"rate_mbit": 2, "background_traffic": False}, seed
-    if fault_id == "F7":
-        return {"rate_mbit": 2, "background_traffic": False}, seed
-    return None, seed
+def scenario_ids():
+    faults = sorted((f for f in inj._FAULTS if f != "H0"), key=_natural)
+    return ["H0", *faults, *sorted(inj._COMPOUNDS, key=_natural)]
 
 
-def validate_fault(net, fault_id, iterations=10, seed_base=0):
+def loss_limit(noise_id):
+    with (ROOT / "config" / "thresholds.yaml").open() as f:
+        doc = yaml.safe_load(f)
+    return float(doc["by_noise_level"][noise_id]["T1_e2e_ping"]["max_loss_percent"])
+
+
+def _inject(net, scenario, seed):
+    if scenario == "H0":
+        return []
+    if scenario in inj._COMPOUNDS:
+        return inj.inject_compound(net, scenario, seed=seed, purpose="validation")["correlation_ids"]
+    return [inj.inject(net, scenario, seed=seed, purpose="validation")]
+
+
+def _reset(net, scenario, cids, use_reset_all):
+    problems = []
+    if use_reset_all:
+        result = inj.reset_all(net)
+        problems += [f"reset_all: {e['error']}" for e in result["errors"]]
+        residual = [line for lines in result["residual"].values() for line in lines]
+    else:
+        if scenario in inj._COMPOUNDS:
+            results = inj.reset_compound(net, scenario, cids)
+        else:
+            results = [inj.reset(cid) for cid in cids]
+        problems += [f"{r['reset']}: already reset" for r in results if r.get("already_reset")]
+        residual = [line for r in results for line in r.get("residual", [])]
+    problems += [f"residual on touched node: {line}" for line in residual]
+    return problems
+
+
+def run_cycle(net, scenario, seed, use_reset_all, max_loss):
+    problems = []
+    before = inj.snapshot(net)
+    cids = _inject(net, scenario, seed)
+    entries = [inj._ACTIVE[cid]["details"] for cid in cids]
+    flapping = any(d["injection"] == "link_flap" for d in entries)
+    if cids and not flapping and not inj.diff_snapshots(before, inj.snapshot(net)):
+        problems.append("inject changed nothing")
+    for details in entries:
+        background = details.get("background")
+        if background and not inj._alive(net.get(background["from_node"]), background["client_pid"]):
+            problems.append(f"{details['correlation_id']}: background client not running")
+    problems += _reset(net, scenario, cids, use_reset_all)
+    if inj._ACTIVE:
+        problems.append(f"still active after reset: {sorted(inj._ACTIVE)}")
+    problems += [f"differs from before inject: {line}" for line in inj.diff_snapshots(before, inj.snapshot(net))]
+    loss, ping = inj.health_check(net)
+    if loss is None or loss > max_loss:
+        problems.append(f"hostA to hostB loss {loss}% over {max_loss}%: {ping[-160:]}")
+    return problems
+
+
+def validate(net, scenario, iterations, max_loss, seed_base=0):
     failures = []
     for i in range(iterations):
-        seed = seed_base + i
-        cid = None
         try:
-            if fault_id == "H0":
-                result = inj.reset_all(net)
-                if not result.get("healthy"):
-                    failures.append((i, "H0 reset_all not healthy", result))
-                continue
-            params, seed = _inject_params(fault_id, seed)
-            cid = inj.inject(net, fault_id, params=params, seed=seed)
-            result = inj.reset(cid)
-            if result.get("already_reset"):
-                failures.append((i, "reset reported already_reset", result))
-            cleanup = inj.reset_all(net)
-            if not cleanup.get("healthy"):
-                failures.append((i, "post reset_all not healthy", cleanup))
+            problems = run_cycle(net, scenario, seed_base + i, use_reset_all=bool(i % 2), max_loss=max_loss)
         except Exception as exc:
-            failures.append((i, f"{type(exc).__name__}: {exc}", {"cid": cid}))
+            problems = [f"{type(exc).__name__}: {exc}"]
             try:
                 inj.reset_all(net)
-            except Exception:
-                pass
+            except Exception as reset_exc:
+                problems.append(f"recovery reset_all: {reset_exc}")
+        if problems:
+            failures.append({"cycle": i, "problems": problems})
     return failures
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--fault", action="append", help="Fault id (repeatable); default all")
+    parser.add_argument("--fault", action="append", help="Fault or compound id (repeatable); default all")
+    parser.add_argument("--noise", action="append", choices=[*NOISE_IDS, "all"], help="Default all")
     parser.add_argument("--iterations", type=int, default=10)
     args = parser.parse_args()
 
@@ -70,26 +131,49 @@ def main():
         print("validate_faults.py must run as root (sudo) on the Mininet VM.", file=sys.stderr)
         sys.exit(2)
 
+    from network.topology import create_network
+    from bench.mininet_util import mn_cleanup
+    from bench.traffic import apply_noise, clear_noise
+
+    known = scenario_ids()
+    targets = args.fault or known
+    unknown = [t for t in targets if t not in known]
+    if unknown:
+        print(f"Unknown ids: {unknown}; known: {known}", file=sys.stderr)
+        sys.exit(2)
+    noise_ids = list(NOISE_IDS) if not args.noise or "all" in args.noise else args.noise
+
     print("Cleaning stale Mininet state (mn -c)...", flush=True)
     mn_cleanup()
-
-    targets = args.fault or _fault_ids()
     state = create_network()
     net = state["net"]
-    all_failures = {}
-
+    report = {
+        "run_at": datetime.now(timezone.utc).isoformat(),
+        "iterations": args.iterations,
+        "noise_levels": {},
+        "noise_cleanup_residual": {},
+    }
     try:
-        for fault_id in targets:
-            if fault_id not in inj._FAULTS:
-                print(f"SKIP unknown fault {fault_id}")
-                continue
-            print(f"Validating {fault_id} x{args.iterations}...")
-            fails = validate_fault(net, fault_id, iterations=args.iterations)
-            if fails:
-                all_failures[fault_id] = fails
-                print(f"  FAIL {len(fails)} iteration(s)")
-            else:
-                print("  OK")
+        pristine = inj.snapshot(net)
+        for noise_id in noise_ids:
+            max_loss = loss_limit(noise_id)
+            applied = apply_noise(net, noise_id, state["links"])
+            time.sleep(1.0)
+            level = report["noise_levels"].setdefault(noise_id, {})
+            try:
+                for scenario in targets:
+                    started = time.monotonic()
+                    failures = validate(net, scenario, args.iterations, max_loss)
+                    passed = args.iterations - len(failures)
+                    level[scenario] = {"passed": passed, "failed": len(failures), "failures": failures[:5]}
+                    status = "OK" if not failures else f"FAIL {len(failures)}/{args.iterations}"
+                    print(f"{noise_id} {scenario:<4} {status} ({time.monotonic() - started:.0f}s)", flush=True)
+                    if failures:
+                        for line in failures[0]["problems"][:4]:
+                            print(f"    {line}", flush=True)
+            finally:
+                clear_noise(net, applied, state["links"])
+            report["noise_cleanup_residual"][noise_id] = inj.diff_snapshots(pristine, inj.snapshot(net))
     finally:
         try:
             inj.reset_all(net)
@@ -101,14 +185,19 @@ def main():
             print(f"net.stop(): {exc}", file=sys.stderr)
         mn_cleanup()
 
-    if all_failures:
-        for fid, fails in all_failures.items():
-            print(f"\n{fid}:")
-            for item in fails[:5]:
-                print(" ", item)
+    report["pass"] = all(
+        item["failed"] == 0 for level in report["noise_levels"].values() for item in level.values()
+    )
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    OUT.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    for noise_id, lines in report["noise_cleanup_residual"].items():
+        if lines:
+            print(f"note: clear_noise({noise_id}) left {len(lines)} difference(s), e.g. {lines[0]}")
+    print(f"\nwrote {OUT.relative_to(ROOT)}")
+    if not report["pass"]:
+        print("Fault validation: FAIL")
         sys.exit(1)
-
-    print("\nAll fault inject/reset cycles passed.")
+    print("Fault validation: PASS")
 
 
 if __name__ == "__main__":

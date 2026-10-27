@@ -27,7 +27,14 @@ def train_grader(samples):
     """
     samples: list of {test_id, expected, observation, label} label in {0,1}
     Writes simple lookup table to results/grader_model.json
+    Samples from held-out faults or compounds (fault_id) are refused.
     """
+    from gate.selector import held_out_ids
+
+    hidden = held_out_ids()
+    leaked = sorted({s["fault_id"] for s in samples if s.get("fault_id") in hidden})
+    if leaked:
+        raise ValueError(f"held-out scenarios cannot train the grader: {leaked}")
     table = {}
     for s in samples:
         key = f"{s['test_id']}|{(s.get('expected') or '').lower()}"

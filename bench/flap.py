@@ -30,11 +30,25 @@ def _set_admin(net, link_name, node, state):
     proc.wait(timeout=10)
 
 
-def start_link_flap(net, link_name, node=None, interval_seconds=2.0, cycles=3):
-    """Start flapping one endpoint of link_name. Returns a stop callable."""
+def start_link_flap(net, link_name, node=None, interval_seconds=2.0, cycles=3, on_up=None):
+    """Start flapping one endpoint of link_name. Returns a flap id.
+
+    The kernel drops static routes through an interface when it goes
+    down, so on_up (if given) runs after every up to put them back.
+    Without it the first down would leave the link permanently broken.
+    """
     node = node or _first_node(link_name)
     stop_event = threading.Event()
     flap_id = f"{link_name}-{node}-{time.time()}"
+    errors = []
+
+    def _up():
+        _set_admin(net, link_name, node, "up")
+        if on_up is not None:
+            try:
+                on_up()
+            except Exception as exc:
+                errors.append(f"{type(exc).__name__}: {exc}")
 
     def _run():
         for _ in range(int(cycles)):
@@ -43,14 +57,16 @@ def start_link_flap(net, link_name, node=None, interval_seconds=2.0, cycles=3):
             _set_admin(net, link_name, node, "down")
             if stop_event.wait(timeout=float(interval_seconds)):
                 break
-            _set_admin(net, link_name, node, "up")
+            _up()
             if stop_event.wait(timeout=float(interval_seconds)):
                 break
-        _set_admin(net, link_name, node, "up")
+        _up()
 
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()
-    _ACTIVE_FLAPS[flap_id] = {"thread": thread, "stop": stop_event, "link": link_name, "node": node}
+    _ACTIVE_FLAPS[flap_id] = {
+        "thread": thread, "stop": stop_event, "link": link_name, "node": node, "errors": errors,
+    }
     return flap_id
 
 

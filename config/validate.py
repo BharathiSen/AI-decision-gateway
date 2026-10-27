@@ -86,6 +86,15 @@ for compound in compounds:
         f"{compound['id']}: invalid split"
     )
 
+development_sets = {
+    frozenset(c["components"]) for c in compounds if c["split"] == "development"
+}
+for compound in compounds:
+    if compound["split"] == "held_out":
+        assert frozenset(compound["components"]) not in development_sets, (
+            f"{compound['id']}: same components as a development compound"
+        )
+
 print(f"Validated {len(faults)} faults")
 print(f"Validated {len(compounds)} compound scenarios")
 print(f"Validated {len(noise)} noise levels")
