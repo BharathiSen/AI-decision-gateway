@@ -15,4 +15,7 @@ assert set(stages) >= {
 assert validate_snapshot({})
 assert validate_proposal_inputs(["not", "a", "proposal"])
 assert context["matrix"] and context["catalog"] and context["costs"] and context["thresholds"]
+cfg = context.get("gate") or {}
+assert cfg.get("frozen") is True and cfg.get("learned_grader") is False
+assert cfg.get("budget_seconds") == 8.0
 print("gate inputs: PASS")

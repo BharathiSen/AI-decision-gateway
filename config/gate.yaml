@@ -1,0 +1,13 @@
+version: 1
+frozen: true
+
+# Deterministic threshold grading until a later experiment justifies a model.
+learned_grader: false
+min_grade_confidence: 0.5
+
+# Wall-clock cap for newly executed OAM tests in one decide() call.
+budget_seconds: 8.0
+
+# Reuse a prior result only when the snapshot fingerprint matches and
+# the result is no older than this (seconds).
+reuse_max_age_seconds: 120

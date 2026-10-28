@@ -1007,6 +1007,45 @@ def _self_check():
     none_proposal = gate_decide(None, None, healthy, [], mode="full", run_missing_tests=False)
     assert none_proposal["decision"] == "block", none_proposal
 
+    cfg = frozen["gate"]
+    assert cfg["frozen"] is True and cfg["learned_grader"] is False and cfg["budget_seconds"] == 8.0
+    t1_ok = [{"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0, "latency_ms": 10.0}]
+    vacuous = gate_decide(None, predicted_ok, healthy, t1_ok, mode="full", run_missing_tests=False)
+    assert vacuous["decision"] == "allow" and vacuous["reason"] == "all checks passed", vacuous
+    assert vacuous["log"]["learned_grader"] is False
+    assert vacuous["log"]["frozen"] is True
+    assert "candidates" in vacuous["log"] and "rules" in vacuous["log"]
+    f10 = dict(
+        backup,
+        causes=[{"cause_id": "F10", "predicted_tests": [{"test_id": "T8_tcp_vs_ping", "expected": "ping_ok_tcp_fail"}]}],
+    )
+    contradicted = gate_decide(None, f10, healthy, [], mode="full", run_missing_tests=False)
+    assert contradicted["decision"] == "block" and contradicted["reason"] == "proposal contradicted", contradicted
+    held = dict(backup, causes=[{"cause_id": "U1", "predicted_tests": []}])
+    outside = gate_decide(None, held, healthy, [], mode="full", run_missing_tests=False)
+    assert outside["decision"] == "escalate" and outside["reason"] == "outside catalog", outside
+    fp = None
+    from gate.decide import evidence_fingerprint, result_reusable
+
+    fp = evidence_fingerprint(healthy)
+    assert result_reusable({"test_id": "T1_e2e_ping"}, healthy, fp, 120)
+    assert not result_reusable({"test_id": "T1_e2e_ping", "state_fingerprint": "other"}, healthy, fp, 120)
+    lossy_snap = _snapshot()
+    lossy_snap["metrics"] = {"active_path": "primary", "packet_loss_percent": 40.0, "connectivity": True}
+    for link in lossy_snap["links"]:
+        link["packet_loss_percent"] = 0.0
+    tight = gate_decide(
+        None,
+        predicted_ok,
+        lossy_snap,
+        [],
+        mode="full",
+        run_missing_tests=False,
+        budget_seconds=0.1,
+    )
+    assert tight["decision"] == "escalate", tight
+    assert tight["reason"] in {"no affordable discriminating test", "inseparable", "no discrimination"}, tight
+
     oam._check_costs()
     priced = {
         "action": "DO_NOTHING",
@@ -1407,11 +1446,100 @@ def live_gate_inputs():
     return 0
 
 
+def live_gate():
+    """Stage 10 algorithm on the live diamond: safety block, then F1 decide().
+
+    On the VM, as root:
+
+        sudo python3 bench/run_episode.py --live-gate
+    """
+    import os
+
+    if not hasattr(os, "geteuid") or os.geteuid() != 0:
+        print("gate algorithm live check must run as root on the Mininet VM.", file=sys.stderr)
+        return 2
+    from bench.mininet_util import mn_cleanup
+    from gate.decide import decide as gate_decide
+    from gate.inputs import load_frozen_context
+    from network.topology import create_network
+
+    frozen_ok, frozen_errors, frozen = load_frozen_context("N0")
+    if not frozen_ok:
+        print("gate live: FAIL frozen " + "; ".join(frozen_errors))
+        return 1
+    cfg = frozen.get("gate") or {}
+    if cfg.get("frozen") is not True or cfg.get("learned_grader") is not False:
+        print(f"gate live: FAIL config {cfg}")
+        return 1
+
+    mn_cleanup()
+    state = create_network()
+    net, links = state["net"], state["links"]
+    failures = []
+    try:
+        inj.inject(net, "F12")
+        snap12 = collect_current_state(net, links)
+        unsafe = {
+            "action": "REROUTE",
+            "target": "HostA_to_HostB",
+            "reason": "stage10 live",
+            "proposed_path": ["r1", "r3", "r4"],
+            "causes": [{"cause_id": "F12", "predicted_tests": []}],
+        }
+        blocked = gate_decide(net, unsafe, snap12, [], mode="full", run_missing_tests=False, noise_id="N0")
+        if blocked.get("decision") != "block" or blocked.get("reason") not in {"safety failed", "proposal contradicted"}:
+            failures.append(f"F12 reroute {blocked}")
+        inj.reset_all(net, baseline=True)
+
+        inj.inject(net, "F1")
+        snap1 = collect_current_state(net, links)
+        preds = [
+            {"test_id": row["test_id"], "expected": row["outcome"]}
+            for row in frozen["matrix"]
+            if row.get("fault_id") == "F1" and row.get("test_id") and row.get("outcome") is not None
+        ]
+        proposal = {
+            "action": "REROUTE",
+            "target": "HostA_to_HostB",
+            "reason": "stage10 live",
+            "proposed_path": ["r1", "r3", "r4"],
+            "causes": [{"cause_id": "F1", "predicted_tests": preds}],
+        }
+        out = gate_decide(net, proposal, snap1, [], mode="full", run_missing_tests=True, noise_id="N0")
+        if out.get("decision") not in {"allow", "block", "escalate"}:
+            failures.append(f"F1 decide {out}")
+        log = out.get("log") or {}
+        if "candidates" not in log or "F1" not in (log.get("candidates") or []):
+            failures.append(f"F1 candidates {log}")
+        used = (log.get("budget") or {}).get("tests_used_seconds")
+        cap = (log.get("budget") or {}).get("budget_seconds")
+        if used is None or cap is None or used > cap + 1e-9:
+            failures.append(f"F1 budget {log.get('budget')}")
+        if log.get("learned_grader") is not False:
+            failures.append(f"learned grader {log.get('learned_grader')}")
+        if "rules" not in log:
+            failures.append("F1 rules missing")
+    except Exception as exc:
+        failures.append(f"{type(exc).__name__}: {exc}")
+    finally:
+        inj.reset_all(net, baseline=True)
+        net.stop()
+        mn_cleanup()
+
+    if failures:
+        print("gate live: FAIL " + "; ".join(str(item) for item in failures))
+        return 1
+    print("gate live: PASS")
+    return 0
+
+
 if __name__ == "__main__":
     if "--live-recheck" in sys.argv:
         sys.exit(live_recheck())
     if "--live-gate-inputs" in sys.argv:
         sys.exit(live_gate_inputs())
+    if "--live-gate" in sys.argv:
+        sys.exit(live_gate())
     if "--live" in sys.argv:
         sys.exit(live_diamond())
     if "--live-cost" in sys.argv:

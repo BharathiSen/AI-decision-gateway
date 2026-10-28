@@ -15,6 +15,7 @@ from gate.grader import grade_test
 
 _ROOT = Path(__file__).resolve().parent.parent
 _THRESHOLDS = _ROOT / "config" / "thresholds.yaml"
+_GATE = _ROOT / "config" / "gate.yaml"
 REQUIRED_LINKS = ("r1-r2", "r2-r4", "r1-r3", "r3-r4")
 REQUIRED_ROUTES = (("r1", "10.0.4.0/24"), ("r4", "10.0.1.0/24"))
 KNOWN_PATHS = {"primary", "backup", "none"}
@@ -40,6 +41,41 @@ def _noise_ids():
     with _THRESHOLDS.open(encoding="utf-8") as handle:
         doc = yaml.safe_load(handle) or {}
     return set((doc.get("by_noise_level") or {}).keys())
+
+
+def load_gate_config():
+    """Frozen VeriFix gate settings. Missing or unfrozen files fail closed."""
+    errors = []
+    if not _GATE.exists():
+        return {}, ["gate config missing"]
+    try:
+        doc = yaml.safe_load(_GATE.read_text(encoding="utf-8")) or {}
+    except Exception as exc:
+        return {}, [f"gate config: {type(exc).__name__}: {exc}"]
+    if not isinstance(doc, dict):
+        return {}, ["gate config is not a mapping"]
+    if doc.get("frozen") is not True:
+        errors.append("gate config is not frozen")
+    if "learned_grader" not in doc:
+        errors.append("gate config missing learned_grader")
+    budget = doc.get("budget_seconds")
+    if not isinstance(budget, (int, float)) or isinstance(budget, bool) or budget <= 0:
+        errors.append("gate config budget_seconds must be a positive number")
+    age = doc.get("reuse_max_age_seconds", 120)
+    if not isinstance(age, (int, float)) or isinstance(age, bool) or age < 0:
+        errors.append("gate config reuse_max_age_seconds must be a non-negative number")
+    conf = doc.get("min_grade_confidence", 0.5)
+    if not isinstance(conf, (int, float)) or isinstance(conf, bool) or not 0 <= conf <= 1:
+        errors.append("gate config min_grade_confidence must be between 0 and 1")
+    cfg = {
+        "frozen": doc.get("frozen") is True,
+        "learned_grader": bool(doc.get("learned_grader")),
+        "min_grade_confidence": float(conf) if isinstance(conf, (int, float)) and not isinstance(conf, bool) else 0.5,
+        "budget_seconds": float(budget) if isinstance(budget, (int, float)) and not isinstance(budget, bool) else 8.0,
+        "reuse_max_age_seconds": float(age) if isinstance(age, (int, float)) and not isinstance(age, bool) else 120.0,
+        "version": doc.get("version"),
+    }
+    return cfg, errors
 
 
 def load_frozen_context(noise_id="N0"):
@@ -107,6 +143,9 @@ def load_frozen_context(noise_id="N0"):
         if yaml_level is not None and yaml_level.get("T1_e2e_ping") is None and thresholds.get("T1_e2e_ping") is None:
             errors.append("thresholds missing T1_e2e_ping")
 
+    gate_cfg, gate_errors = load_gate_config()
+    errors.extend(gate_errors)
+
     context = {
         "noise_id": noise_id,
         "catalog": faults,
@@ -115,6 +154,7 @@ def load_frozen_context(noise_id="N0"):
         "costs": costs if isinstance(costs, dict) else {},
         "fixes": fixes if isinstance(fixes, dict) else {},
         "held_out": selector.held_out_ids(),
+        "gate": gate_cfg,
     }
     return (not errors), errors, context
 
