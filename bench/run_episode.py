@@ -1353,6 +1353,7 @@ def live_gate_inputs():
         print("gate inputs live check must run as root on the Mininet VM.", file=sys.stderr)
         return 2
     from bench.mininet_util import mn_cleanup
+    from gate.decide import decide as gate_decide
     from gate.inputs import load_frozen_context, validate_snapshot
     from network.topology import create_network
 
