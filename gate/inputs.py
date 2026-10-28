@@ -73,6 +73,7 @@ def load_gate_config():
         "min_grade_confidence": float(conf) if isinstance(conf, (int, float)) and not isinstance(conf, bool) else 0.5,
         "budget_seconds": float(budget) if isinstance(budget, (int, float)) and not isinstance(budget, bool) else 8.0,
         "reuse_max_age_seconds": float(age) if isinstance(age, (int, float)) and not isinstance(age, bool) else 120.0,
+        "require_signatures": bool(doc.get("require_signatures")),
         "version": doc.get("version"),
     }
     return cfg, errors

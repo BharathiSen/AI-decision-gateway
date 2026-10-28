@@ -136,13 +136,28 @@ def decide(
     """
     supplied = list(test_results) if isinstance(test_results, list) else list(test_results or [])
     proposal = proposal if isinstance(proposal, dict) else {}
+    snapshot_fp = evidence_fingerprint(network_snapshot)
+
+    def audit(decision, proposal_arg, tests_run, checks_out, reason, supplied=None, selected_ids=None, log=None):
+        record = _audit(
+            decision,
+            proposal_arg,
+            tests_run,
+            checks_out,
+            reason,
+            supplied=supplied,
+            selected_ids=selected_ids,
+            log=log,
+        )
+        record["snapshot_fingerprint"] = snapshot_fp
+        return record
 
     if mode not in MODES:
-        return _audit("escalate", proposal, [], {}, "invalid mode", supplied=supplied)
+        return audit("escalate", proposal, [], {}, "invalid mode", supplied=supplied)
 
     frozen_ok, frozen_errors, frozen = load_frozen_context(noise_id)
     if not frozen_ok:
-        return _audit(
+        return audit(
             "escalate",
             proposal,
             supplied,
@@ -154,11 +169,11 @@ def decide(
     try:
         action = normalize_action(proposal.get("action"))
     except (ValueError, TypeError):
-        return _audit("block", proposal, [], {}, "invalid action", supplied=supplied)
+        return audit("block", proposal, [], {}, "invalid action", supplied=supplied)
 
     prop_errors = validate_proposal_inputs(proposal, costs=frozen["costs"])
     if prop_errors:
-        return _audit(
+        return audit(
             "block",
             proposal,
             supplied,
@@ -169,7 +184,7 @@ def decide(
 
     result_errors = validate_test_results(test_results, already_ran)
     if result_errors:
-        return _audit(
+        return audit(
             "escalate",
             proposal,
             supplied,
@@ -191,11 +206,11 @@ def decide(
     fingerprint = evidence_fingerprint(network_snapshot)
 
     if action not in RISKY_ACTIONS:
-        return _audit("allow", proposal, test_results, {}, "non-risky pass-through", supplied=supplied)
+        return audit("allow", proposal, test_results, {}, "non-risky pass-through", supplied=supplied)
 
     snap_errors = validate_snapshot(network_snapshot)
     if snap_errors:
-        return _audit(
+        return audit(
             "escalate",
             proposal,
             test_results,
@@ -207,7 +222,7 @@ def decide(
     stages = pipeline_interfaces()
     ai_causes = [c.get("cause_id") for c in proposal.get("causes", []) if c.get("cause_id")]
     if not ai_causes:
-        return _audit("block", proposal, test_results, {}, "incomplete hypotheses", supplied=supplied)
+        return audit("block", proposal, test_results, {}, "incomplete hypotheses", supplied=supplied)
 
     primary = ai_causes[0]
     symptoms = _symptoms_from_snapshot(network_snapshot)
@@ -237,7 +252,7 @@ def decide(
     safety = stages["safety_checking"](proposal, network_snapshot)
     if not safety.get("passed"):
         rules.append("safety")
-        return _audit(
+        return audit(
             "block",
             proposal,
             test_results,
@@ -250,7 +265,7 @@ def decide(
 
     if primary in (frozen.get("held_out") or set()) or primary not in (frozen.get("fixes") or {}):
         rules.append("outside catalog")
-        return _audit(
+        return audit(
             "escalate",
             proposal,
             test_results,
@@ -264,7 +279,7 @@ def decide(
     primary_fixes = set((frozen["fixes"].get(primary) or {}).get("correct") or [])
     if action.value not in primary_fixes:
         rules.append("action not in correct set")
-        return _audit(
+        return audit(
             "block",
             proposal,
             test_results,
@@ -311,7 +326,7 @@ def decide(
                     tr = oam.run_test(net, tid)
                 except Exception as exc:
                     rules.append("test error")
-                    return _audit(
+                    return audit(
                         "escalate",
                         proposal,
                         tests_run,
@@ -389,27 +404,27 @@ def decide(
 
     if not consistency.get("passed"):
         rules.append("consistency")
-        return _audit("block", proposal, tests_run, check_bundle, "consistency failed", supplied=supplied, selected_ids=selected_ids, log=log)
+        return audit("block", proposal, tests_run, check_bundle, "consistency failed", supplied=supplied, selected_ids=selected_ids, log=log)
 
     if mode == "full":
         if remaining:
             if inseparable and not ruled_out:
                 rules.append("inseparable")
-                return _audit("escalate", proposal, tests_run, check_bundle, "inseparable", supplied=supplied, selected_ids=selected_ids, log=log)
+                return audit("escalate", proposal, tests_run, check_bundle, "inseparable", supplied=supplied, selected_ids=selected_ids, log=log)
             if unaffordable:
                 rules.append("no affordable discriminating test")
-                return _audit("escalate", proposal, tests_run, check_bundle, "no affordable discriminating test", supplied=supplied, selected_ids=selected_ids, log=log)
+                return audit("escalate", proposal, tests_run, check_bundle, "no affordable discriminating test", supplied=supplied, selected_ids=selected_ids, log=log)
             if inseparable:
                 rules.append("inseparable")
-                return _audit("escalate", proposal, tests_run, check_bundle, "inseparable", supplied=supplied, selected_ids=selected_ids, log=log)
+                return audit("escalate", proposal, tests_run, check_bundle, "inseparable", supplied=supplied, selected_ids=selected_ids, log=log)
             rules.append("no discrimination")
-            return _audit("escalate", proposal, tests_run, check_bundle, "no discrimination", supplied=supplied, selected_ids=selected_ids, log=log)
+            return audit("escalate", proposal, tests_run, check_bundle, "no discrimination", supplied=supplied, selected_ids=selected_ids, log=log)
         rules.append("allow")
-        return _audit("allow", proposal, tests_run, check_bundle, "all checks passed", supplied=supplied, selected_ids=selected_ids, log=log)
+        return audit("allow", proposal, tests_run, check_bundle, "all checks passed", supplied=supplied, selected_ids=selected_ids, log=log)
 
     check_bundle["discrimination"] = {"passed": True, "skipped": "pilot_v0"}
     rules.append("pilot_v0")
-    return _audit("allow", proposal, tests_run, check_bundle, "all checks passed", supplied=supplied, selected_ids=selected_ids, log=log)
+    return audit("allow", proposal, tests_run, check_bundle, "all checks passed", supplied=supplied, selected_ids=selected_ids, log=log)
 
 
 def _selected_test_ids(primary, alternatives):

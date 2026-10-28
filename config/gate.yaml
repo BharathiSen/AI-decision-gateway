@@ -11,3 +11,6 @@ budget_seconds: 8.0
 # Reuse a prior result only when the snapshot fingerprint matches and
 # the result is no older than this (seconds).
 reuse_max_age_seconds: 120
+
+# HMAC signatures stay off until the unsigned bind/replay path is proven.
+require_signatures: false

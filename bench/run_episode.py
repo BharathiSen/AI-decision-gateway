@@ -208,8 +208,9 @@ def _routes_on_path(snapshot, path):
 def apply_authorized_action(gate_decision, proposal, execute_fn, approved_snapshot, read_state):
     """Single boundary between a gate decision and remediation.
 
-    On allow, read_state() is called and compared with approved_snapshot.
-    execute_fn runs only when that comparison succeeds. state_verified is
+    On allow, the proposal is revalidated, a bound decision is matched to
+    approved_snapshot, read_state() is compared with that snapshot, and
+    execute_fn runs only when those checks succeed. state_verified is
     recorded from the comparison. Callers cannot pass it in.
     """
     outcome = {
@@ -224,6 +225,21 @@ def apply_authorized_action(gate_decision, proposal, execute_fn, approved_snapsh
     if decision != "allow":
         if decision is None:
             outcome["execution_error"] = "missing or invalid gate decision"
+        return outcome
+    from gate.integrity import binding_errors, consume_decision
+
+    snap_for_freshness = approved_snapshot if (approved_snapshot or {}).get("timestamp") else None
+    rejection = screen_proposal(proposal, snap_for_freshness)
+    if rejection:
+        outcome["execution_error"] = rejection["execution_error"]
+        return outcome
+    bind_errs = binding_errors(gate_decision, approved_snapshot, proposal)
+    if bind_errs:
+        outcome["execution_error"] = bind_errs[0]
+        return outcome
+    used = consume_decision(gate_decision)
+    if used:
+        outcome["execution_error"] = used
         return outcome
     try:
         current_snapshot = read_state()
@@ -422,6 +438,16 @@ def run_episode(
 
         approved = dict(record.get("network_snapshot") or {})
         approved["qdiscs"] = record["execution_baseline"]["qdiscs"]
+        if isinstance(record.get("gate_decision"), dict):
+            from gate.integrity import bind_gate_decision
+
+            oam_results = (record.get("oam") or {}).get("results") or []
+            record["gate_decision"] = bind_gate_decision(
+                record["gate_decision"],
+                approved,
+                record.get("agent_proposal") or {},
+                oam_results,
+            )
         record.update(apply_authorized_action(
             record.get("gate_decision"),
             record.get("agent_proposal") or {},
@@ -702,6 +728,14 @@ def _self_check():
             for imported in names:
                 assert not any(imported == item or imported.startswith(item + ".") for item in banned), (path.name, imported)
 
+    gate_dir = Path(__file__).resolve().parent.parent / "gate"
+    for path in gate_dir.glob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "control.actions":
+                for alias in node.names:
+                    assert alias.name != "execute", path.name
+
     required_tests = {
         "T1_e2e_ping",
         "T2_hop_ping",
@@ -858,6 +892,9 @@ def _self_check():
         _components=fakes,
     )
     assert connected["gate_decision"]["decision"] == "allow", connected
+    assert connected["gate_decision"].get("snapshot_fingerprint")
+    assert connected["gate_decision"].get("binding", {}).get("decision_id")
+    assert connected["gate_decision"]["binding"]["signed"] is False
     assert connected["execution_attempted"] is True and connected["state_verified"] is True
     assert validate_record("proposal", connected["agent_proposal"])[0]
     assert validate_record("gate_decision", connected["gate_decision"])[0]
@@ -1014,9 +1051,11 @@ def _self_check():
 
     cfg = frozen["gate"]
     assert cfg["frozen"] is True and cfg["learned_grader"] is False and cfg["budget_seconds"] == 8.0
+    assert cfg.get("require_signatures") is False
     t1_ok = [{"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0, "latency_ms": 10.0}]
     vacuous = gate_decide(None, predicted_ok, healthy, t1_ok, mode="full", run_missing_tests=False)
     assert vacuous["decision"] == "allow" and vacuous["reason"] == "all checks passed", vacuous
+    assert vacuous.get("snapshot_fingerprint")
     assert vacuous["log"]["learned_grader"] is False
     assert vacuous["log"]["frozen"] is True
     assert "candidates" in vacuous["log"] and "rules" in vacuous["log"]
@@ -1121,6 +1160,77 @@ def _self_check():
     for item in rollup_dir.iterdir():
         item.unlink()
     rollup_dir.rmdir()
+
+    from gate.integrity import bind_gate_decision, binding_errors
+
+    integrity_allow = {
+        "decision": "allow",
+        "reason": "integrity",
+        "proposal_action": "REROUTE",
+        "tests_run": [],
+        "checks": {},
+    }
+    bound_allow = bind_gate_decision(integrity_allow, healthy, proposal, [])
+    assert bound_allow["binding"]["signed"] is False
+    assert bound_allow["binding"]["decision_id"]
+    assert not binding_errors(bound_allow, healthy, proposal)
+
+    calls.clear()
+    first_bound = apply_authorized_action(bound_allow, proposal, execute, healthy, _reads(healthy, on_backup))
+    assert calls == [proposal] and first_bound["state_verified"] is True and first_bound["remediation_succeeded"] is True, first_bound
+
+    calls.clear()
+    replayed = apply_authorized_action(bound_allow, proposal, execute, healthy, _reads(healthy, on_backup))
+    assert calls == [] and replayed["execution_error"] == "decision already used", replayed
+
+    stale_bound = bind_gate_decision(dict(integrity_allow), healthy, proposal, [])
+    calls.clear()
+    other_state = _snapshot(r1_via="10.0.13.2", r4_via="10.0.34.1")
+    mismatched = apply_authorized_action(stale_bound, proposal, execute, other_state, lambda: other_state)
+    assert calls == [] and mismatched["execution_error"] == "decision not bound to this snapshot", mismatched
+
+    calls.clear()
+    changed_proposal = apply_authorized_action(
+        stale_bound,
+        dict(proposal, action="DO_NOTHING"),
+        execute,
+        healthy,
+        lambda: healthy,
+    )
+    assert calls == [] and changed_proposal["execution_error"] == "proposal changed since the gate decision", changed_proposal
+
+    calls.clear()
+    still_valid = apply_authorized_action(stale_bound, proposal, execute, healthy, _reads(healthy, on_backup))
+    assert calls == [proposal] and still_valid["state_verified"] is True and still_valid["remediation_succeeded"] is True, still_valid
+
+    calls.clear()
+    malformed = apply_authorized_action(
+        bind_gate_decision(dict(integrity_allow), healthy, proposal, []),
+        {"action": "reboot", "target": "HostA_to_HostB", "reason": "no"},
+        execute,
+        healthy,
+        lambda: healthy,
+    )
+    assert calls == [] and malformed["execution_error"] == "invalid proposal", malformed
+
+    import os as _os
+
+    previous_hmac = _os.environ.get("VERIFIX_GATE_HMAC")
+    try:
+        _os.environ["VERIFIX_GATE_HMAC"] = "stage11-test-secret"
+        signed = bind_gate_decision(dict(integrity_allow), healthy, proposal, [])
+        assert signed["binding"]["signed"] is True and signed["binding"]["signature"]
+        assert not binding_errors(signed, healthy, proposal)
+        signed["binding"]["signature"] = "dead"
+        assert binding_errors(signed, healthy, proposal) == ["decision signature is invalid"]
+    finally:
+        if previous_hmac is None:
+            _os.environ.pop("VERIFIX_GATE_HMAC", None)
+        else:
+            _os.environ["VERIFIX_GATE_HMAC"] = previous_hmac
+    unsigned = bind_gate_decision(dict(integrity_allow), healthy, proposal, [])
+    assert unsigned["binding"]["signed"] is False
+    assert not binding_errors(unsigned, healthy, proposal)
 
     print("execution boundary: PASS")
 
@@ -1549,6 +1659,132 @@ def live_gate():
     return 0
 
 
+def live_integrity():
+    """Bind, replay, and revalidation on the live diamond. Does not reroute.
+
+    On the VM, as root:
+
+        sudo python3 bench/run_episode.py --live-integrity
+    """
+    import os
+    import tempfile
+
+    if not hasattr(os, "geteuid") or os.geteuid() != 0:
+        print("verification integrity must run as root on the Mininet VM.", file=sys.stderr)
+        return 2
+    from bench.mininet_util import mn_cleanup
+    from gate.integrity import bind_gate_decision
+    from network.topology import create_network
+
+    mn_cleanup()
+    state = create_network()
+    net, links = state["net"], state["links"]
+    proposal = {
+        "action": "REROUTE",
+        "target": "HostA_to_HostB",
+        "reason": "live integrity",
+        "proposed_path": ["r1", "r3", "r4"],
+    }
+    executed = []
+
+    def read():
+        return read_execution_state(net, links)
+
+    def stub(item):
+        executed.append(item)
+        return {"executed": False, "action": "REROUTE"}
+
+    failures = []
+
+    def expect(label, ok, detail=""):
+        print(f"  {'PASS' if ok else 'FAIL'}  {label}" + (f": {detail}" if detail and not ok else ""))
+        if not ok:
+            failures.append(label)
+
+    try:
+        approved = read()
+        allow = {
+            "decision": "allow",
+            "reason": "integrity",
+            "proposal_action": "REROUTE",
+            "tests_run": [],
+            "checks": {},
+        }
+        bound = bind_gate_decision(allow, approved, proposal, [])
+        expect("unsigned bind", bound.get("binding", {}).get("signed") is False, str(bound.get("binding")))
+
+        executed.clear()
+        out = apply_authorized_action(bound, proposal, stub, approved, read)
+        expect(
+            "bound allow executes once",
+            executed == [proposal] and out.get("state_verified") is True and out.get("execution_attempted") is True,
+            str(out),
+        )
+
+        executed.clear()
+        replay = apply_authorized_action(bound, proposal, stub, approved, read)
+        expect(
+            "replay of a used decision is refused",
+            not executed and replay.get("execution_error") == "decision already used",
+            str(replay),
+        )
+
+        stale = bind_gate_decision(dict(allow), approved, proposal, [])
+        other = dict(approved)
+        other["routes"] = [
+            dict(row, route=(row.get("route") or "") + " #stale")
+            for row in (approved.get("routes") or [])
+        ]
+        executed.clear()
+        mismatched = apply_authorized_action(stale, proposal, stub, other, read)
+        expect(
+            "decision bound to a different snapshot is refused",
+            not executed and mismatched.get("execution_error") == "decision not bound to this snapshot",
+            str(mismatched),
+        )
+
+        executed.clear()
+        mutated = apply_authorized_action(stale, dict(proposal, action="DO_NOTHING"), stub, approved, read)
+        expect(
+            "proposal changed since the gate decision is refused",
+            not executed and mutated.get("execution_error") == "proposal changed since the gate decision",
+            str(mutated),
+        )
+
+        executed.clear()
+        blocked = apply_authorized_action({"decision": "block"}, proposal, stub, approved, read)
+        expect("block does not execute", not executed and blocked.get("execution_attempted") is False, str(blocked))
+
+        record = {
+            "episode_id": "live-integrity",
+            "gate_decision": stale,
+            "agent_proposal": proposal,
+            "state_verified": False,
+        }
+        logged = save_episode(record, tempfile.mkdtemp())
+        loaded = json.loads(Path(logged).read_text(encoding="utf-8"))
+        expect(
+            "auditable decision record",
+            loaded.get("gate_decision", {}).get("binding", {}).get("decision_id")
+            == stale.get("binding", {}).get("decision_id"),
+            str(loaded.get("gate_decision")),
+        )
+        Path(logged).unlink()
+        Path(logged).parent.rmdir()
+    except Exception as exc:
+        failures.append(f"{type(exc).__name__}: {exc}")
+        print(f"  FAIL  {type(exc).__name__}: {exc}")
+    finally:
+        net.stop()
+        mn_cleanup()
+
+    if failures:
+        print("verification integrity: FAIL " + "; ".join(str(item) for item in failures))
+        return 1
+    print("verification integrity: PASS")
+    return 0
+
+
 if __name__ == "__main__":
     if "--live-recheck" in sys.argv:
         sys.exit(live_recheck())
@@ -1556,6 +1792,8 @@ if __name__ == "__main__":
         sys.exit(live_gate_inputs())
     if "--live-gate" in sys.argv:
         sys.exit(live_gate())
+    if "--live-integrity" in sys.argv:
+        sys.exit(live_integrity())
     if "--live" in sys.argv:
         sys.exit(live_diamond())
     if "--live-cost" in sys.argv:
