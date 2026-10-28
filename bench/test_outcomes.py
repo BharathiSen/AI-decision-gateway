@@ -8,7 +8,15 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from bench.outcomes import grade_result, is_degraded, parse_qdisc_stats, signature
-from bench.signature_checks import load_expected, separation_errors
+from bench.signature_checks import (
+    degraded_tests,
+    expected_actions,
+    fix_pairs,
+    load_expected,
+    outcome_map,
+    separation_errors,
+    valid_fix_set,
+)
 from bench.tests import evaluate_against_thresholds
 
 THRESHOLDS = {
@@ -241,10 +249,47 @@ def test_signature_rules():
     check("signature map", graded["T1_e2e_ping"] == "ok" and graded["T7_route_check"] == "primary", str(graded))
 
 
+def _actions(do_nothing, reroute, rebalance):
+    return {"DO_NOTHING": {"recovered": do_nothing}, "REROUTE": {"recovered": reroute}, "REBALANCE": {"recovered": rebalance}}
+
+
+def test_ground_truth_rules():
+    healthy = {"T1_e2e_ping": "ok", "T4_mtu": "df_ok", "T8_tcp_vs_ping": "both_ok", "T10_speed": "ok"}
+    check("healthy recovery tests", degraded_tests(healthy) == [])
+    check("TCP failure is not recovered", degraded_tests({**healthy, "T8_tcp_vs_ping": "ping_ok_tcp_fail"}) == ["T8_tcp_vs_ping"])
+    check("missing recovery test is degraded", degraded_tests({"T1_e2e_ping": "ok"}) == ["T4_mtu", "T8_tcp_vs_ping", "T10_speed"])
+
+    check("fine unchanged: DO_NOTHING only", valid_fix_set(_actions(True, True, True)) == ["DO_NOTHING"])
+    check("fine unchanged even if reroute errored", valid_fix_set(_actions(True, None, None)) == ["DO_NOTHING"])
+    check("reroute fixes it", valid_fix_set(_actions(False, True, True)) == ["REROUTE", "REBALANCE"])
+    check("nothing fixes it: ESCALATE", valid_fix_set(_actions(False, False, False)) == ["ESCALATE"])
+    check("failed baseline measurement: unknown", valid_fix_set(_actions(None, True, True)) is None)
+    check("failed remediation measurement: unknown", valid_fix_set(_actions(False, True, None)) is None)
+
+    rows = _synthetic_matrix()
+    by_fault = outcome_map(rows)
+    fixes = {"H0": ["DO_NOTHING"], "F3": ["REROUTE"], "F11": ["ESCALATE"], "F12": ["DO_NOTHING"], "F1": ["REROUTE", "REBALANCE"], "F2": None}
+    pairs = {(p["fault_a"], p["fault_b"]): p for p in fix_pairs({k: by_fault[k] for k in fixes}, fixes)}
+    check("unknown fix set is left out of pairs", not any("F2" in key for key in pairs), str(list(pairs)))
+    check("shared fix: no pair", ("H0", "F12") not in pairs and ("F3", "F1") not in pairs and ("H0", "F12") not in pairs)
+    check("F3 vs F11 separated by T2 and T9", {"T2_hop_ping", "T9_oneway_loss"} <= set(pairs[("F3", "F11")]["separating_tests"]))
+    check("separable pair has no expected action", pairs[("F3", "F11")]["expected_action"] is None)
+
+    collapsed = dict(by_fault)
+    collapsed["F11"] = dict(by_fault["F3"])
+    pairs = fix_pairs({k: collapsed[k] for k in fixes}, fixes)
+    same = next(p for p in pairs if {p["fault_a"], p["fault_b"]} == {"F3", "F11"})
+    check("identical outcomes: inseparable, ESCALATE", same["inseparable"] and same["expected_action"] == "ESCALATE" and same["separating_tests"] == [])
+    expected = expected_actions(fixes, pairs)
+    check("inseparable scenarios expect ESCALATE", expected["F3"] == ["ESCALATE"] and expected["F11"] == ["ESCALATE"])
+    check("others keep measured fixes", expected["H0"] == ["DO_NOTHING"] and expected["F1"] == ["REROUTE", "REBALANCE"] and "F2" not in expected)
+
+
 def main():
     test_grades()
     test_expected_catalog_covers_faults()
     test_signature_rules()
+    test_ground_truth_rules()
     print("PASS")
 
 

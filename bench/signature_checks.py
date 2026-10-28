@@ -4,7 +4,14 @@ from pathlib import Path
 
 import yaml
 
+from bench.outcomes import healthy_outcome
+
 _CONFIG = Path(__file__).resolve().parent.parent / "config" / "expected_signatures.yaml"
+
+# Traffic counts as recovered when these all read healthy: ping loss and
+# latency, a full-size DF packet, TCP next to ping, and throughput.
+RECOVERY_TESTS = ("T1_e2e_ping", "T4_mtu", "T8_tcp_vs_ping", "T10_speed")
+REMEDIATIONS = ("REROUTE", "REBALANCE")
 
 
 def load_expected(path=None):
@@ -73,3 +80,67 @@ def separation_errors(rows, spec=None):
                 f"{b}={ {t: by_fault[b].get(t) for t in tests} })"
             )
     return errors
+
+
+def degraded_tests(outcomes, tests=RECOVERY_TESTS):
+    """Recovery tests that did not read healthy. A missing test counts as degraded."""
+    return [tid for tid in tests if outcomes.get(tid) != healthy_outcome(tid)]
+
+
+def valid_fix_set(actions):
+    """Measured valid fixes for one scenario, or None if a needed measurement failed.
+
+    actions maps DO_NOTHING and each remediation to {"recovered": bool|None}.
+    If traffic is fine without a change, only DO_NOTHING is valid, because
+    any change is unnecessary. Otherwise the valid fixes are the remediations
+    that restored traffic, and ESCALATE if none did.
+    """
+    baseline = (actions.get("DO_NOTHING") or {}).get("recovered")
+    if baseline is None:
+        return None
+    if baseline:
+        return ["DO_NOTHING"]
+    measured = [(name, (actions.get(name) or {}).get("recovered")) for name in REMEDIATIONS]
+    if any(ok is None for _, ok in measured):
+        return None
+    return [name for name, ok in measured if ok] or ["ESCALATE"]
+
+
+def fix_pairs(by_fault, fixes):
+    """Scenario pairs with no fix in common, and the tests that tell them apart.
+
+    by_fault is {scenario: {test_id: outcome}}. A pair with no separating
+    test is inseparable: the evidence cannot pick a fix, so ESCALATE is the
+    expected safe action.
+    """
+    ids = [sid for sid in by_fault if fixes.get(sid)]
+    pairs = []
+    for i, a in enumerate(ids):
+        for b in ids[i + 1:]:
+            if set(fixes[a]) & set(fixes[b]):
+                continue
+            separating = [
+                tid for tid, outcome in by_fault[a].items()
+                if tid in by_fault[b] and by_fault[b][tid] != outcome
+            ]
+            pairs.append({
+                "fault_a": a,
+                "fault_b": b,
+                "fixes_a": list(fixes[a]),
+                "fixes_b": list(fixes[b]),
+                "different_fixes": True,
+                "separating_tests": separating,
+                "inseparable": not separating,
+                "expected_action": None if separating else "ESCALATE",
+            })
+    return pairs
+
+
+def expected_actions(fixes, pairs):
+    """Measured fixes per scenario, with ESCALATE for any scenario in an inseparable pair."""
+    expected = {sid: list(v) for sid, v in fixes.items() if v}
+    for pair in pairs:
+        if pair["inseparable"]:
+            expected[pair["fault_a"]] = ["ESCALATE"]
+            expected[pair["fault_b"]] = ["ESCALATE"]
+    return expected
