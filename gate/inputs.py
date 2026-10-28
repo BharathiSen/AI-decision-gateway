@@ -224,9 +224,12 @@ def validate_snapshot(snapshot):
             if not isinstance(row, dict):
                 errors.append(f"snapshot.routes[{i}] must be an object")
                 continue
-            for key in ("node", "prefix", "route"):
+            for key in ("node", "prefix"):
                 if not isinstance(row.get(key), str) or not row.get(key):
                     errors.append(f"snapshot.routes[{i}].{key} is missing")
+            # Empty route text is a live observation (link down / no matching prefix).
+            if "route" not in row or not isinstance(row.get("route"), str):
+                errors.append(f"snapshot.routes[{i}].route is missing")
             found.add((row.get("node"), row.get("prefix")))
         for pair in REQUIRED_ROUTES:
             if pair not in found and routes:

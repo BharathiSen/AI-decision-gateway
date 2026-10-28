@@ -1000,6 +1000,11 @@ def _self_check():
     missing_up = _snapshot()
     del missing_up["links"][0]["up"]
     assert validate_snapshot(missing_up)
+    empty_route = _snapshot()
+    empty_route["routes"][0]["route"] = ""
+    assert not validate_snapshot(empty_route), empty_route
+    del empty_route["routes"][0]["route"]
+    assert validate_snapshot(empty_route)
     bogus_pred = dict(predicted_ok, causes=[{"cause_id": "F3", "predicted_tests": [{"test_id": "T1_e2e_ping", "expected": ""}]}])
     assert validate_proposal_inputs(bogus_pred, costs=frozen["costs"])
     bad_mode = gate_decide(None, predicted_ok, healthy, slow_ping, mode="maybe", run_missing_tests=False)
