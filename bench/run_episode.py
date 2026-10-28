@@ -976,6 +976,37 @@ def _self_check():
     assert at_n0["decision"] == "block" and at_n0["reason"] == "consistency failed", at_n0
     assert at_n2["decision"] == "allow", at_n2
 
+    from gate.inputs import (
+        load_frozen_context,
+        pipeline_interfaces,
+        validate_proposal_inputs,
+        validate_snapshot,
+    )
+
+    frozen_ok, frozen_errors, frozen = load_frozen_context("N0")
+    assert frozen_ok, frozen_errors
+    assert frozen["catalog"] and frozen["matrix"] and frozen["thresholds"] and frozen["costs"]
+    assert "U1" in frozen["held_out"] and all(row.get("fault_id") not in frozen["held_out"] for row in frozen["matrix"])
+    stages = pipeline_interfaces()
+    assert stages["safety_checking"] is check_safety
+    assert stages["candidate_generation"] is not None and stages["test_selection"] is not None
+    unknown_noise = gate_decide(None, predicted_ok, healthy, slow_ping, mode="pilot_v0", run_missing_tests=False, noise_id="N99")
+    assert unknown_noise["decision"] == "escalate" and unknown_noise["reason"].startswith("frozen inputs:"), unknown_noise
+    no_hypotheses = gate_decide(None, backup, healthy, [], mode="full", run_missing_tests=False)
+    assert no_hypotheses["decision"] == "block" and no_hypotheses["reason"] == "incomplete hypotheses", no_hypotheses
+    assert "AI_PRIMARY" not in str(no_hypotheses)
+    empty_snap = gate_decide(None, predicted_ok, {}, slow_ping, mode="pilot_v0", run_missing_tests=False)
+    assert empty_snap["decision"] == "escalate" and empty_snap["reason"].startswith("incomplete snapshot:"), empty_snap
+    missing_up = _snapshot()
+    del missing_up["links"][0]["up"]
+    assert validate_snapshot(missing_up)
+    bogus_pred = dict(predicted_ok, causes=[{"cause_id": "F3", "predicted_tests": [{"test_id": "T1_e2e_ping", "expected": ""}]}])
+    assert validate_proposal_inputs(bogus_pred, costs=frozen["costs"])
+    bad_mode = gate_decide(None, predicted_ok, healthy, slow_ping, mode="maybe", run_missing_tests=False)
+    assert bad_mode["decision"] == "escalate" and bad_mode["reason"] == "invalid mode", bad_mode
+    none_proposal = gate_decide(None, None, healthy, [], mode="full", run_missing_tests=False)
+    assert none_proposal["decision"] == "block", none_proposal
+
     oam._check_costs()
     priced = {
         "action": "DO_NOTHING",
@@ -1309,9 +1340,77 @@ def live_recheck():
     return 0
 
 
+def live_gate_inputs():
+    """Frozen catalog/matrix plus a live diamond snapshot into decide().
+
+    On the VM, as root:
+
+        sudo python3 bench/run_episode.py --live-gate-inputs
+    """
+    import os
+
+    if not hasattr(os, "geteuid") or os.geteuid() != 0:
+        print("gate inputs live check must run as root on the Mininet VM.", file=sys.stderr)
+        return 2
+    from bench.mininet_util import mn_cleanup
+    from gate.inputs import load_frozen_context, validate_snapshot
+    from network.topology import create_network
+
+    frozen_ok, frozen_errors, _frozen = load_frozen_context("N0")
+    if not frozen_ok:
+        print("gate inputs live: FAIL frozen " + "; ".join(frozen_errors))
+        return 1
+
+    mn_cleanup()
+    state = create_network()
+    net, links = state["net"], state["links"]
+    failures = []
+    try:
+        snap = collect_current_state(net, links)
+        snap_errors = validate_snapshot(snap)
+        if snap_errors:
+            failures.append("snapshot " + "; ".join(snap_errors))
+        if not validate_record("telemetry", snap)[0]:
+            failures.append("telemetry schema")
+        nothing = {
+            "action": "DO_NOTHING",
+            "target": "HostA_to_HostB",
+            "reason": "stage9 live",
+            "proposed_path": ["r1", "r2", "r4"],
+        }
+        allowed = gate_decide(net, nothing, snap, [], mode="full", run_missing_tests=False, noise_id="N0")
+        if allowed.get("decision") != "allow":
+            failures.append(f"do_nothing {allowed}")
+        risky = {
+            "action": "REROUTE",
+            "target": "HostA_to_HostB",
+            "reason": "stage9 live",
+            "proposed_path": ["r1", "r3", "r4"],
+        }
+        blocked = gate_decide(net, risky, snap, [], mode="full", run_missing_tests=False, noise_id="N0")
+        if blocked.get("decision") == "allow" or blocked.get("reason") != "incomplete hypotheses":
+            failures.append(f"reroute without hypotheses {blocked}")
+        empty = gate_decide(net, dict(risky, causes=[{"cause_id": "F1", "predicted_tests": []}]), {}, [], mode="full", run_missing_tests=False)
+        if empty.get("decision") != "escalate" or not str(empty.get("reason", "")).startswith("incomplete snapshot:"):
+            failures.append(f"empty snapshot {empty}")
+    except Exception as exc:
+        failures.append(f"{type(exc).__name__}: {exc}")
+    finally:
+        net.stop()
+        mn_cleanup()
+
+    if failures:
+        print("gate inputs live: FAIL " + "; ".join(failures))
+        return 1
+    print("gate inputs live: PASS")
+    return 0
+
+
 if __name__ == "__main__":
     if "--live-recheck" in sys.argv:
         sys.exit(live_recheck())
+    if "--live-gate-inputs" in sys.argv:
+        sys.exit(live_gate_inputs())
     if "--live" in sys.argv:
         sys.exit(live_diamond())
     if "--live-cost" in sys.argv:
