@@ -9,10 +9,11 @@ from bench.outcomes import healthy_outcome
 _CONFIG = Path(__file__).resolve().parent.parent / "config" / "expected_signatures.yaml"
 
 # Traffic counts as recovered when ping, a full-size DF packet and TCP
-# all read healthy. T10 is still measured, but a slightly slow iperf on an
-# otherwise working path is VM noise, not a failed recovery.
+# all read healthy, and the best T10 sample is at least half the 10 Mbit
+# diamond. A 7.5 vs 8.09 reading is VM noise; 1.4 Mbit under corruption is not.
 RECOVERY_TESTS = ("T1_e2e_ping", "T4_mtu", "T8_tcp_vs_ping", "T10_speed")
 REQUIRED_RECOVERY_TESTS = ("T1_e2e_ping", "T4_mtu", "T8_tcp_vs_ping")
+RECOVERY_T10_MIN_MBIT = 4.0
 REMEDIATIONS = ("REROUTE", "REBALANCE")
 
 
@@ -84,9 +85,21 @@ def separation_errors(rows, spec=None):
     return errors
 
 
-def degraded_tests(outcomes, tests=REQUIRED_RECOVERY_TESTS):
-    """Recovery tests that did not read healthy. A missing test counts as degraded."""
-    return [tid for tid in tests if outcomes.get(tid) != healthy_outcome(tid)]
+def best_mbit(samples):
+    values = [s for s in (samples or []) if isinstance(s, (int, float))]
+    return max(values) if values else None
+
+
+def degraded_tests(outcomes, tests=REQUIRED_RECOVERY_TESTS, t10_samples=None):
+    """Recovery tests that did not read healthy. A missing test counts as degraded.
+
+    T10 is degraded only when the best sample is below RECOVERY_T10_MIN_MBIT.
+    """
+    bad = [tid for tid in tests if outcomes.get(tid) != healthy_outcome(tid)]
+    best = best_mbit(t10_samples)
+    if best is not None and best < RECOVERY_T10_MIN_MBIT and "T10_speed" not in bad:
+        bad.append("T10_speed")
+    return bad
 
 
 def valid_fix_set(actions):

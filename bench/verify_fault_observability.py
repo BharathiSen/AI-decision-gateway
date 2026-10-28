@@ -177,7 +177,7 @@ def measure_action(net, action):
         results, speed = _measure(net, test_ids=list(RECOVERY_TESTS), ping_count=RECOVERY_PING_COUNT)
         out["raw"] = _raw(results, speed)
         out["outcomes"] = signature(results, noise_id=NOISE_ID)
-        out["degraded"] = degraded_tests(out["outcomes"])
+        out["degraded"] = degraded_tests(out["outcomes"], t10_samples=speed)
         out["recovered"] = not out["degraded"]
     except Exception as exc:
         out["error"] = f"{type(exc).__name__}: {exc}"
@@ -332,7 +332,7 @@ def write_outputs(report, results_dir=RESULTS):
         "params": _OBSERVABLE_PARAMS,
         "recovery_tests": list(RECOVERY_TESTS),
         "rules": {
-            "recovered": "T1, T4 and T8 read healthy; T10 is recorded but a slow sample alone is not a failed recovery",
+            "recovered": "T1, T4 and T8 read healthy, and the best T10 sample is at least 4 Mbit (half the diamond). A 7.5 vs 8.09 reading is not a failure.",
             "valid_fixes": "DO_NOTHING alone if traffic is fine unchanged; else each remediation that recovered; else ESCALATE",
             "different_fixes": "the two valid fix sets share no action",
             "inseparable": "different fixes and no matrix test differs; expected action ESCALATE",
@@ -587,10 +587,14 @@ def _self_check():
         healthy = measure_scenario(None, "H0")
         samples = healthy["actions"]["DO_NOTHING"]["raw"]["T10_mbit_samples"]
         check("a single slow T10 sample is retried and the best kept", samples == [3.0, 9.5] and healthy["actions"]["DO_NOTHING"]["recovered"], str(samples))
-        world["slow_speeds"] = [9.5, 0.5, 0.3, 0.6]
+        world["slow_speeds"] = [9.5, 7.1, 7.2, 7.4]
         healthy = measure_scenario(None, "H0")
         samples = healthy["actions"]["DO_NOTHING"]["raw"]["T10_mbit_samples"]
-        check("T10 slow on every retry stays slow but ping/TCP still count as recovered", samples == [0.5, 0.3, 0.6] and healthy["actions"]["DO_NOTHING"]["recovered"], str(samples))
+        check("T10 around 7 Mbit is still recovered", samples == [7.1, 7.2, 7.4] and healthy["actions"]["DO_NOTHING"]["recovered"], str(samples))
+        world["slow_speeds"] = [9.5, 1.3, 1.4, 1.7]
+        healthy = measure_scenario(None, "H0")
+        samples = healthy["actions"]["DO_NOTHING"]["raw"]["T10_mbit_samples"]
+        check("T10 well under 4 Mbit is not recovered", samples == [1.3, 1.4, 1.7] and not healthy["actions"]["DO_NOTHING"]["recovered"], str(samples))
         check("the battery's T10 is retried the same way", healthy["raw"]["T10_mbit_samples"] == [9.5])
         world["slow_speeds"] = []
         check("a broken path is not retried into recovery", by_id["F1"]["actions"]["DO_NOTHING"]["raw"]["T10_mbit_samples"] == [0.0, 0.0, 0.0])

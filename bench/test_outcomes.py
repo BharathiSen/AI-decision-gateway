@@ -263,6 +263,8 @@ def test_ground_truth_rules():
     check("TCP failure is not recovered", degraded_tests({**healthy, "T8_tcp_vs_ping": "ping_ok_tcp_fail"}) == ["T8_tcp_vs_ping"])
     check("missing recovery test is degraded", degraded_tests({"T1_e2e_ping": "ok"}) == ["T4_mtu", "T8_tcp_vs_ping"])
     check("T10-only slow is not a failed recovery", degraded_tests({**healthy, "T10_speed": "slow"}) == [])
+    check("T10 at 7.5 Mbit is VM noise", degraded_tests(healthy, t10_samples=[7.5, 8.1]) == [])
+    check("T10 at 1.4 Mbit is a failed recovery", degraded_tests(healthy, t10_samples=[1.37, 1.71]) == ["T10_speed"])
 
     check("fine unchanged: DO_NOTHING only", valid_fix_set(_actions(True, True, True)) == ["DO_NOTHING"])
     check("fine unchanged even if reroute errored", valid_fix_set(_actions(True, None, None)) == ["DO_NOTHING"])
