@@ -171,21 +171,18 @@ def T4_mtu(net):
 
 _SNMP_ERROR_FIELDS = ("InHdrErrors", "InCsumErrors", "InErrors")
 _T5_SNMP_NODES = ("r1", "r2", "r3", "r4", "hostA", "hostB")
+# F4 corrupts r2→r4. An e2e ping can be dropped before any checksum
+# counter moves; a hop ping lands on r4's IP stack.
+_T5_HOP_PROBES = (("r2", "10.0.24.2"),)
 
 
-def _snmp_input_errors(node):
-    """IP/ICMP header, checksum and InErrors. netem corrupt bumps these; loss does not.
-
-    F4 corrupts on r2's egress, so r4 (the next hop) is where InHdrErrors
-    land. hostB only sees the packets r4 forwarded with a good IP checksum.
-    """
-    text = run_in_node(node, "cat /proc/net/snmp")
+def _snmp_table_errors(text, prefixes):
     total = 0
     pending = None
     pending_header = None
     for line in (text or "").splitlines():
         parts = line.split()
-        if len(parts) < 2 or parts[0] not in ("Ip:", "Icmp:"):
+        if len(parts) < 2 or parts[0] not in prefixes:
             continue
         if pending == parts[0]:
             for name, value in zip(pending_header, parts[1:]):
@@ -199,6 +196,17 @@ def _snmp_input_errors(node):
             pending = parts[0]
             pending_header = parts[1:]
     return total
+
+
+def _snmp_input_errors(node):
+    """IP/ICMP header, checksum and InErrors. netem corrupt bumps these; loss does not.
+
+    F4 corrupts on r2's egress, so r4 (the next hop) is where InHdrErrors
+    land. hostB only sees the packets r4 forwarded with a good IP checksum.
+    """
+    snmp = _snmp_table_errors(run_in_node(node, "cat /proc/net/snmp"), ("Ip:", "Icmp:"))
+    ext = _snmp_table_errors(run_in_node(node, "cat /proc/net/netstat"), ("IpExt:",))
+    return snmp + ext
 
 
 def T5_if_errors(net, probe_count=0):
@@ -229,11 +237,16 @@ def T5_if_errors(net, probe_count=0):
             stats[f"{name}/{parts[0]}"] = {"rx_errors": rx, "tx_errors": _counter(parts[2])}
     if probe_count:
         before = {name: _snmp_input_errors(net.get(name)) for name in _T5_SNMP_NODES}
-        _hop_ping(net, "hostA", net.get("hostB").IP(), count=probe_count, interval=0.05)
+        interval = 0.02 if probe_count >= 50 else 0.05
+        for src, dst_ip in _T5_HOP_PROBES:
+            _hop_ping(net, src, dst_ip, count=probe_count, interval=interval)
+        _hop_ping(net, "hostA", net.get("hostB").IP(), count=probe_count, interval=interval)
+        time.sleep(0.2)
         for name in _T5_SNMP_NODES:
             delta = max(0, _snmp_input_errors(net.get(name)) - before[name])
             stats[f"{name}/icmp"] = {"rx_errors": delta, "tx_errors": 0}
-    probes = [_icmp_probe(probe_count)] if probe_count else []
+    hop_packets = probe_count * (1 + len(_T5_HOP_PROBES)) if probe_count else 0
+    probes = [_icmp_probe(hop_packets)] if hop_packets else []
     return {
         "test_id": "T5_if_errors",
         "interfaces": stats,
@@ -857,7 +870,9 @@ def _check_costs():
             self.blob = blob
 
     def fake_snmp(node, command, timeout=60.0):
-        assert command == "cat /proc/net/snmp"
+        if command == "cat /proc/net/netstat":
+            return getattr(node, "netstat", "IpExt: InCsumErrors\nIpExt: 0\n")
+        assert command == "cat /proc/net/snmp", command
         return node.blob
 
     saved_run = globals()["run_in_node"]
@@ -877,6 +892,43 @@ def _check_costs():
         )
         assert _snmp_input_errors(_SnmpNode(old)) == 3, _snmp_input_errors(_SnmpNode(old))
         assert _snmp_input_errors(_SnmpNode(new)) == 2 + 1 + 3 + 5, _snmp_input_errors(_SnmpNode(new))
+        ext = _SnmpNode(old)
+        ext.netstat = "IpExt: InNoRoutes InCsumErrors\nIpExt: 0 7\n"
+        assert _snmp_input_errors(ext) == 3 + 7, _snmp_input_errors(ext)
+    finally:
+        globals()["run_in_node"] = saved_run
+
+    class _T5Net:
+        def __init__(self):
+            self.cmds = []
+
+        def get(self, name):
+            return _T5Node(name, self)
+
+    class _T5Node:
+        def __init__(self, name, net):
+            self.name = name
+            self.net = net
+
+        def IP(self):
+            return "10.0.4.2"
+
+        def intfList(self):
+            return []
+
+    def fake_t5(node, command, timeout=60.0):
+        node.net.cmds.append((node.name, command))
+        if "cat /proc/net/" in command:
+            return "Ip: InHdrErrors\nIp: 0\nIpExt: InCsumErrors\nIpExt: 0\n"
+        return "3 packets transmitted, 3 received, 0% packet loss\n"
+
+    globals()["run_in_node"] = fake_t5
+    try:
+        t5net = _T5Net()
+        T5_if_errors(t5net, probe_count=3)
+        pinged = [(n, c) for n, c in t5net.cmds if "ping " in c]
+        assert any(n == "r2" and "10.0.24.2" in c for n, c in pinged), pinged
+        assert any(n == "hostA" and "10.0.4.2" in c for n, c in pinged), pinged
     finally:
         globals()["run_in_node"] = saved_run
 

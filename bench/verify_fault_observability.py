@@ -229,7 +229,7 @@ def measure_scenario(net, scenario_id):
     cids = []
     try:
         cids = _inject_scenario(net, scenario_id)
-        results, speed = _measure(net, ping_count=MATRIX_PING_COUNT, error_probe=80)
+        results, speed = _measure(net, ping_count=MATRIX_PING_COUNT, error_probe=200)
         record["raw"] = _raw(results, speed)
         record["signature"] = signature(results, noise_id=NOISE_ID)
         record["actions"] = {action: measure_action(net, action) for action in MEASURED_ACTIONS}

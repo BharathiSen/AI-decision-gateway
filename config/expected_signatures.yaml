@@ -23,9 +23,9 @@ faults:
     required: true
     notes: "Forward loss on R2-R4. T1 loss; primary r2-r4 hop loss."
   F4:
-    differs_from_healthy: [T5_if_errors]
+    differs_from_healthy: [T5_if_errors, T10_speed]
     required: true
-    notes: "Corruption shows up as interface errors, unlike plain loss."
+    notes: "Corruption shows as T5 checksum errors when they are counted, and as slow T10. The r2-r4 hop stays up, unlike F3 loss."
   F5:
     differs_from_healthy: [T1_e2e_ping, T2_hop_ping]
     required: true
@@ -102,8 +102,8 @@ pairs:
     notes: "Delay versus loss."
   - fault_a: F4
     fault_b: F3
-    separating_tests: [T5_if_errors]
-    notes: "Corruption versus loss."
+    separating_tests: [T5_if_errors, T2_hop_ping]
+    notes: "Corruption versus loss. T2 hop stays ok under corrupt; T5 checksum errors when the receiver counts them."
   - fault_a: F6
     fault_b: F3
     separating_tests: [T6_queue_stats, T10_speed]
