@@ -169,19 +169,27 @@ def T4_mtu(net):
     }
 
 
+_SNMP_ERROR_FIELDS = ("InHdrErrors", "InCsumErrors", "InErrors")
+_T5_SNMP_NODES = ("r1", "r2", "r3", "r4", "hostA", "hostB")
+
+
 def _snmp_input_errors(node):
-    """IP header errors plus ICMP checksum errors. netem corrupt bumps these; loss does not."""
+    """IP/ICMP header, checksum and InErrors. netem corrupt bumps these; loss does not.
+
+    F4 corrupts on r2's egress, so r4 (the next hop) is where InHdrErrors
+    land. hostB only sees the packets r4 forwarded with a good IP checksum.
+    """
     text = run_in_node(node, "cat /proc/net/snmp")
     total = 0
     pending = None
+    pending_header = None
     for line in (text or "").splitlines():
         parts = line.split()
         if len(parts) < 2 or parts[0] not in ("Ip:", "Icmp:"):
             continue
         if pending == parts[0]:
-            header = pending_header
-            for name, value in zip(header, parts[1:]):
-                if name in ("InHdrErrors", "InCsumErrors"):
+            for name, value in zip(pending_header, parts[1:]):
+                if name in _SNMP_ERROR_FIELDS:
                     try:
                         total += int(value)
                     except ValueError:
@@ -202,20 +210,29 @@ def T5_if_errors(net, probe_count=0):
         if not intfs:
             continue
         script = "; ".join(
-            f'echo "{intf} $(cat /sys/class/net/{intf}/statistics/rx_errors) $(cat /sys/class/net/{intf}/statistics/tx_errors)"'
+            f'echo "{intf} '
+            f'$(cat /sys/class/net/{intf}/statistics/rx_errors) '
+            f'$(cat /sys/class/net/{intf}/statistics/tx_errors) '
+            f'$(cat /sys/class/net/{intf}/statistics/rx_crc_errors 2>/dev/null || echo 0) '
+            f'$(cat /sys/class/net/{intf}/statistics/rx_frame_errors 2>/dev/null || echo 0)"'
             for intf in intfs
         )
         for line in run_in_node(node, script).splitlines():
             parts = line.split()
             if len(parts) < 3:
                 continue
-            stats[f"{name}/{parts[0]}"] = {"rx_errors": _counter(parts[1]), "tx_errors": _counter(parts[2])}
+            rx = _counter(parts[1])
+            if len(parts) > 3:
+                rx += _counter(parts[3])
+            if len(parts) > 4:
+                rx += _counter(parts[4])
+            stats[f"{name}/{parts[0]}"] = {"rx_errors": rx, "tx_errors": _counter(parts[2])}
     if probe_count:
-        hostB = net.get("hostB")
-        before = _snmp_input_errors(hostB)
-        _hop_ping(net, "hostA", hostB.IP(), count=probe_count, interval=0.05)
-        delta = max(0, _snmp_input_errors(hostB) - before)
-        stats["hostB/icmp"] = {"rx_errors": delta, "tx_errors": 0}
+        before = {name: _snmp_input_errors(net.get(name)) for name in _T5_SNMP_NODES}
+        _hop_ping(net, "hostA", net.get("hostB").IP(), count=probe_count, interval=0.05)
+        for name in _T5_SNMP_NODES:
+            delta = max(0, _snmp_input_errors(net.get(name)) - before[name])
+            stats[f"{name}/icmp"] = {"rx_errors": delta, "tx_errors": 0}
     probes = [_icmp_probe(probe_count)] if probe_count else []
     return {
         "test_id": "T5_if_errors",
@@ -834,6 +851,34 @@ def _check_costs():
     assert lost["latency_ms"] is None and lost["packet_loss_percent"] == 100.0
     fraction = _parse_ping("30 packets transmitted, 20 received, 33.3333% packet loss, time 1500ms\n")
     assert fraction["packet_loss_percent"] == 33.3333, fraction
+
+    class _SnmpNode:
+        def __init__(self, blob):
+            self.blob = blob
+
+    def fake_snmp(node, command, timeout=60.0):
+        assert command == "cat /proc/net/snmp"
+        return node.blob
+
+    saved_run = globals()["run_in_node"]
+    globals()["run_in_node"] = fake_snmp
+    try:
+        old = (
+            "Ip: Forwarding DefaultTTL InReceives InHdrErrors\n"
+            "Ip: 1 64 10 0\n"
+            "Icmp: InMsgs InErrors InDestUnreachs InEchos\n"
+            "Icmp: 4 3 0 4\n"
+        )
+        new = (
+            "Ip: Forwarding DefaultTTL InReceives InHdrErrors InCsumErrors\n"
+            "Ip: 1 64 10 2 1\n"
+            "Icmp: InMsgs InErrors InCsumErrors InEchos\n"
+            "Icmp: 4 3 5 4\n"
+        )
+        assert _snmp_input_errors(_SnmpNode(old)) == 3, _snmp_input_errors(_SnmpNode(old))
+        assert _snmp_input_errors(_SnmpNode(new)) == 2 + 1 + 3 + 5, _snmp_input_errors(_SnmpNode(new))
+    finally:
+        globals()["run_in_node"] = saved_run
 
     _check_one_way()
 

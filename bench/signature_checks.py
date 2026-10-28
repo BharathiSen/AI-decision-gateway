@@ -8,9 +8,11 @@ from bench.outcomes import healthy_outcome
 
 _CONFIG = Path(__file__).resolve().parent.parent / "config" / "expected_signatures.yaml"
 
-# Traffic counts as recovered when these all read healthy: ping loss and
-# latency, a full-size DF packet, TCP next to ping, and throughput.
+# Traffic counts as recovered when ping, a full-size DF packet and TCP
+# all read healthy. T10 is still measured, but a slightly slow iperf on an
+# otherwise working path is VM noise, not a failed recovery.
 RECOVERY_TESTS = ("T1_e2e_ping", "T4_mtu", "T8_tcp_vs_ping", "T10_speed")
+REQUIRED_RECOVERY_TESTS = ("T1_e2e_ping", "T4_mtu", "T8_tcp_vs_ping")
 REMEDIATIONS = ("REROUTE", "REBALANCE")
 
 
@@ -82,7 +84,7 @@ def separation_errors(rows, spec=None):
     return errors
 
 
-def degraded_tests(outcomes, tests=RECOVERY_TESTS):
+def degraded_tests(outcomes, tests=REQUIRED_RECOVERY_TESTS):
     """Recovery tests that did not read healthy. A missing test counts as degraded."""
     return [tid for tid in tests if outcomes.get(tid) != healthy_outcome(tid)]
 

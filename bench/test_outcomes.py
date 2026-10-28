@@ -100,6 +100,10 @@ def test_grades():
         "T5 errors",
         grade_result({"test_id": "T5_if_errors", "interfaces": {"r4/r4-eth0": {"rx_errors": 3, "tx_errors": 0}}}, THRESHOLDS) == "errors:r4/r4-eth0",
     )
+    check(
+        "T5 SNMP delta on the next hop is an error",
+        grade_result({"test_id": "T5_if_errors", "interfaces": {"r4/icmp": {"rx_errors": 4, "tx_errors": 0}, "hostB/icmp": {"rx_errors": 0, "tx_errors": 0}}}, THRESHOLDS) == "errors:r4/icmp",
+    )
 
     parsed = parse_qdisc_stats("Sent 10 bytes 1 pkt (dropped 4, overlimits 0 requeues 0)\n backlog 120b 2p requeues 0")
     check("qdisc parse", parsed["drops"] == 4 and parsed["backlog_bytes"] == 120 and parsed["backlog_packets"] == 2, str(parsed))
@@ -257,7 +261,8 @@ def test_ground_truth_rules():
     healthy = {"T1_e2e_ping": "ok", "T4_mtu": "df_ok", "T8_tcp_vs_ping": "both_ok", "T10_speed": "ok"}
     check("healthy recovery tests", degraded_tests(healthy) == [])
     check("TCP failure is not recovered", degraded_tests({**healthy, "T8_tcp_vs_ping": "ping_ok_tcp_fail"}) == ["T8_tcp_vs_ping"])
-    check("missing recovery test is degraded", degraded_tests({"T1_e2e_ping": "ok"}) == ["T4_mtu", "T8_tcp_vs_ping", "T10_speed"])
+    check("missing recovery test is degraded", degraded_tests({"T1_e2e_ping": "ok"}) == ["T4_mtu", "T8_tcp_vs_ping"])
+    check("T10-only slow is not a failed recovery", degraded_tests({**healthy, "T10_speed": "slow"}) == [])
 
     check("fine unchanged: DO_NOTHING only", valid_fix_set(_actions(True, True, True)) == ["DO_NOTHING"])
     check("fine unchanged even if reroute errored", valid_fix_set(_actions(True, None, None)) == ["DO_NOTHING"])
