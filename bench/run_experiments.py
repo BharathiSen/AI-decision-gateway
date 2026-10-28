@@ -13,8 +13,13 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from baselines.ablations import gate_full, gate_no_predictions
-from baselines import run_method
+from baselines.ablations import (
+    gate_full,
+    gate_no_discrimination,
+    gate_no_grader,
+    gate_no_predictions,
+)
+from baselines import METHODS, run_method
 from gate.decide import decide
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -51,8 +56,11 @@ def replay_episode(record, net=None):
         "gate_full": gate_full(net, proposal, snap, oam, run_missing_tests=False),
         "gate_v0": decide(net, proposal, snap, oam, mode="pilot_v0", run_missing_tests=False),
         "gate_no_predictions": gate_no_predictions(net, proposal, snap, oam, run_missing_tests=False),
-        "B5": run_method("B5", proposal, snap, oam),
+        "gate_no_discrimination": gate_no_discrimination(net, proposal, snap, oam, run_missing_tests=False),
+        "gate_no_grader": gate_no_grader(net, proposal, snap, oam, run_missing_tests=False),
     }
+    for name in METHODS:
+        methods[name] = run_method(name, proposal, snap, oam)
 
     wrong = _wrong(proposal, fault_id)
     for name, out in methods.items():

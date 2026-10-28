@@ -13,5 +13,10 @@ def gate_no_discrimination(net, proposal, snapshot, test_results, **kw):
     return decide(net, proposal, snapshot, test_results, mode="pilot_v0", **kw)
 
 
+def gate_no_grader(net, proposal, snapshot, test_results, **kw):
+    kw.setdefault("learned_grader", False)
+    return decide(net, proposal, snapshot, test_results, **kw)
+
+
 def gate_full(net, proposal, snapshot, test_results, **kw):
     return decide(net, proposal, snapshot, test_results, mode="full", **kw)

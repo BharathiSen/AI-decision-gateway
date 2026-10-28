@@ -10,13 +10,13 @@ from pathlib import Path
 _MODEL = Path(__file__).resolve().parent.parent / "results" / "grader_model.json"
 
 
-def grade_test(test_id, observation, predicted_expected):
+def grade_test(test_id, observation, predicted_expected, use_model=True):
     """Return confidence 0..1 that observation supports prediction."""
     obs = str(observation).lower()
     exp = (predicted_expected or "").lower()
     if exp in obs or obs in exp:
         return 1.0
-    if _MODEL.exists():
+    if use_model and _MODEL.exists():
         data = json.loads(_MODEL.read_text(encoding="utf-8"))
         key = f"{test_id}|{exp}"
         return float(data.get(key, 0.5))

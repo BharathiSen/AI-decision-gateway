@@ -685,6 +685,8 @@ def _self_check():
 
     import ast
     from bench.tests import TEST_FUNCS
+    from baselines import METHODS as BASELINE_METHODS
+    from baselines import _self_check as baselines_self_check
     from baselines import run_method
 
     banned = ("network.controller", "network.fault_injector", "bench.inject", "control.actions")
@@ -729,10 +731,13 @@ def _self_check():
         "reason": "check",
         "proposed_path": ["r1", "r3", "r4"],
     }
-    for method in ("B0", "B1", "B2", "B3", "B5"):
+    for method in BASELINE_METHODS:
         out = run_method(method, shared, healthy, [])
         assert out["decision"] in {"allow", "block", "escalate"}, out
         assert "action" in out and out["method"] == method
+        assert "tests_run" in out and "budget" in out, out
+        assert out["permitted_actions"] == ["REROUTE", "DO_NOTHING", "ESCALATE"]
+    baselines_self_check()
     try:
         run_method("B0", shared, healthy, [], fault_id="F1")
         raise AssertionError("fault_id was accepted")

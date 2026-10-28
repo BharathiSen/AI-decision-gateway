@@ -14,9 +14,18 @@ from bench import tests as oam
 
 
 def decide_b5(net, proposal, snapshot, test_results, run_tests=True):
-    action = normalize_action((proposal or {}).get("action"))
     tests_run = list(test_results or [])
-    ran = {t["test_id"] for t in tests_run}
+    ran = {t["test_id"] for t in tests_run if t.get("test_id")}
+    try:
+        action = normalize_action((proposal or {}).get("action"))
+    except ValueError as exc:
+        return {
+            "method": "B5",
+            "action": (proposal or {}).get("action"),
+            "tests_run": list(ran),
+            "decision": "block",
+            "reason": str(exc),
+        }
     record = {"method": "B5", "action": action.value, "tests_run": list(ran)}
 
     if action not in RISKY_ACTIONS:

@@ -41,6 +41,7 @@ def decide(
     mode="full",
     run_missing_tests=True,
     noise_id="N0",
+    learned_grader=True,
 ):
     """
     mode: 'full' | 'pilot_v0' (consistency + safety only)
@@ -81,7 +82,9 @@ def decide(
             if run_missing_tests and tid not in ran_ids:
                 tests_run.append(oam.run_test(net, tid))
                 ran_ids.add(tid)
-            tr = next(r for r in tests_run if r["test_id"] == tid)
+            tr = next((r for r in tests_run if r.get("test_id") == tid), None)
+            if tr is None:
+                continue
             obs = checks._summarize_observation(tr, thresholds)
             primary_pred = next(
                 (
@@ -95,7 +98,7 @@ def decide(
             )
             exp_alt = _outcome_for_test(tr, alt, matrix_rows, thresholds)
             exp_primary = primary_pred["expected"] if primary_pred else obs
-            if obs != exp_alt and grade_test(tid, obs, exp_primary) >= 0.5:
+            if obs != exp_alt and grade_test(tid, obs, exp_primary, use_model=learned_grader) >= 0.5:
                 ruled_out.append({"alternative": alt, "test_id": tid, "observed": obs})
 
     consistency = checks.check_consistency(proposal, tests_run, primary_cause_id=primary, thresholds=thresholds)
