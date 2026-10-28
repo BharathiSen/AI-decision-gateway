@@ -64,7 +64,7 @@ def _parse_ping(output):
     The ping summary average is the fallback when no reply lines parse.
     """
     output = output or ""
-    loss_match = re.search(r"(\d+)% packet loss", output)
+    loss_match = re.search(r"(\d+(?:\.\d+)?)% packet loss", output)
     rtt_match = re.search(r"= [\d.]+/([\d.]+)/", output)
     rtts = [float(value) for value in _REPLY_RTT.findall(output)]
     average = float(rtt_match.group(1)) if rtt_match else None
@@ -832,6 +832,8 @@ def _check_costs():
     assert summary_only["latency_ms"] == 2.0 and summary_only["rtt_ms"] == []
     lost = _parse_ping("3 packets transmitted, 0 received, 100% packet loss, time 2030ms\n")
     assert lost["latency_ms"] is None and lost["packet_loss_percent"] == 100.0
+    fraction = _parse_ping("30 packets transmitted, 20 received, 33.3333% packet loss, time 1500ms\n")
+    assert fraction["packet_loss_percent"] == 33.3333, fraction
 
     _check_one_way()
 

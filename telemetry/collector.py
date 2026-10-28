@@ -57,7 +57,7 @@ def _node_ips(node):
 
 
 def _parse_ping(output):
-    loss_match = re.search(r"(\d+)% packet loss", output)
+    loss_match = re.search(r"(\d+(?:\.\d+)?)% packet loss", output)
     rtt_match = re.search(r"= [\d.]+/([\d.]+)/", output)
 
     return {
