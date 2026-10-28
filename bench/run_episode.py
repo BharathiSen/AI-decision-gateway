@@ -1493,11 +1493,20 @@ def live_gate():
 
         inj.inject(net, "F1")
         snap1 = collect_current_state(net, links)
-        preds = [
-            {"test_id": row["test_id"], "expected": row["outcome"]}
-            for row in frozen["matrix"]
-            if row.get("fault_id") == "F1" and row.get("test_id") and row.get("outcome") is not None
-        ]
+        from agent.validate import MAX_EXPECTED_LEN
+        from bench.contracts import TEST_IDS
+
+        preds = []
+        for row in frozen["matrix"]:
+            if row.get("fault_id") != "F1":
+                continue
+            tid = row.get("test_id")
+            expected = row.get("outcome")
+            if tid not in TEST_IDS or not isinstance(expected, str) or not expected.strip():
+                continue
+            if len(expected) > MAX_EXPECTED_LEN:
+                continue
+            preds.append({"test_id": tid, "expected": expected})
         proposal = {
             "action": "REROUTE",
             "target": "HostA_to_HostB",
@@ -1509,6 +1518,8 @@ def live_gate():
         if out.get("decision") not in {"allow", "block", "escalate"}:
             failures.append(f"F1 decide {out}")
         log = out.get("log") or {}
+        if not log:
+            failures.append(f"F1 no log decision={out.get('decision')} reason={out.get('reason')}")
         if "candidates" not in log or "F1" not in (log.get("candidates") or []):
             failures.append(f"F1 candidates {log}")
         used = (log.get("budget") or {}).get("tests_used_seconds")
