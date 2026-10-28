@@ -642,6 +642,9 @@ def _apply_mtu_mismatch(net, target, params, details, undo):
     link_name = target["link"]
     mtu = int(params["mtu_bytes"])
     saved = []
+    # Runs last on reset. Hosts keep a path MTU learned from this fault for
+    # about ten minutes, which would fail every later full-size DF ping.
+    undo.append(lambda: [_sh(net.get(n), "ip route flush cache") for n in NODES])
     for node, intf in LINKS[link_name].items():
         node_obj = net.get(node)
         original_mtu = _sh(node_obj, f"cat /sys/class/net/{intf}/mtu")[0].strip()
@@ -949,12 +952,26 @@ _STATIC_ROUTES = {
     ],
 }
 _LOSS = re.compile(r"(\d+(?:\.\d+)?)% packet loss")
+_REPLY_SEQ = re.compile(r"bytes from .*?icmp_seq=(\d+)")
 
 
 def ping_loss(text):
     """Loss percent from ping's summary line, or None when there is none."""
     match = _LOSS.search(text or "")
     return float(match.group(1)) if match else None
+
+
+def probe_loss(text, count):
+    """Loss over probes 1..count, or None when ping printed no summary.
+
+    With -w, ping sends until it has `count` replies and then exits with
+    later probes still in flight. Its own summary counts those as lost
+    ("6 transmitted, 5 received, 16.7% loss" with nothing lost).
+    """
+    if ping_loss(text) is None:
+        return None
+    replied = {int(seq) for seq in _REPLY_SEQ.findall(text or "") if 1 <= int(seq) <= count}
+    return 100.0 * (count - len(replied)) / count
 
 
 def health_check(net, count=5, deadline=5):
@@ -965,7 +982,7 @@ def health_check(net, count=5, deadline=5):
     counts as lost.
     """
     out, _ = _sh(net.get("hostA"), f"ping -c {count} -i 0.2 -w {deadline} {net.get('hostB').IP()}")
-    return ping_loss(out), out.strip()
+    return probe_loss(out, count), out.strip()
 
 
 def restore_baseline(net):

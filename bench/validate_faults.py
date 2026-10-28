@@ -8,7 +8,10 @@ inject/reset cycles. A cycle passes when:
   which change it on their own thread),
 - every reset reports no residual difference on the nodes it touched,
 - the whole network matches the snapshot taken just before the inject,
-- hostA still reaches hostB within the noise level's T1 loss limit.
+- hostA still reaches hostB within the noise level's T1 loss limit, on the
+  first ping or on a second one SETTLE_SECONDS later (counted as "settled").
+  If the second ping also fails, the cycle records qdiscs, neighbours and
+  routes for diagnosis.
 
 Even cycles reset with reset()/reset_compound(), odd cycles with
 reset_all(). Held-out faults run here with purpose="validation"; they
@@ -40,6 +43,13 @@ from bench import inject as inj
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "results" / "fault_validation.json"
 NOISE_IDS = ("N0", "N1", "N2")
+SETTLE_SECONDS = 3.0
+_DIAGNOSTICS = {
+    "hostA": ["ip route get 10.0.4.2", "ip neigh show"],
+    "r1": ["ip route get 10.0.4.2", "ip neigh show", "tc qdisc show"],
+    "r2": ["ip route get 10.0.4.2", "ip neigh show", "tc qdisc show"],
+    "r4": ["ip route get 10.0.1.2", "ip neigh show", "tc qdisc show"],
+}
 
 
 def _natural(item_id):
@@ -82,7 +92,31 @@ def _reset(net, scenario, cids, use_reset_all):
     return problems
 
 
-def run_cycle(net, scenario, seed, use_reset_all, max_loss):
+def _diagnostics(net):
+    lines = []
+    for node, commands in _DIAGNOSTICS.items():
+        for command in commands:
+            out, _ = inj._sh(net.get(node), command)
+            lines += [f"{node} $ {command}"] + [f"    {line}" for line in out.strip().splitlines()]
+    return lines
+
+
+def check_health(net, max_loss):
+    """(problems, settled). One retry after SETTLE_SECONDS; diagnostics if that fails too."""
+    loss, ping = inj.health_check(net)
+    if loss is not None and loss <= max_loss:
+        return [], False
+    time.sleep(SETTLE_SECONDS)
+    again, ping_again = inj.health_check(net)
+    if again is not None and again <= max_loss:
+        return [], True
+    return [
+        f"hostA to hostB loss {loss}%, then {again}% after {SETTLE_SECONDS:g}s, over {max_loss}%: {ping_again[-160:]}",
+        *_diagnostics(net),
+    ], False
+
+
+def run_cycle(net, scenario, seed, use_reset_all, max_loss, settled=None):
     problems = []
     before = inj.snapshot(net)
     cids = _inject(net, scenario, seed)
@@ -98,17 +132,18 @@ def run_cycle(net, scenario, seed, use_reset_all, max_loss):
     if inj._ACTIVE:
         problems.append(f"still active after reset: {sorted(inj._ACTIVE)}")
     problems += [f"differs from before inject: {line}" for line in inj.diff_snapshots(before, inj.snapshot(net))]
-    loss, ping = inj.health_check(net)
-    if loss is None or loss > max_loss:
-        problems.append(f"hostA to hostB loss {loss}% over {max_loss}%: {ping[-160:]}")
+    health, was_settled = check_health(net, max_loss)
+    problems += health
+    if was_settled and settled is not None:
+        settled.append(seed)
     return problems
 
 
-def validate(net, scenario, iterations, max_loss, seed_base=0):
+def validate(net, scenario, iterations, max_loss, seed_base=0, settled=None):
     failures = []
     for i in range(iterations):
         try:
-            problems = run_cycle(net, scenario, seed_base + i, use_reset_all=bool(i % 2), max_loss=max_loss)
+            problems = run_cycle(net, scenario, seed_base + i, use_reset_all=bool(i % 2), max_loss=max_loss, settled=settled)
         except Exception as exc:
             problems = [f"{type(exc).__name__}: {exc}"]
             try:
@@ -163,13 +198,15 @@ def main():
             try:
                 for scenario in targets:
                     started = time.monotonic()
-                    failures = validate(net, scenario, args.iterations, max_loss)
+                    settled = []
+                    failures = validate(net, scenario, args.iterations, max_loss, settled=settled)
                     passed = args.iterations - len(failures)
-                    level[scenario] = {"passed": passed, "failed": len(failures), "failures": failures[:5]}
+                    level[scenario] = {"passed": passed, "failed": len(failures), "settled": len(settled), "failures": failures[:5]}
                     status = "OK" if not failures else f"FAIL {len(failures)}/{args.iterations}"
-                    print(f"{noise_id} {scenario:<4} {status} ({time.monotonic() - started:.0f}s)", flush=True)
+                    note = f" [{len(settled)} settled after {SETTLE_SECONDS:g}s]" if settled else ""
+                    print(f"{noise_id} {scenario:<4} {status} ({time.monotonic() - started:.0f}s){note}", flush=True)
                     if failures:
-                        for line in failures[0]["problems"][:4]:
+                        for line in failures[0]["problems"][:40]:
                             print(f"    {line}", flush=True)
             finally:
                 clear_noise(net, applied, state["links"])

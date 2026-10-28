@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from bench import inject as inj
 from bench import tests as oam
-from bench.outcomes import signature
+from bench.outcomes import grade_result, signature
 from bench.signature_checks import (
     RECOVERY_TESTS,
     REMEDIATIONS,
@@ -48,6 +48,7 @@ NOISE_ID = "N0"
 MATRIX_PING_COUNT = 50
 RECOVERY_PING_COUNT = 30
 SETTLE_SECONDS = 2.0
+SPEED_RETRIES = 2
 MEASURED_ACTIONS = ("DO_NOTHING",) + REMEDIATIONS
 FLAP_TYPES = {"link_flap"}
 
@@ -107,6 +108,60 @@ def _put_far_routes(net, routes):
     return errors
 
 
+def _fresh_host_state(net):
+    """Drop learned path MTUs and TCP metrics so one measurement does not shape the next.
+
+    Linux keeps a destination's slow-start threshold after each connection,
+    so a lossy transfer makes the next 3 s iperf3 slow on a healthy path.
+    """
+    for name in inj.NODES:
+        inj._sh(net.get(name), "ip route flush cache")
+    for name in ("hostA", "hostB"):
+        inj._sh(net.get(name), "ip tcp_metrics flush all")
+
+
+def _measure(net, test_ids=None, **kwargs):
+    """(results, T10 Mbit/s samples). A slow T10 is retried and the fastest kept:
+    noise only lowers a throughput sample, a fault keeps every one low."""
+    _fresh_host_state(net)
+    results = oam.run_all(net, test_ids=test_ids, **kwargs)["results"]
+    samples = []
+    for i, result in enumerate(results):
+        if result.get("test_id") != "T10_speed":
+            continue
+        best = result
+        samples.append(result.get("mbit_per_sec"))
+        for _ in range(SPEED_RETRIES):
+            if grade_result(best, noise_id=NOISE_ID) == "ok":
+                break
+            _fresh_host_state(net)
+            again = oam.run_all(net, test_ids=["T10_speed"])["results"][0]
+            samples.append(again.get("mbit_per_sec"))
+            if (again.get("mbit_per_sec") or -1) > (best.get("mbit_per_sec") or -1):
+                best = again
+        results[i] = best
+    return results, samples
+
+
+def _raw(results, speed_samples):
+    """Numbers behind the grades, for reading a result without rerunning it."""
+    by_id = {r.get("test_id"): r for r in results}
+    raw = {"T10_mbit_samples": speed_samples}
+    t1 = by_id.get("T1_e2e_ping") or {}
+    if t1:
+        raw.update(T1_loss_percent=t1.get("packet_loss_percent"), T1_latency_ms=t1.get("latency_ms"))
+    t9 = by_id.get("T9_oneway_loss") or {}
+    if t9:
+        raw.update(
+            T9_a2b_loss_percent=(t9.get("hostA_to_hostB") or {}).get("packet_loss_percent"),
+            T9_b2a_loss_percent=(t9.get("hostB_to_hostA") or {}).get("packet_loss_percent"),
+        )
+    errors = {tid: r["error"] for tid, r in by_id.items() if r.get("error")}
+    if errors:
+        raw["errors"] = errors
+    return raw
+
+
 def measure_action(net, action):
     """Run one action, grade the recovery tests, then put r1/r4's routes back.
 
@@ -119,8 +174,9 @@ def measure_action(net, action):
         if out["executed"]:
             time.sleep(SETTLE_SECONDS)
         out["path_after"] = {r: ctl.path_from_route(r, line) for r, line in _far_routes(net).items()}
-        bundle = oam.run_all(net, test_ids=list(RECOVERY_TESTS), ping_count=RECOVERY_PING_COUNT)
-        out["outcomes"] = signature(bundle["results"], noise_id=NOISE_ID)
+        results, speed = _measure(net, test_ids=list(RECOVERY_TESTS), ping_count=RECOVERY_PING_COUNT)
+        out["raw"] = _raw(results, speed)
+        out["outcomes"] = signature(results, noise_id=NOISE_ID)
         out["degraded"] = degraded_tests(out["outcomes"])
         out["recovered"] = not out["degraded"]
     except Exception as exc:
@@ -173,8 +229,9 @@ def measure_scenario(net, scenario_id):
     cids = []
     try:
         cids = _inject_scenario(net, scenario_id)
-        bundle = oam.run_all(net, ping_count=MATRIX_PING_COUNT, error_probe=80)
-        record["signature"] = signature(bundle["results"], noise_id=NOISE_ID)
+        results, speed = _measure(net, ping_count=MATRIX_PING_COUNT, error_probe=80)
+        record["raw"] = _raw(results, speed)
+        record["signature"] = signature(results, noise_id=NOISE_ID)
         record["actions"] = {action: measure_action(net, action) for action in MEASURED_ACTIONS}
         record["actions"]["ESCALATE"] = {"executed": False, "note": "no network change; traffic is as under DO_NOTHING"}
     except Exception as exc:
@@ -225,7 +282,7 @@ def build_report(records, catalog=None):
         sid = r["scenario"]
         catalog_fixes = (catalog.get(sid) or {}).get("correct")
         scenarios[sid] = {
-            **{k: r.get(k) for k in ("kind", "split", "parts", "timing_sensitive", "signature", "actions", "errors", "health_loss_percent")},
+            **{k: r.get(k) for k in ("kind", "split", "parts", "timing_sensitive", "signature", "raw", "actions", "errors", "health_loss_percent")},
             "residual": r.get("residual", []),
             "measured_valid_fixes": measured[sid],
             "inseparable_from": sorted(
@@ -336,10 +393,11 @@ def main(argv=None):
             records.append(record)
             for tid, outcome in (record.get("signature") or {}).items():
                 print(f"  {tid}: {outcome}", flush=True)
+            print(f"  raw: {record.get('raw')}", flush=True)
             for action, result in (record.get("actions") or {}).items():
                 if action in MEASURED_ACTIONS:
                     status = {True: "recovered", False: f"not recovered {result.get('degraded')}", None: f"error {result.get('error')}"}[result["recovered"]]
-                    print(f"  {action}: path {result.get('path_after')} {status}", flush=True)
+                    print(f"  {action}: path {result.get('path_after')} {status} {result.get('raw')}", flush=True)
             for err in record["errors"] + record.get("residual", []):
                 print(f"  ! {err}", flush=True)
     finally:
@@ -377,7 +435,8 @@ def _self_check():
     backup = {r: f"{cfg['dest']} via {cfg['backup']['via']} dev {cfg['backup']['dev']}" for r, cfg in ctl.ROUTE_TARGETS.items()}
     # Fake fault effects: which path it breaks, whether the battery shows it, whether TCP fails everywhere.
     effects = {"H0": set(), "F1": {"primary"}, "F12": {"backup"}, "F10": {"tcp"}, "F3": {"primary"}, "F11": {"last_mile"}}
-    world = {"routes": dict(primary), "active": [], "log": [], "fail_battery": set(), "fail_restore": False}
+    world = {"routes": dict(primary), "active": [], "log": [], "fail_battery": set(), "fail_restore": False,
+             "slow_speeds": [], "flushes": 0}
 
     def fake_inject(net, fault_id, params=None, seed=None, purpose="evaluation"):
         world["active"].append(fault_id)
@@ -434,7 +493,8 @@ def _self_check():
             elif tid == "T8_tcp_vs_ping":
                 results.append({"test_id": tid, "ping_ok": not down, "tcp_ok": not (down or tcp_fail)})
             elif tid == "T10_speed":
-                results.append({"test_id": tid, "mbit_per_sec": 0.0 if (down or tcp_fail) else 9.5})
+                mbit = 0.0 if (down or tcp_fail) else (world["slow_speeds"].pop(0) if world["slow_speeds"] else 9.5)
+                results.append({"test_id": tid, "mbit_per_sec": mbit})
             elif tid == "T4_mtu":
                 results.append({"test_id": tid, "df_ping_ok": not down})
             elif tid == "T7_route_check":
@@ -459,6 +519,9 @@ def _self_check():
                 out[tid] = "df_ok" if r["df_ping_ok"] else "mtu_fail"
         return out
 
+    def fake_fresh(net):
+        world["flushes"] += 1
+
     g = globals()
     patches = [
         (inj, "inject", fake_inject), (inj, "reset", fake_reset),
@@ -467,7 +530,7 @@ def _self_check():
         (oam, "run_all", fake_run_all), (time, "sleep", lambda s: None),
     ]
     saved = [(mod, name, getattr(mod, name)) for mod, name, _ in patches]
-    saved_globals = {k: g[k] for k in ("execute", "signature")}
+    saved_globals = {k: g[k] for k in ("execute", "signature", "_fresh_host_state")}
     saved_compounds = dict(inj._COMPOUNDS)
 
     def check(label, ok, detail=""):
@@ -478,7 +541,7 @@ def _self_check():
     try:
         for mod, name, fake in patches:
             setattr(mod, name, fake)
-        g["execute"], g["signature"] = fake_execute, fake_signature
+        g["execute"], g["signature"], g["_fresh_host_state"] = fake_execute, fake_signature, fake_fresh
         inj._COMPOUNDS["CX"] = {"id": "CX", "split": "development", "injection_order": ["F1", "F12"], "cleanup_order": ["F12", "F1"]}
 
         records = [measure_scenario(None, sid) for sid in ("H0", "F1", "F3", "F12", "F10", "F11")]
@@ -516,6 +579,21 @@ def _self_check():
         check("separable scenarios keep their measured fixes", s["F1"]["expected_actions"] == ["REROUTE", "REBALANCE"])
         check("a full run with no errors has no failures besides signature rules",
               run_failures(report, {"faults": {}, "pairs": []}) == [], str(run_failures(report, {"faults": {}, "pairs": []})))
+
+        check("host caches are flushed before the battery and every action", world["flushes"] >= 4 * len(records), str(world["flushes"]))
+
+        # The battery takes the first sample, DO_NOTHING the next ones.
+        world["slow_speeds"] = [9.5, 3.0]
+        healthy = measure_scenario(None, "H0")
+        samples = healthy["actions"]["DO_NOTHING"]["raw"]["T10_mbit_samples"]
+        check("a single slow T10 sample is retried and the best kept", samples == [3.0, 9.5] and healthy["actions"]["DO_NOTHING"]["recovered"], str(samples))
+        world["slow_speeds"] = [9.5, 0.5, 0.3, 0.6]
+        healthy = measure_scenario(None, "H0")
+        samples = healthy["actions"]["DO_NOTHING"]["raw"]["T10_mbit_samples"]
+        check("T10 slow on every retry stays slow", samples == [0.5, 0.3, 0.6] and not healthy["actions"]["DO_NOTHING"]["recovered"], str(samples))
+        check("the battery's T10 is retried the same way", healthy["raw"]["T10_mbit_samples"] == [9.5])
+        world["slow_speeds"] = []
+        check("a broken path is not retried into recovery", by_id["F1"]["actions"]["DO_NOTHING"]["raw"]["T10_mbit_samples"] == [0.0, 0.0, 0.0])
 
         world["fail_battery"] = {"F1"}
         failed = measure_scenario(None, "F1")

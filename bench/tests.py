@@ -310,10 +310,48 @@ def T8_tcp_vs_ping(net):
     }
 
 
+def _icmp_in_echos(node):
+    """Echo requests this node has received (Icmp InEchos), or None if unreadable."""
+    header = None
+    for line in (run_in_node(node, "cat /proc/net/snmp") or "").splitlines():
+        parts = line.split()
+        if not parts or parts[0] != "Icmp:":
+            continue
+        if header is None:
+            header = parts[1:]
+            continue
+        try:
+            return int(dict(zip(header, parts[1:]))["InEchos"])
+        except (KeyError, ValueError):
+            return None
+    return None
+
+
+def _one_way_ping(net, src, dst, count, interval):
+    """Round-trip ping plus loss of the requests alone, from the receiver's counter.
+
+    A round-trip ping loses a probe on either leg, so loss in one direction
+    reads the same from both ends. packet_loss_percent here is requests that
+    never reached dst. With no counter it stays the round-trip figure.
+    """
+    dst_node = net.get(dst)
+    before = _icmp_in_echos(dst_node)
+    result = _hop_ping(net, src, dst_node.IP(), count=count, interval=interval)
+    after = _icmp_in_echos(dst_node)
+    result["round_trip_loss_percent"] = result["packet_loss_percent"]
+    result["one_way"] = before is not None and after is not None and count > 0
+    if result["one_way"]:
+        # Duplicated packets can count twice.
+        arrived = min(max(after - before, 0), int(count))
+        result["requests_arrived"] = arrived
+        result["packet_loss_percent"] = 100.0 * (int(count) - arrived) / int(count)
+    return result
+
+
 def T9_oneway_loss(net, count=10, interval=0.2):
     t0 = time.monotonic()
-    a2b = _hop_ping(net, "hostA", net.get("hostB").IP(), count=count, interval=interval)
-    b2a = _hop_ping(net, "hostB", net.get("hostA").IP(), count=count, interval=interval)
+    a2b = _one_way_ping(net, "hostA", "hostB", count, interval)
+    b2a = _one_way_ping(net, "hostB", "hostA", count, interval)
     return {
         "test_id": "T9_oneway_loss",
         "hostA_to_hostB": a2b,
@@ -795,6 +833,8 @@ def _check_costs():
     lost = _parse_ping("3 packets transmitted, 0 received, 100% packet loss, time 2030ms\n")
     assert lost["latency_ms"] is None and lost["packet_loss_percent"] == 100.0
 
+    _check_one_way()
+
     import tempfile
     import threading
 
@@ -822,6 +862,51 @@ def _check_costs():
         assert not list(mu.RUN_DIR.glob("adg-hostA-*")), "run_in_node left files behind"
     finally:
         mu.RUN_DIR = saved_dir
+
+
+def _check_one_way():
+    """Loss on the B-to-A leg only: both round trips lose 20%, only B's requests do."""
+    class _Host:
+        def __init__(self, name, ip):
+            self.name, self._ip, self.in_echos = name, ip, 100
+
+        def IP(self):
+            return self._ip
+
+    hosts = {"hostA": _Host("hostA", "10.0.1.2"), "hostB": _Host("hostB", "10.0.4.2")}
+
+    class _Net:
+        def get(self, name):
+            return hosts[name]
+
+    def fake_run(node, command, timeout=60.0):
+        if command == "cat /proc/net/snmp":
+            return (
+                "Ip: Forwarding DefaultTTL\nIp: 1 64\n"
+                "Icmp: InMsgs InErrors InEchos OutMsgs\n"
+                f"Icmp: 0 0 {node.in_echos} 0\n"
+            )
+        count = int(re.search(r"-c (\d+)", command).group(1))
+        dst = next(h for h in hosts.values() if h.IP() == command.split()[-1])
+        delivered = count if node.name == "hostA" else count * 8 // 10
+        if dst.in_echos is not None:
+            dst.in_echos += delivered
+        received = count * 8 // 10
+        return f"{count} packets transmitted, {received} received, {100 * (count - received) // count}% packet loss\n"
+
+    saved = globals()["run_in_node"]
+    globals()["run_in_node"] = fake_run
+    try:
+        result = T9_oneway_loss(_Net(), count=10)
+        a2b, b2a = result["hostA_to_hostB"], result["hostB_to_hostA"]
+        assert a2b["round_trip_loss_percent"] == 20.0 and b2a["round_trip_loss_percent"] == 20.0, result
+        assert a2b["one_way"] and a2b["packet_loss_percent"] == 0.0, a2b
+        assert b2a["packet_loss_percent"] == 20.0 and b2a["requests_arrived"] == 8, b2a
+        hosts["hostA"].in_echos = None
+        fallback = _one_way_ping(_Net(), "hostB", "hostA", 10, 0.2)
+        assert not fallback["one_way"] and fallback["packet_loss_percent"] == 20.0, fallback
+    finally:
+        globals()["run_in_node"] = saved
 
 
 if __name__ == "__main__":

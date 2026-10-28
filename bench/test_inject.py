@@ -330,7 +330,9 @@ class FakeNode:
             return "iperf3: error - unable to connect to server", 0
         if c.startswith("ping "):
             loss = self.net.ping_loss
-            return f"5 packets transmitted, {5 - round(5 * loss / 100)} received, {loss:g}% packet loss, time 800ms", 0
+            received = 5 - round(5 * loss / 100)
+            replies = "".join(f"64 bytes from 10.0.4.2: icmp_seq={seq} ttl=61 time=42.0 ms\n" for seq in range(1, received + 1))
+            return f"{replies}5 packets transmitted, {received} received, {loss:g}% packet loss, time 800ms", 0
         return "", 0
 
     def pexec(self, argv):
@@ -597,6 +599,28 @@ def test_health_check_parses_loss():
     net.get("hostA").cmds.clear()
     inj.health_check(net)
     check("the health ping waits for every reply (-w deadline)", any(" -w " in c for c in net.get("hostA").cmds))
+    in_flight = (
+        "".join(f"64 bytes from 10.0.4.2: icmp_seq={s} ttl=61 time=300 ms\n" for s in range(1, 6))
+        + "6 packets transmitted, 5 received, 16.6667% packet loss, time 1072ms\n"
+    )
+    check("a probe still in flight when ping exits is not loss", inj.probe_loss(in_flight, 5) == 0.0, inj.probe_loss(in_flight, 5))
+    lost_one = (
+        "".join(f"64 bytes from 10.0.4.2: icmp_seq={s} ttl=61 time=40 ms\n" for s in (1, 2, 4, 5, 6))
+        + "6 packets transmitted, 5 received, 16.6667% packet loss, time 1072ms\n"
+    )
+    check("a lost probe among the first five is loss", inj.probe_loss(lost_one, 5) == 20.0, inj.probe_loss(lost_one, 5))
+    check("a duplicate reply does not hide a loss", inj.probe_loss(lost_one + "64 bytes from 10.0.4.2: icmp_seq=1 ttl=61 time=40 ms (DUP!)\n", 5) == 20.0)
+    check("no summary is still no reading", inj.probe_loss("connect: Network is unreachable", 5) is None)
+
+    net = fresh()
+    cid = inj.inject(net, "U1", purpose="validation")
+    for name in inj.NODES:
+        net.get(name).cmds.clear()
+    inj.reset(cid)
+    r2 = net.get("r2").cmds
+    check("U1 reset flushes learned path MTUs on every node, after the MTU is back",
+          all("ip route flush cache" in net.get(n).cmds for n in inj.NODES)
+          and r2.index("ip route flush cache") > max(i for i, c in enumerate(r2) if " mtu " in c), str(r2))
     empty = inj._normalize("firewall", "")
     loaded = inj._normalize("firewall", "# Generated\n*filter\n:INPUT ACCEPT [0:0]\n:FORWARD ACCEPT [9:540]\n:OUTPUT ACCEPT [0:0]\nCOMMIT")
     check("an empty filter table equals no iptables output", empty == loaded == [], loaded)
