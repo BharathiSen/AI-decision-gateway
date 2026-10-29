@@ -32,6 +32,18 @@ def _addr(cidr):
     return cidr.split("/", 1)[0]
 
 
+def _sh(node, command):
+    """One command in a fresh namespace process. node.cmd() reuses a PTY."""
+    if hasattr(node, "pexec"):
+        out, err, code = node.pexec(["bash", "-c", command])
+        text = (out or "") + (err or "")
+        if code != 0:
+            raise RuntimeError(f"{node.name}: `{command}` exited {code}: {text.strip()}")
+        return text
+    out = node.cmd(command)
+    return out
+
+
 def create_large_network():
     """4×4 router grid r0_0 .. r3_3; hostA on r0_0, hostB on r3_3."""
     net = Mininet(controller=None, link=TCLink)
@@ -66,8 +78,8 @@ def create_large_network():
             **BASELINE_LINK_PARAMS,
         )
         links[key] = link
-        adj[(a, b)] = {"dev": link.intf1.name, "peer": _addr(ip_b)}
-        adj[(b, a)] = {"dev": link.intf2.name, "peer": _addr(ip_a)}
+        adj[(a, b)] = {"dev": link.intf1.name, "cidr": ip_a, "peer": _addr(ip_b)}
+        adj[(b, a)] = {"dev": link.intf2.name, "cidr": ip_b, "peer": _addr(ip_a)}
 
     for row in range(4):
         for col in range(4):
@@ -88,17 +100,21 @@ def create_large_network():
     for link in links.values():
         ctl.wait_link_up(link)
 
+    for (src, _dst), hop in adj.items():
+        _sh(net.get(src), f"ip addr replace {hop['cidr']} dev {hop['dev']}")
+        _sh(net.get(src), f"ip link set dev {hop['dev']} up")
+
     for name in list(routers):
         node = net.get(name)
-        node.cmd("sysctl -w net.ipv4.ip_forward=1")
-        node.cmd("sysctl -w net.ipv4.conf.all.rp_filter=0")
-        node.cmd("sysctl -w net.ipv4.conf.default.rp_filter=0")
+        _sh(node, "sysctl -w net.ipv4.ip_forward=1")
+        _sh(node, "sysctl -w net.ipv4.conf.all.rp_filter=0")
+        _sh(node, "sysctl -w net.ipv4.conf.default.rp_filter=0")
         for intf in node.intfList():
             if intf.name != "lo":
-                node.cmd(f"sysctl -w net.ipv4.conf.{intf.name}.rp_filter=0")
+                _sh(node, f"sysctl -w net.ipv4.conf.{intf.name}.rp_filter=0")
 
-    hostA.cmd("ip route add default via 10.200.1.1")
-    hostB.cmd("ip route add default via 10.200.2.1")
+    _sh(hostA, "ip route replace default via 10.200.1.1")
+    _sh(hostB, "ip route replace default via 10.200.2.1")
 
     for row in range(4):
         for col in range(4):
@@ -106,16 +122,23 @@ def create_large_network():
             r = net.get(name)
             if col < 3:
                 hop = adj[(name, f"r{row}_{col + 1}")]
-                r.cmd(f"ip route add 10.200.2.0/24 via {hop['peer']} dev {hop['dev']}")
+                _sh(r, f"ip route replace 10.200.2.0/24 via {hop['peer']} dev {hop['dev']}")
             elif row < 3:
                 hop = adj[(name, f"r{row + 1}_{col}")]
-                r.cmd(f"ip route add 10.200.2.0/24 via {hop['peer']} dev {hop['dev']}")
+                _sh(r, f"ip route replace 10.200.2.0/24 via {hop['peer']} dev {hop['dev']}")
             if col > 0:
                 hop = adj[(name, f"r{row}_{col - 1}")]
-                r.cmd(f"ip route add 10.200.1.0/24 via {hop['peer']} dev {hop['dev']}")
+                _sh(r, f"ip route replace 10.200.1.0/24 via {hop['peer']} dev {hop['dev']}")
             elif row > 0:
                 hop = adj[(name, f"r{row - 1}_{col}")]
-                r.cmd(f"ip route add 10.200.1.0/24 via {hop['peer']} dev {hop['dev']}")
+                _sh(r, f"ip route replace 10.200.1.0/24 via {hop['peer']} dev {hop['dev']}")
+
+    toward_b = _sh(net.get("r0_0"), "ip route show 10.200.2.0/24")
+    toward_a = _sh(net.get("r3_3"), "ip route show 10.200.1.0/24")
+    if "10.200.2.0/24" not in toward_b:
+        raise RuntimeError(f"r0_0 has no route to hostB: {toward_b!r}")
+    if "10.200.1.0/24" not in toward_a:
+        raise RuntimeError(f"r3_3 has no route to hostA: {toward_a!r}")
 
     return {"net": net, "links": links, "topology": "grid_4x4"}
 

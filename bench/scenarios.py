@@ -520,7 +520,10 @@ def _self_check():
         item.unlink()
     tmp.rmdir()
 
+    assert _ping_ok({"packet_loss_percent": 0.0})
+    assert not _ping_ok({"packet_loss_percent": 100.0})
     _assert_frozen(before)
+    print(f"live-matrix build: {LIVE_MATRIX_BUILD}")
     print("experiment matrix: PASS")
     return 0
 
@@ -529,6 +532,9 @@ def _node_names(net):
     if hasattr(net, "nameToNode"):
         return list(net.nameToNode)
     return list(net)
+
+
+LIVE_MATRIX_BUILD = "stage15-grid-v2"
 
 
 def _ping_ok(parsed):
@@ -548,6 +554,7 @@ def live_matrix():
     from network.topology import create_network
     from network.topology_large import create_large_network
 
+    print(f"live-matrix build: {LIVE_MATRIX_BUILD}")
     before = _snapshot_frozen()
     failures = []
     plan = generate_matrix(seeds=(15, 16))
@@ -573,9 +580,9 @@ def live_matrix():
         fwd = _parse_ping(run_in_node(dnet.get("hostA"), "ping -c 3 -i 0.2 -W 1 10.0.4.2"))
         rev = _parse_ping(run_in_node(dnet.get("hostB"), "ping -c 3 -i 0.2 -W 1 10.0.1.2"))
         if not _ping_ok(fwd):
-            failures.append(f"diamond ping A->B {fwd}")
+            failures.append(f"diamond ping A->B loss={fwd.get('packet_loss_percent')}")
         if not _ping_ok(rev):
-            failures.append(f"diamond ping B->A {rev}")
+            failures.append(f"diamond ping B->A loss={rev.get('packet_loss_percent')}")
         dnet.stop()
         diamond = None
         mn_cleanup()
@@ -590,10 +597,13 @@ def live_matrix():
             failures.append(f"topology tag {large.get('topology')}")
         fwd = _parse_ping(run_in_node(lnet.get("hostA"), "ping -c 3 -i 0.2 -W 2 10.200.2.2"))
         rev = _parse_ping(run_in_node(lnet.get("hostB"), "ping -c 3 -i 0.2 -W 2 10.200.1.2"))
-        if not _ping_ok(fwd):
-            failures.append(f"grid ping A->B {fwd}")
-        if not _ping_ok(rev):
-            failures.append(f"grid ping B->A {rev}")
+        if not _ping_ok(fwd) or not _ping_ok(rev):
+            r0 = run_in_node(lnet.get("r0_0"), "ip addr; ip route")
+            r33 = run_in_node(lnet.get("r3_3"), "ip addr; ip route")
+            if not _ping_ok(fwd):
+                failures.append(f"grid ping A->B loss={fwd.get('packet_loss_percent')} r0_0={r0[-500:]}")
+            if not _ping_ok(rev):
+                failures.append(f"grid ping B->A loss={rev.get('packet_loss_percent')} r3_3={r33[-500:]}")
         lnet.stop()
         large = None
         mn_cleanup()
