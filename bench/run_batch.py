@@ -40,7 +40,7 @@ FROZEN_RESULTS = (
     ROOT / "results" / "observability_matrix.csv",
     ROOT / "results" / "experiment_summary.json",
 )
-LIVE_DATASET_BUILD = "stage17-dataset-v1"
+LIVE_DATASET_BUILD = "stage17-dataset-v2"
 CSV_FIELDS = (
     "episode_id",
     "scenario_id",
@@ -332,7 +332,7 @@ def persist_record(record, scenario, raw_dir, processed_dir):
     return path, wrote
 
 
-def _stub_and_gate(scenario):
+def _stub_and_gate(scenario, net=None):
     from bench.run_pilot import _stub_proposal
     from gate.decide import decide
 
@@ -341,10 +341,10 @@ def _stub_and_gate(scenario):
     def agent_fn(snapshot, _fault=label):
         return _stub_proposal(snapshot, _fault)
 
-    def gate_fn(episode, _net=episode.get("_net")):
+    def gate_fn(episode, _net=net):
         oam_results = (episode.get("oam") or {}).get("results") or []
         return decide(
-            None,
+            _net,
             episode.get("agent_proposal"),
             episode.get("network_snapshot"),
             oam_results,
@@ -357,7 +357,7 @@ def _stub_and_gate(scenario):
 
 
 def run_one(net, links, scenario, timeout_seconds=0):
-    agent_fn, gate_fn = _stub_and_gate(scenario)
+    agent_fn, gate_fn = _stub_and_gate(scenario, net=net)
     fault_id = scenario.get("fault_id") or "H0"
     compound_id = scenario.get("compound_id")
 
@@ -493,6 +493,23 @@ def _self_check():
     overnight = [row for row in generate_matrix(seeds=(17,)) if (row.get("compound_id") or row.get("fault_id")) not in hidden]
     assert overnight
     assert all((row.get("compound_id") or row.get("fault_id")) not in hidden for row in overnight)
+
+    agent_fn, gate_fn = _stub_and_gate({"fault_id": "H0", "strategy": "gate_v0", "noise_id": "N0"}, net=None)
+    proposal = agent_fn({"metrics": {"packet_loss_percent": 0}})
+    assert proposal.get("action")
+    try:
+        gate_fn(
+            {
+                "agent_proposal": proposal,
+                "network_snapshot": {"links": [], "metrics": {"packet_loss_percent": 0, "connectivity": True, "active_path": "primary"}},
+                "oam": {"results": []},
+                "noise_id": "N0",
+            }
+        )
+    except NameError:
+        raise
+    except Exception:
+        pass
 
     def boom():
         raise TimeoutError("episode timed out")
