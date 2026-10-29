@@ -83,6 +83,17 @@ def _development_compounds():
     return [cid for cid, spec in inj._COMPOUNDS.items() if cid not in hidden]
 
 
+def _catalog_cause_id(fault_id):
+    """Proposal cause_id must be a faults.yaml id, never a compound id."""
+    spec = inj._COMPOUNDS.get(fault_id) or {}
+    for cid in spec.get("injection_order") or spec.get("components") or []:
+        if cid in inj._FAULTS:
+            return cid
+    if fault_id in inj._FAULTS:
+        return fault_id
+    return "H0"
+
+
 def pick_scenario(seed, index):
     """Deterministic healthy / normal / stress mix. Held-out ids never appear."""
     rng = random.Random(f"{seed}:{index}")
@@ -134,6 +145,7 @@ def _stub_proposal(snapshot, fault_id):
     if fault_id == "F12":
         action = "REROUTE"
     path = ["r1", "r3", "r4"] if action == "REROUTE" else ["r1", "r2", "r4"]
+    cause_id = _catalog_cause_id(fault_id)
     return {
         "action": action,
         "target": "HostA_to_HostB",
@@ -141,7 +153,7 @@ def _stub_proposal(snapshot, fault_id):
         "reason": f"stub agent loss={loss}",
         "causes": [
             {
-                "cause_id": fault_id,
+                "cause_id": cause_id,
                 "predicted_tests": [
                     {"test_id": "T1_e2e_ping", "expected": f"loss={loss}"},
                     {"test_id": "T7_route_check", "expected": "primary"},
@@ -660,6 +672,15 @@ def _self_check():
             os.environ.pop("OPENROUTER_API_KEY", None)
         else:
             os.environ["OPENROUTER_API_KEY"] = previous
+
+    from agent.validate import catalog_cause_ids, validate_proposal
+
+    for compound_id in _development_compounds():
+        compound_proposal = _stub_proposal({"metrics": {"packet_loss_percent": 15}}, compound_id)
+        ok, errors = validate_proposal(compound_proposal)
+        assert ok, (compound_id, errors)
+        assert compound_proposal["causes"][0]["cause_id"] in catalog_cause_ids()
+        assert compound_proposal["causes"][0]["cause_id"] not in inj._COMPOUNDS
 
     proposal = _stub_proposal({"metrics": {"packet_loss_percent": 0}}, "H0")
     oam = [
