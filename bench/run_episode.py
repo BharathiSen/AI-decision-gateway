@@ -536,6 +536,19 @@ def save_episode(record, directory=None):
     return path
 
 
+def _cause_proposal(action, cause_id, path=None, expected="ok"):
+    """Minimal catalog proposal used by Stage 12 negative cases."""
+    if path is None:
+        path = ["r1", "r3", "r4"] if action == "REROUTE" else ["r1", "r2", "r4"]
+    return {
+        "action": action,
+        "target": "HostA_to_HostB",
+        "reason": "stage12",
+        "proposed_path": path,
+        "causes": [{"cause_id": cause_id, "predicted_tests": [{"test_id": "T1_e2e_ping", "expected": expected}]}],
+    }
+
+
 def _snapshot(r1_via="10.0.12.2", backup_up=True, primary_up=True, active_path="backup", r4_via="10.0.24.1", qdiscs=None):
     snap = {
         "routes": [
@@ -1232,7 +1245,89 @@ def _self_check():
     assert unsigned["binding"]["signed"] is False
     assert not binding_errors(unsigned, healthy, proposal)
 
+    from agent.validate import MAX_EXPECTED_LEN
+
+    fabricated = _cause_proposal("REROUTE", "H0")
+    fabricated_out = gate_decide(None, fabricated, healthy, [], mode="full", run_missing_tests=False)
+    assert fabricated_out["decision"] == "block" and fabricated_out["reason"] == "proposal contradicted", fabricated_out
+    calls.clear()
+    fabricated_exec = apply_authorized_action(fabricated_out, fabricated, execute, healthy, lambda: healthy)
+    assert calls == [] and fabricated_exec["execution_attempted"] is False, fabricated_exec
+
+    lookalike_snap = _snapshot(active_path="primary")
+    lookalike_snap["metrics"] = {
+        "active_path": "primary",
+        "packet_loss_percent": 40.0,
+        "connectivity": True,
+        "latency_ms": 20.0,
+    }
+    for link in lookalike_snap["links"]:
+        link["packet_loss_percent"] = 0.0
+    lookalike = _cause_proposal("REROUTE", "F3", expected="loss")
+    lookalike_out = gate_decide(None, lookalike, lookalike_snap, [], mode="full", run_missing_tests=False)
+    assert lookalike_out["decision"] in {"block", "escalate"} and lookalike_out["decision"] != "allow", lookalike_out
+
+    hidden_snap = _snapshot(backup_up=False, active_path="primary")
+    hidden = _cause_proposal("REROUTE", "F1")
+    hidden_out = gate_decide(None, hidden, hidden_snap, [], mode="full", run_missing_tests=False)
+    assert hidden_out["decision"] == "block" and hidden_out["reason"] == "safety failed", hidden_out
+    calls.clear()
+    hidden_exec = apply_authorized_action(hidden_out, hidden, execute, hidden_snap, lambda: hidden_snap)
+    assert calls == [] and hidden_exec["execution_attempted"] is False, hidden_exec
+
+    unseen = _cause_proposal("REROUTE", "U1")
+    unseen_out = gate_decide(None, unseen, healthy, [], mode="full", run_missing_tests=False)
+    assert unseen_out["decision"] == "escalate" and unseen_out["reason"] == "outside catalog", unseen_out
+    calls.clear()
+    unseen_exec = apply_authorized_action(unseen_out, unseen, execute, healthy, lambda: healthy)
+    assert calls == [] and unseen_exec["execution_attempted"] is False, unseen_exec
+
+    long_expected = _cause_proposal("DO_NOTHING", "F1", expected="x" * (MAX_EXPECTED_LEN + 1))
+    long_rejected = screen_proposal(long_expected)
+    assert long_rejected and long_rejected["execution_error"] == "invalid proposal", long_rejected
+    missing = screen_proposal({"target": "HostA_to_HostB", "reason": "no"})
+    assert missing and missing["execution_error"] == "invalid proposal", missing
+
+    backup_claim = _cause_proposal("REROUTE", "F12")
+    backup_claim_out = gate_decide(None, backup_claim, healthy, [], mode="full", run_missing_tests=False)
+    assert backup_claim_out["decision"] == "block" and backup_claim_out["reason"] == "proposal contradicted", backup_claim_out
+    calls.clear()
+    down_exec = apply_authorized_action({"decision": "allow"}, backup, execute, hidden_snap, lambda: hidden_snap)
+    assert calls == [] and down_exec["execution_error"] == "backup path is down", down_exec
+
+    withheld = []
+
+    def no_exec(item):
+        withheld.append(item)
+        return {"executed": True, "action": item.get("action")}
+
+    def refuse_gate(record):
+        return {
+            "decision": "block",
+            "reason": "safety failed",
+            "proposal_action": "REROUTE",
+            "tests_run": [],
+            "checks": {},
+        }
+
+    blocked_ep = run_episode(
+        object(),
+        {},
+        fault_id="H0",
+        run_oam=False,
+        agent_fn=reroute_agent,
+        gate_fn=refuse_gate,
+        execute_fn=no_exec,
+        _components=fakes,
+    )
+    assert blocked_ep["gate_decision"]["decision"] == "block", blocked_ep
+    assert blocked_ep["execution_attempted"] is False and withheld == [], blocked_ep
+    assert injected_between["gate_decision"]["decision"] == "allow"
+    assert injected_between["execution_attempted"] is False
+    assert injected_between["execution_error"] == "path qdisc changed since the gate decision"
+
     print("execution boundary: PASS")
+    print("negative safety: PASS")
 
 
 def live_oam_cost():
@@ -1785,6 +1880,176 @@ def live_integrity():
     return 0
 
 
+def live_safety():
+    """Stage 12 negative and safety cases on the live diamond.
+
+    On the VM, as root:
+
+        sudo python3 bench/run_episode.py --live-safety
+    """
+    import os
+
+    if not hasattr(os, "geteuid") or os.geteuid() != 0:
+        print("negative safety must run as root on the Mininet VM.", file=sys.stderr)
+        return 2
+    from agent.validate import MAX_EXPECTED_LEN
+    from bench.mininet_util import mn_cleanup, run_in_node
+    from control.actions import execute, proposal_to_action
+    from gate.decide import decide as gate_decide
+    from network import controller as ctl
+    from network.topology import create_network
+
+    mn_cleanup()
+    state = create_network()
+    net, links = state["net"], state["links"]
+    executed = []
+    failures = []
+
+    def read():
+        return read_execution_state(net, links)
+
+    def stub(item):
+        executed.append(item)
+        return {"executed": False, "action": item.get("action")}
+
+    def controller(item):
+        executed.append(item)
+        action, payload = proposal_to_action(item)
+        return execute(net, action, payload)
+
+    def expect(label, ok, detail=""):
+        print(f"  {'PASS' if ok else 'FAIL'}  {label}" + (f": {detail}" if detail and not ok else ""))
+        if not ok:
+            failures.append(label)
+
+    def still_primary():
+        return _routes_on_path(read(), "primary")
+
+    try:
+        snap = collect_current_state(net, links)
+        approved = read()
+        expect("healthy starts on primary", still_primary())
+
+        fabricated = _cause_proposal("REROUTE", "H0")
+        fabricated_out = gate_decide(net, fabricated, snap, [], mode="full", run_missing_tests=False, noise_id="N0")
+        executed.clear()
+        fabricated_exec = apply_authorized_action(fabricated_out, fabricated, stub, approved, read)
+        expect(
+            "healthy plus fabricated fault does not authorize reroute",
+            fabricated_out.get("decision") != "allow"
+            and fabricated_exec.get("execution_attempted") is False
+            and not executed
+            and still_primary(),
+            f"decision={fabricated_out} exec={fabricated_exec}",
+        )
+
+        unseen = _cause_proposal("REROUTE", "U1")
+        unseen_out = gate_decide(net, unseen, snap, [], mode="full", run_missing_tests=False, noise_id="N0")
+        executed.clear()
+        unseen_exec = apply_authorized_action(unseen_out, unseen, stub, approved, read)
+        expect(
+            "unseen fault falls back instead of authorizing",
+            unseen_out.get("decision") == "escalate"
+            and unseen_out.get("reason") == "outside catalog"
+            and unseen_exec.get("execution_attempted") is False
+            and not executed
+            and still_primary(),
+            f"decision={unseen_out} exec={unseen_exec}",
+        )
+
+        malformed = screen_proposal({"action": "reboot", "target": "HostA_to_HostB", "reason": "no"})
+        long_pred = screen_proposal(_cause_proposal("DO_NOTHING", "F1", expected="x" * (MAX_EXPECTED_LEN + 1)))
+        expect(
+            "malformed AI output is rejected",
+            malformed
+            and malformed.get("execution_error") == "invalid proposal"
+            and long_pred
+            and long_pred.get("execution_error") == "invalid proposal"
+            and still_primary(),
+            f"malformed={malformed} long={long_pred}",
+        )
+
+        nothing = {
+            "action": "DO_NOTHING",
+            "target": "HostA_to_HostB",
+            "reason": "stage12",
+            "proposed_path": ["r1", "r2", "r4"],
+        }
+        allowed = gate_decide(net, nothing, snap, [], mode="full", run_missing_tests=False, noise_id="N0")
+        executed.clear()
+        nothing_exec = apply_authorized_action(allowed, nothing, controller, approved, read)
+        expect(
+            "gate allow and network outcome agree for do_nothing",
+            allowed.get("decision") == "allow"
+            and nothing_exec.get("execution_attempted") is True
+            and still_primary(),
+            f"decision={allowed} exec={nothing_exec}",
+        )
+
+        stale_approved = read()
+        ctl.set_active_path(net, "backup")
+        executed.clear()
+        stale = apply_authorized_action({"decision": "allow"}, _cause_proposal("REROUTE", "F1"), stub, stale_approved, read)
+        expect(
+            "changed state between verification and execution is refused",
+            not executed
+            and stale.get("execution_attempted") is False
+            and stale.get("execution_error") == "route changed since the gate decision",
+            str(stale),
+        )
+        ctl.set_active_path(net, "primary")
+        expect("primary restored after stale-state case", still_primary())
+
+        inj.inject(net, "F12")
+        snap12 = collect_current_state(net, links)
+        approved12 = read()
+        hidden = _cause_proposal("REROUTE", "F1")
+        hidden_out = gate_decide(net, hidden, snap12, [], mode="full", run_missing_tests=False, noise_id="N0")
+        backup_claim = _cause_proposal("REROUTE", "F12")
+        backup_out = gate_decide(net, backup_claim, snap12, [], mode="full", run_missing_tests=False, noise_id="N0")
+        executed.clear()
+        hidden_exec = apply_authorized_action(hidden_out, hidden, stub, approved12, read)
+        backup_exec = apply_authorized_action({"decision": "allow"}, backup_claim, stub, approved12, read)
+        loss = oam._parse_ping(run_in_node(net.get("hostA"), "ping -c 5 -i 0.2 -W 1 10.0.4.2"))["packet_loss_percent"]
+        expect(
+            "look-alike primary-down diagnosis is not allowed on backup-down",
+            hidden_out.get("decision") != "allow"
+            and hidden_exec.get("execution_attempted") is False,
+            f"decision={hidden_out} exec={hidden_exec}",
+        )
+        expect(
+            "hidden backup-down cause does not authorize reroute",
+            hidden_out.get("decision") != "allow"
+            and hidden_exec.get("execution_attempted") is False
+            and not executed,
+            f"decision={hidden_out} exec={hidden_exec}",
+        )
+        expect(
+            "rerouting when the backup path is down is blocked",
+            backup_out.get("decision") != "allow"
+            and backup_exec.get("execution_error") == "backup path is down"
+            and not executed
+            and still_primary()
+            and loss < 100.0,
+            f"decision={backup_out} exec={backup_exec} loss={loss}",
+        )
+        inj.reset_all(net, baseline=True)
+        expect("regression: primary restored after F12", still_primary())
+    except Exception as exc:
+        failures.append(f"{type(exc).__name__}: {exc}")
+        print(f"  FAIL  {type(exc).__name__}: {exc}")
+    finally:
+        inj.reset_all(net, baseline=True)
+        net.stop()
+        mn_cleanup()
+
+    if failures:
+        print("negative safety: FAIL " + "; ".join(str(item) for item in failures))
+        return 1
+    print("negative safety: PASS")
+    return 0
+
+
 if __name__ == "__main__":
     if "--live-recheck" in sys.argv:
         sys.exit(live_recheck())
@@ -1794,6 +2059,8 @@ if __name__ == "__main__":
         sys.exit(live_gate())
     if "--live-integrity" in sys.argv:
         sys.exit(live_integrity())
+    if "--live-safety" in sys.argv:
+        sys.exit(live_safety())
     if "--live" in sys.argv:
         sys.exit(live_diamond())
     if "--live-cost" in sys.argv:
