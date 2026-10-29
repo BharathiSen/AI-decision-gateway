@@ -5,7 +5,6 @@ Topology 2: 16-router grid (4×4) with two hosts — held-out generalization top
 """
 
 from mininet.net import Mininet
-from mininet.node import Node
 from mininet.link import TCLink
 from mininet.log import setLogLevel, info
 from mininet.cli import CLI
@@ -14,6 +13,19 @@ try:
     from network.topology import LinuxRouter, BASELINE_LINK_PARAMS
 except ImportError:
     from topology import LinuxRouter, BASELINE_LINK_PARAMS
+
+try:
+    from network import controller as ctl
+except ImportError:
+    import controller as ctl
+
+
+def _h_base(row, col):
+    return 10 + row * 10 + col
+
+
+def _v_base(row, col):
+    return 50 + row * 10 + col
 
 
 def create_large_network():
@@ -29,51 +41,69 @@ def create_large_network():
     hostB = net.addHost("hostB", ip=None)
     links = {}
 
-    def _add(a, b, ip_a, ip_b, n1, n2):
+    def _add(a, b, ip_a, ip_b):
         key = f"{a}-{b}"
         links[key] = net.addLink(
-            net.get(a), net.get(b),
-            intfName1=n1, intfName2=n2,
+            net.get(a),
+            net.get(b),
+            intfName1=f"{a}-to-{b}",
+            intfName2=f"{b}-to-{a}",
             params1={"ip": ip_a},
             params2={"ip": ip_b},
             **BASELINE_LINK_PARAMS,
         )
 
-    # Grid horizontal + vertical links
-    subnet = 10
     for row in range(4):
         for col in range(4):
             name = f"r{row}_{col}"
             if col < 3:
-                right = f"r{row}_{col+1}"
-                base = subnet + row * 10 + col
-                _add(name, right, f"10.{base}.1/24", f"10.{base}.2/24", f"{name}-eth1", f"{right}-eth0")
+                right = f"r{row}_{col + 1}"
+                base = _h_base(row, col)
+                _add(name, right, f"10.{base}.1/24", f"10.{base}.2/24")
             if row < 3:
-                down = f"r{row+1}_{col}"
-                base = subnet + 40 + row * 10 + col
-                _add(name, down, f"10.{base}.1/24", f"10.{base}.2/24", f"{name}-eth2", f"{down}-eth0")
+                down = f"r{row + 1}_{col}"
+                base = _v_base(row, col)
+                _add(name, down, f"10.{base}.1/24", f"10.{base}.2/24")
 
-    _add("hostA", "r0_0", "10.200.1.2/24", "10.200.1.1/24", "hostA-eth0", "r0_0-eth3")
-    _add("r3_3", "hostB", "10.200.2.1/24", "10.200.2.2/24", "r3_3-eth3", "hostB-eth0")
+    _add("hostA", "r0_0", "10.200.1.2/24", "10.200.1.1/24")
+    _add("r3_3", "hostB", "10.200.2.1/24", "10.200.2.2/24")
 
     net.start()
-    for name in list(routers) + ["hostA", "hostB"]:
+    for name in list(routers):
         node = net.get(name)
-        if name.startswith("r"):
-            node.cmd("sysctl -w net.ipv4.ip_forward=1")
-            node.cmd("sysctl -w net.ipv4.conf.all.rp_filter=0")
+        node.cmd("sysctl -w net.ipv4.ip_forward=1")
+        node.cmd("sysctl -w net.ipv4.conf.all.rp_filter=0")
+        node.cmd("sysctl -w net.ipv4.conf.default.rp_filter=0")
+        for intf in node.intfList():
+            if intf.name != "lo":
+                node.cmd(f"sysctl -w net.ipv4.conf.{intf.name}.rp_filter=0")
 
     hostA.cmd("ip route add default via 10.200.1.1")
     hostB.cmd("ip route add default via 10.200.2.1")
 
-    # Simple static routes: east then south path
     for row in range(4):
         for col in range(4):
-            r = net.get(f"r{row}_{col}")
+            name = f"r{row}_{col}"
+            r = net.get(name)
             if col < 3:
-                r.cmd("ip route add 10.200.2.0/24 via 10.%d.2 dev r%d_%d-eth1" % (10 + row * 10 + col, row, col))
+                right = f"r{row}_{col + 1}"
+                base = _h_base(row, col)
+                r.cmd(f"ip route add 10.200.2.0/24 via 10.{base}.2 dev {name}-to-{right}")
             elif row < 3:
-                r.cmd("ip route add 10.200.2.0/24 via 10.%d.2 dev r%d_%d-eth2" % (50 + row * 10 + col, row, col))
+                down = f"r{row + 1}_{col}"
+                base = _v_base(row, col)
+                r.cmd(f"ip route add 10.200.2.0/24 via 10.{base}.2 dev {name}-to-{down}")
+            if col > 0:
+                left = f"r{row}_{col - 1}"
+                base = _h_base(row, col - 1)
+                r.cmd(f"ip route add 10.200.1.0/24 via 10.{base}.1 dev {name}-to-{left}")
+            elif row > 0:
+                up = f"r{row - 1}_{col}"
+                base = _v_base(row - 1, col)
+                r.cmd(f"ip route add 10.200.1.0/24 via 10.{base}.1 dev {name}-to-{up}")
+
+    for link in links.values():
+        ctl.wait_link_up(link)
 
     return {"net": net, "links": links, "topology": "grid_4x4"}
 
