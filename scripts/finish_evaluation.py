@@ -51,6 +51,8 @@ def main():
                 str(args.episodes),
                 "--seed",
                 str(args.seed),
+                "--require-model",
+                "--resume",
                 "--save-episodes",
             ],
             env=os.environ.copy(),

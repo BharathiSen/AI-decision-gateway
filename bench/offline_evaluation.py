@@ -152,14 +152,25 @@ def _evaluate_go_nogo(stats):
         gate_unsafe < b5_unsafe or stats["gate_v0_cost"] < stats["b5_cost"]
     )
     pivot = diff < 0.02 and stats["episodes"] >= 400
+    recommendation = (
+        "continue_main_track"
+        if continue_main
+        else ("pivot_measurement" if pivot else "inconclusive_or_collect_more")
+    )
+    by = stats.get("by_scenario") or {}
+    normal = by.get("normal") or {}
+    stress = by.get("stress") or {}
+    n_norm = normal.get("episodes") or 0
+    n_stress = stress.get("episodes") or 0
+    if n_norm and n_stress:
+        normal_wrong = (normal.get("wrong_proposals") or 0) / n_norm
+        stress_wrong = (stress.get("wrong_proposals") or 0) / n_stress
+        if normal_wrong < 0.05 and stress_wrong >= 0.25:
+            recommendation = "stress_led_track"
     return {
         "wrong_rate_non_h0": wrong_non_h0,
         "unsafe_rate_delta_pp": diff * 100,
-        "recommendation": (
-            "continue_main_track"
-            if continue_main
-            else ("pivot_measurement" if pivot else "inconclusive_or_collect_more")
-        ),
+        "recommendation": recommendation,
         "criteria_doc": "results/pilot_criteria.md",
     }
 
