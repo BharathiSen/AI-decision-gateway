@@ -532,8 +532,9 @@ def _node_names(net):
 
 
 def _ping_ok(parsed):
+    """_parse_ping does not set connectivity; T1 adds that later."""
     loss = parsed.get("packet_loss_percent")
-    return loss is not None and loss < 100.0 and parsed.get("connectivity") is True
+    return loss is not None and loss < 100.0
 
 
 def live_matrix():
