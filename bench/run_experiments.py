@@ -221,17 +221,24 @@ def aggregate(episode_dir):
     return summary
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--episodes-dir", default="results/episodes")
     parser.add_argument("--out", default="results/experiment_summary.json")
-    args = parser.parse_args()
+    parser.add_argument("--self-check", action="store_true")
+    parser.add_argument("--live-compare", action="store_true")
+    args = parser.parse_args(argv)
+    if args.self_check:
+        return _self_check()
+    if args.live_compare:
+        return live_compare()
 
     summary = aggregate(args.episodes_dir)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(json.dumps(summary, indent=2))
+    return 0
 
 
 def live_compare():
@@ -427,8 +434,4 @@ def _self_check():
 
 
 if __name__ == "__main__":
-    if "--self-check" in sys.argv:
-        sys.exit(_self_check())
-    if "--live-compare" in sys.argv:
-        sys.exit(live_compare())
-    main()
+    sys.exit(main())
