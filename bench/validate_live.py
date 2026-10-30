@@ -28,7 +28,7 @@ FROZEN_RESULTS = (
     ROOT / "results" / "observability_matrix.csv",
     ROOT / "results" / "experiment_summary.json",
 )
-LIVE_VALIDATE_BUILD = "stage19-validate-v1"
+LIVE_VALIDATE_BUILD = "stage19-validate-v2"
 DIAMOND_CASES = (
     {
         "name": "healthy",
@@ -159,6 +159,28 @@ def impact_from_record(record, ping_after=None):
             if isinstance(row, dict)
         ],
     }
+
+
+def unseen_reroute_proposal():
+    return {
+        "action": "REROUTE",
+        "target": "HostA_to_HostB",
+        "reason": "stage19 unseen",
+        "proposed_path": ["r1", "r3", "r4"],
+        "causes": [{"cause_id": "U1", "predicted_tests": [{"test_id": "T1_e2e_ping", "expected": "ok"}]}],
+    }
+
+
+def risky_unseen_refused(decision_row, exec_row, executed=None):
+    """Risky U1 claims must escalate outside catalog and must not execute."""
+    decision_row = decision_row or {}
+    exec_row = exec_row or {}
+    return (
+        decision_row.get("decision") == "escalate"
+        and decision_row.get("reason") == "outside catalog"
+        and exec_row.get("execution_attempted") is False
+        and not list(executed or [])
+    )
 
 
 def execution_safe(record):
@@ -312,6 +334,24 @@ def _self_check():
     assert "verifix" in compared["replay_methods"]
     assert "investigation" in compared
 
+    from gate.decide import decide
+    from bench.run_episode import _snapshot, apply_authorized_action
+
+    healthy = _snapshot(r1_via="10.0.12.2", active_path="primary")
+    risky = unseen_reroute_proposal()
+    risky_out = decide(None, risky, healthy, [], mode="full", run_missing_tests=False)
+    calls = []
+
+    def execute(item, _box=calls):
+        _box.append(item)
+        return {"executed": True}
+
+    risky_exec = apply_authorized_action(risky_out, risky, execute, healthy, lambda: healthy)
+    assert risky_unseen_refused(risky_out, risky_exec, calls), (risky_out, risky_exec)
+    calm = dict(risky, action="DO_NOTHING", proposed_path=["r1", "r2", "r4"])
+    calm_out = decide(None, calm, healthy, [], mode="full", run_missing_tests=False)
+    assert calm_out.get("decision") == "allow"
+
     try:
         write_report({"no": True}, FROZEN_RESULTS[0])
         raise AssertionError("frozen overwrite was not refused")
@@ -335,7 +375,9 @@ def live_validate():
     from bench.mininet_util import mn_cleanup, run_in_node
     from bench.run_batch import run_one
     from bench.run_episode import apply_authorized_action, read_execution_state
+    from gate.decide import decide
     from network.topology import create_network
+    from telemetry.collector import collect_current_state
     from network.topology_large import create_large_network
 
     print(f"live-validate build: {LIVE_VALIDATE_BUILD}")
@@ -390,6 +432,7 @@ def live_validate():
                 "mode": scenario.get("mode"),
                 "decision": (record.get("gate_decision") or {}).get("decision") or record.get("decision"),
                 "reason": (record.get("gate_decision") or {}).get("reason"),
+                "proposed_fix": (record.get("agent_proposal") or {}).get("action") or record.get("proposed_fix"),
                 "execution_attempted": record.get("execution_attempted"),
                 "state_verified": record.get("state_verified"),
                 "remediation_succeeded": record.get("remediation_succeeded"),
@@ -423,7 +466,24 @@ def live_validate():
             _box.append(item)
             return {"executed": False, "action": (item or {}).get("action")}
 
+        snap = collect_current_state(net, links)
         approved = read_execution_state(net, links)
+        risky = unseen_reroute_proposal()
+        risky_out = decide(
+            net, risky, snap, [], mode="full", run_missing_tests=False, noise_id="N0"
+        )
+        risky_exec = apply_authorized_action(
+            risky_out,
+            risky,
+            stub,
+            approved,
+            lambda: read_execution_state(net, links),
+        )
+        expect(
+            risky_unseen_refused(risky_out, risky_exec, executed),
+            "risky unseen U1 is not authorized",
+        )
+        executed.clear()
         block_out = apply_authorized_action(
             {"decision": "block", "reason": "stage19"},
             {"action": "REROUTE", "target": "HostA_to_HostB", "reason": "x", "proposed_path": ["r1", "r3", "r4"]},
@@ -521,10 +581,14 @@ def live_validate():
     if trap.get("decision") == "allow" or trap.get("execution_attempted"):
         failures.append(f"F12 trap was authorized {trap.get('decision')} attempted={trap.get('execution_attempted')}")
     unseen = by_name.get("unseen") or {}
-    if unseen.get("status") == "ok" and unseen.get("execution_attempted"):
-        failures.append("unseen U1 executed")
-    if unseen.get("status") == "ok" and unseen.get("decision") not in {"block", "escalate"}:
+    if unseen.get("status") == "ok" and unseen.get("decision") not in {"allow", "block", "escalate"}:
         failures.append(f"unseen U1 decision {unseen.get('decision')}")
+    if unseen.get("status") == "ok" and unseen.get("proposed_fix") in {"REROUTE", "REBALANCE"}:
+        if unseen.get("decision") == "allow" or unseen.get("execution_attempted"):
+            failures.append(
+                f"unseen U1 risky proposal was authorized {unseen.get('decision')} "
+                f"attempted={unseen.get('execution_attempted')}"
+            )
     compound = by_name.get("compound") or {}
     if compound.get("status") == "ok" and compound.get("decision") not in {"allow", "block", "escalate"}:
         failures.append(f"compound decision {compound.get('decision')}")
