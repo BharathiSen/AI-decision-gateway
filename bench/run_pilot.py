@@ -508,7 +508,7 @@ def run_loop(args, net, links):
                 episode.get("agent_proposal"),
                 episode.get("network_snapshot"),
                 oam_results,
-                mode="pilot_v0",
+                mode="full",
                 run_missing_tests=False,
                 noise_id=episode.get("noise_id") or "N0",
             )

@@ -122,11 +122,13 @@ def bind_gate_decision(decision, snapshot, proposal, test_results=None):
 
 
 def binding_errors(decision, snapshot, proposal):
-    """Legacy unbound allows return no errors. Bound tokens must match."""
+    """Allow requires a bind token. Bound tokens must match this snapshot."""
     if not isinstance(decision, dict):
         return ["missing gate decision"]
     binding = decision.get("binding")
     if not isinstance(binding, dict):
+        if str(decision.get("decision") or "").strip().lower() == "allow":
+            return ["allow is missing decision binding"]
         return []
     from gate.decide import evidence_fingerprint
 

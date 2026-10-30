@@ -12,9 +12,9 @@ _MODEL = Path(__file__).resolve().parent.parent / "results" / "grader_model.json
 
 def grade_test(test_id, observation, predicted_expected, use_model=True):
     """Return confidence 0..1 that observation supports prediction."""
-    obs = str(observation).lower()
-    exp = (predicted_expected or "").lower()
-    if exp in obs or obs in exp:
+    from gate.checks import _prediction_matches
+
+    if _prediction_matches(predicted_expected, observation):
         return 1.0
     if use_model and _MODEL.exists():
         data = json.loads(_MODEL.read_text(encoding="utf-8"))

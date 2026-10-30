@@ -1,8 +1,8 @@
-"""B4: checker with VeriFix's permitted tests, catalog, and stopping rules.
+"""B4: catalog-filled checker with VeriFix tests, catalog, and stopping rules.
 
-The checker stand-in fills expected outcomes from the development matrix
-(the catalog), not from the agent's predicted_tests. A live LLM client is
-not required for offline or VM runs.
+This is not an LLM. It fills expected outcomes from the development
+matrix, not from the agent's predicted_tests, then calls gate.decide.
+A live LLM client is not used.
 """
 
 from gate.catalog import plausible_alternatives
@@ -67,6 +67,7 @@ def decide(proposal, snapshot, test_results, net=None, run_missing_tests=None):
         }
     return {
         "method": "B4",
+        "implementation": "catalog_filled_gate",
         "decision": audit.get("decision"),
         "action": proposal.get("action"),
         "tests_run": list(audit.get("tests_run") or []),

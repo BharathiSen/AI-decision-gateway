@@ -1,0 +1,432 @@
+{
+  "run_at": "2026-10-28T08:26:47.885707+00:00",
+  "iterations": 10,
+  "noise_levels": {
+    "N0": {
+      "H0": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "F1": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "F2": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "F3": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "F4": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "F5": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "F6": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "F7": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "F8": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "F9": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "F10": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "F11": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "F12": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "U1": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "U2": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "U3": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "U4": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "U5": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "C1": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "C2": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "C3": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "C4": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "C5": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      }
+    },
+    "N1": {
+      "H0": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "F1": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "F2": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "F3": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "F4": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "F5": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "F6": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "F7": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "F8": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "F9": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "F10": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "F11": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "F12": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "U1": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "U2": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "U3": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "U4": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "U5": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "C1": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "C2": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "C3": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "C4": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "C5": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      }
+    },
+    "N2": {
+      "H0": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "F1": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "F2": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "F3": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "F4": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "F5": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "F6": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "F7": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "F8": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "F9": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "F10": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "F11": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "F12": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "U1": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "U2": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "U3": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "U4": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "U5": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "C1": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "C2": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "C3": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "C4": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      },
+      "C5": {
+        "passed": 10,
+        "failed": 0,
+        "settled": 0,
+        "failures": []
+      }
+    }
+  },
+  "noise_cleanup_residual": {
+    "N0": [],
+    "N1": [],
+    "N2": []
+  },
+  "pass": true
+}

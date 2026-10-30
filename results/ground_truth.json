@@ -1,0 +1,6732 @@
+{
+  "generated_at": "2026-10-28T15:20:40.629864+00:00",
+  "noise_id": "N0",
+  "seed": 42,
+  "params": {
+    "F3": {
+      "loss_percent": 20
+    },
+    "F4": {
+      "corrupt_percent": 5
+    },
+    "F6": {
+      "rate_mbit": 1,
+      "background_traffic": true
+    },
+    "F7": {
+      "rate_mbit": 1,
+      "background_traffic": true
+    },
+    "F11": {
+      "loss_percent": 20
+    },
+    "U1": {
+      "mtu_bytes": 1000
+    },
+    "U2": {
+      "loss_percent": 20
+    }
+  },
+  "recovery_tests": [
+    "T1_e2e_ping",
+    "T4_mtu",
+    "T8_tcp_vs_ping",
+    "T10_speed"
+  ],
+  "rules": {
+    "recovered": "T1, T4 and T8 read healthy, and the best T10 sample is at least 4 Mbit (half the diamond). A 7.5 vs 8.09 reading is not a failure.",
+    "valid_fixes": "DO_NOTHING alone if traffic is fine unchanged; else each remediation that recovered; else ESCALATE",
+    "different_fixes": "the two valid fix sets share no action",
+    "inseparable": "different fixes and no matrix test differs; expected action ESCALATE"
+  },
+  "scenarios": {
+    "H0": {
+      "kind": "fault",
+      "split": "baseline",
+      "parts": [
+        "H0"
+      ],
+      "timing_sensitive": false,
+      "signature": {
+        "T1_e2e_ping": "ok",
+        "T2_hop_ping": "primary:hostA-r1=ok,r1-r2=ok,r2-r4=ok,r4-hostB=ok;backup:hostA-r1=ok,r1-r3=ok,r3-r4=ok,r4-hostB=ok",
+        "T4_mtu": "df_ok",
+        "T5_if_errors": "clean",
+        "T6_queue_stats": "clear",
+        "T7_route_check": "primary",
+        "T8_tcp_vs_ping": "both_ok",
+        "T9_oneway_loss": "symmetric",
+        "T10_speed": "ok"
+      },
+      "raw": {
+        "T10_mbit_samples": [
+          8.76
+        ],
+        "T1_loss_percent": 0.0,
+        "T1_latency_ms": 46.9,
+        "T9_a2b_loss_percent": 0.0,
+        "T9_b2a_loss_percent": 0.0
+      },
+      "actions": {
+        "DO_NOTHING": {
+          "executed": false,
+          "recovered": true,
+          "action": "DO_NOTHING",
+          "path_after": {
+            "r1": "primary",
+            "r4": "primary"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              8.3
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 42.5
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "ok"
+          },
+          "degraded": [],
+          "routes_restored": true
+        },
+        "REROUTE": {
+          "executed": true,
+          "recovered": true,
+          "action": "REROUTE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              9.01
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 43.45
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "ok"
+          },
+          "degraded": [],
+          "routes_restored": true
+        },
+        "REBALANCE": {
+          "executed": true,
+          "recovered": true,
+          "action": "REBALANCE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              8.76
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 42.8
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "ok"
+          },
+          "degraded": [],
+          "routes_restored": true
+        },
+        "ESCALATE": {
+          "executed": false,
+          "note": "no network change; traffic is as under DO_NOTHING"
+        }
+      },
+      "errors": [],
+      "health_loss_percent": 0.0,
+      "residual": [],
+      "measured_valid_fixes": [
+        "DO_NOTHING"
+      ],
+      "inseparable_from": [],
+      "expected_actions": [
+        "DO_NOTHING"
+      ],
+      "catalog_fixes": [
+        "DO_NOTHING"
+      ],
+      "matches_catalog": true
+    },
+    "F1": {
+      "kind": "fault",
+      "split": "development",
+      "parts": [
+        "F1"
+      ],
+      "timing_sensitive": false,
+      "signature": {
+        "T1_e2e_ping": "down",
+        "T2_hop_ping": "primary:hostA-r1=ok,r1-r2=ok,r2-r4=down,r4-hostB=ok;backup:hostA-r1=ok,r1-r3=ok,r3-r4=ok,r4-hostB=ok",
+        "T4_mtu": "mtu_fail",
+        "T5_if_errors": "clean",
+        "T6_queue_stats": "clear",
+        "T7_route_check": "primary",
+        "T8_tcp_vs_ping": "both_fail",
+        "T9_oneway_loss": "symmetric",
+        "T10_speed": "slow"
+      },
+      "raw": {
+        "T10_mbit_samples": [
+          null,
+          null,
+          null
+        ],
+        "T1_loss_percent": 100.0,
+        "T1_latency_ms": null,
+        "T9_a2b_loss_percent": 100.0,
+        "T9_b2a_loss_percent": 100.0
+      },
+      "actions": {
+        "DO_NOTHING": {
+          "executed": false,
+          "recovered": false,
+          "action": "DO_NOTHING",
+          "path_after": {
+            "r1": "primary",
+            "r4": "primary"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              null,
+              null,
+              null
+            ],
+            "T1_loss_percent": 100.0,
+            "T1_latency_ms": null
+          },
+          "outcomes": {
+            "T1_e2e_ping": "down",
+            "T4_mtu": "mtu_fail",
+            "T8_tcp_vs_ping": "both_fail",
+            "T10_speed": "slow"
+          },
+          "degraded": [
+            "T1_e2e_ping",
+            "T4_mtu",
+            "T8_tcp_vs_ping"
+          ],
+          "routes_restored": true
+        },
+        "REROUTE": {
+          "executed": true,
+          "recovered": true,
+          "action": "REROUTE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              8.29
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 53.4
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "ok"
+          },
+          "degraded": [],
+          "routes_restored": true
+        },
+        "REBALANCE": {
+          "executed": true,
+          "recovered": true,
+          "action": "REBALANCE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              8.49
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 45.8
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "ok"
+          },
+          "degraded": [],
+          "routes_restored": true
+        },
+        "ESCALATE": {
+          "executed": false,
+          "note": "no network change; traffic is as under DO_NOTHING"
+        }
+      },
+      "errors": [],
+      "health_loss_percent": 0.0,
+      "residual": [],
+      "measured_valid_fixes": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "inseparable_from": [],
+      "expected_actions": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "catalog_fixes": [
+        "REROUTE"
+      ],
+      "matches_catalog": false
+    },
+    "F2": {
+      "kind": "fault",
+      "split": "development",
+      "parts": [
+        "F2"
+      ],
+      "timing_sensitive": false,
+      "signature": {
+        "T1_e2e_ping": "down",
+        "T2_hop_ping": "primary:hostA-r1=ok,r1-r2=down,r2-r4=ok,r4-hostB=ok;backup:hostA-r1=ok,r1-r3=ok,r3-r4=ok,r4-hostB=ok",
+        "T4_mtu": "mtu_fail",
+        "T5_if_errors": "clean",
+        "T6_queue_stats": "clear",
+        "T7_route_check": "none",
+        "T8_tcp_vs_ping": "both_fail",
+        "T9_oneway_loss": "symmetric",
+        "T10_speed": "slow"
+      },
+      "raw": {
+        "T10_mbit_samples": [
+          null,
+          null,
+          null
+        ],
+        "T1_loss_percent": 100.0,
+        "T1_latency_ms": null,
+        "T9_a2b_loss_percent": 100.0,
+        "T9_b2a_loss_percent": 100.0
+      },
+      "actions": {
+        "DO_NOTHING": {
+          "executed": false,
+          "recovered": false,
+          "action": "DO_NOTHING",
+          "path_after": {
+            "r1": "none",
+            "r4": "primary"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              null,
+              null,
+              null
+            ],
+            "T1_loss_percent": 100.0,
+            "T1_latency_ms": null
+          },
+          "outcomes": {
+            "T1_e2e_ping": "down",
+            "T4_mtu": "mtu_fail",
+            "T8_tcp_vs_ping": "both_fail",
+            "T10_speed": "slow"
+          },
+          "degraded": [
+            "T1_e2e_ping",
+            "T4_mtu",
+            "T8_tcp_vs_ping"
+          ],
+          "routes_restored": true
+        },
+        "REROUTE": {
+          "executed": true,
+          "recovered": true,
+          "action": "REROUTE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              8.71
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 42.75
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "ok"
+          },
+          "degraded": [],
+          "routes_restored": true
+        },
+        "REBALANCE": {
+          "executed": true,
+          "recovered": false,
+          "action": "REBALANCE",
+          "path": "primary",
+          "path_after": {
+            "r1": "none",
+            "r4": "primary"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              null,
+              null,
+              null
+            ],
+            "T1_loss_percent": 100.0,
+            "T1_latency_ms": null
+          },
+          "outcomes": {
+            "T1_e2e_ping": "down",
+            "T4_mtu": "mtu_fail",
+            "T8_tcp_vs_ping": "both_fail",
+            "T10_speed": "slow"
+          },
+          "degraded": [
+            "T1_e2e_ping",
+            "T4_mtu",
+            "T8_tcp_vs_ping"
+          ],
+          "routes_restored": true
+        },
+        "ESCALATE": {
+          "executed": false,
+          "note": "no network change; traffic is as under DO_NOTHING"
+        }
+      },
+      "errors": [],
+      "health_loss_percent": 0.0,
+      "residual": [],
+      "measured_valid_fixes": [
+        "REROUTE"
+      ],
+      "inseparable_from": [],
+      "expected_actions": [
+        "REROUTE"
+      ],
+      "catalog_fixes": [
+        "REROUTE"
+      ],
+      "matches_catalog": true
+    },
+    "F3": {
+      "kind": "fault",
+      "split": "development",
+      "parts": [
+        "F3"
+      ],
+      "timing_sensitive": false,
+      "signature": {
+        "T1_e2e_ping": "loss",
+        "T2_hop_ping": "primary:hostA-r1=ok,r1-r2=ok,r2-r4=loss,r4-hostB=ok;backup:hostA-r1=ok,r1-r3=ok,r3-r4=ok,r4-hostB=ok",
+        "T4_mtu": "mtu_fail",
+        "T5_if_errors": "clean",
+        "T6_queue_stats": "clear",
+        "T7_route_check": "primary",
+        "T8_tcp_vs_ping": "both_ok",
+        "T9_oneway_loss": "a2b_loss",
+        "T10_speed": "slow"
+      },
+      "raw": {
+        "T10_mbit_samples": [
+          0.34400000000000003,
+          0.34800000000000003,
+          0.6880000000000001
+        ],
+        "T1_loss_percent": 26.0,
+        "T1_latency_ms": 42.6,
+        "T9_a2b_loss_percent": 20.0,
+        "T9_b2a_loss_percent": 0.0
+      },
+      "actions": {
+        "DO_NOTHING": {
+          "executed": false,
+          "recovered": false,
+          "action": "DO_NOTHING",
+          "path_after": {
+            "r1": "primary",
+            "r4": "primary"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              0.34400000000000003,
+              0.341,
+              0.34400000000000003
+            ],
+            "T1_loss_percent": 23.3333,
+            "T1_latency_ms": 47.2
+          },
+          "outcomes": {
+            "T1_e2e_ping": "loss",
+            "T4_mtu": "mtu_fail",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "slow"
+          },
+          "degraded": [
+            "T1_e2e_ping",
+            "T4_mtu",
+            "T10_speed"
+          ],
+          "routes_restored": true
+        },
+        "REROUTE": {
+          "executed": true,
+          "recovered": true,
+          "action": "REROUTE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              8.2
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 52.95
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "ok"
+          },
+          "degraded": [],
+          "routes_restored": true
+        },
+        "REBALANCE": {
+          "executed": true,
+          "recovered": true,
+          "action": "REBALANCE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              8.69
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 42.849999999999994
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "ok"
+          },
+          "degraded": [],
+          "routes_restored": true
+        },
+        "ESCALATE": {
+          "executed": false,
+          "note": "no network change; traffic is as under DO_NOTHING"
+        }
+      },
+      "errors": [],
+      "health_loss_percent": 0.0,
+      "residual": [],
+      "measured_valid_fixes": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "inseparable_from": [],
+      "expected_actions": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "catalog_fixes": [
+        "REROUTE"
+      ],
+      "matches_catalog": false
+    },
+    "F4": {
+      "kind": "fault",
+      "split": "development",
+      "parts": [
+        "F4"
+      ],
+      "timing_sensitive": false,
+      "signature": {
+        "T1_e2e_ping": "ok",
+        "T2_hop_ping": "primary:hostA-r1=ok,r1-r2=ok,r2-r4=loss,r4-hostB=ok;backup:hostA-r1=ok,r1-r3=ok,r3-r4=ok,r4-hostB=ok",
+        "T4_mtu": "mtu_fail",
+        "T5_if_errors": "errors:hostB/icmp|r4/icmp",
+        "T6_queue_stats": "clear",
+        "T7_route_check": "primary",
+        "T8_tcp_vs_ping": "both_ok",
+        "T9_oneway_loss": "symmetric",
+        "T10_speed": "slow"
+      },
+      "raw": {
+        "T10_mbit_samples": [
+          1.37,
+          1.72,
+          1.72
+        ],
+        "T1_loss_percent": 4.0,
+        "T1_latency_ms": 43.1,
+        "T9_a2b_loss_percent": 0.0,
+        "T9_b2a_loss_percent": 0.0
+      },
+      "actions": {
+        "DO_NOTHING": {
+          "executed": false,
+          "recovered": false,
+          "action": "DO_NOTHING",
+          "path_after": {
+            "r1": "primary",
+            "r4": "primary"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              1.37,
+              3.77,
+              null
+            ],
+            "T1_loss_percent": 6.66667,
+            "T1_latency_ms": 42.8
+          },
+          "outcomes": {
+            "T1_e2e_ping": "loss",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "slow"
+          },
+          "degraded": [
+            "T1_e2e_ping",
+            "T10_speed"
+          ],
+          "routes_restored": true
+        },
+        "REROUTE": {
+          "executed": true,
+          "recovered": true,
+          "action": "REROUTE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              7.6,
+              8.88
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 72.05
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "ok"
+          },
+          "degraded": [],
+          "routes_restored": true
+        },
+        "REBALANCE": {
+          "executed": true,
+          "recovered": true,
+          "action": "REBALANCE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              8.56
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 42.7
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "ok"
+          },
+          "degraded": [],
+          "routes_restored": true
+        },
+        "ESCALATE": {
+          "executed": false,
+          "note": "no network change; traffic is as under DO_NOTHING"
+        }
+      },
+      "errors": [],
+      "health_loss_percent": 0.0,
+      "residual": [],
+      "measured_valid_fixes": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "inseparable_from": [],
+      "expected_actions": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "catalog_fixes": [
+        "REROUTE"
+      ],
+      "matches_catalog": false
+    },
+    "F5": {
+      "kind": "fault",
+      "split": "development",
+      "parts": [
+        "F5"
+      ],
+      "timing_sensitive": false,
+      "signature": {
+        "T1_e2e_ping": "latency",
+        "T2_hop_ping": "primary:hostA-r1=ok,r1-r2=ok,r2-r4=delay,r4-hostB=ok;backup:hostA-r1=ok,r1-r3=ok,r3-r4=ok,r4-hostB=ok",
+        "T4_mtu": "df_ok",
+        "T5_if_errors": "clean",
+        "T6_queue_stats": "clear",
+        "T7_route_check": "primary",
+        "T8_tcp_vs_ping": "both_ok",
+        "T9_oneway_loss": "symmetric",
+        "T10_speed": "slow"
+      },
+      "raw": {
+        "T10_mbit_samples": [
+          0.977,
+          2.27,
+          null
+        ],
+        "T1_loss_percent": 0.0,
+        "T1_latency_ms": 242.0,
+        "T9_a2b_loss_percent": 0.0,
+        "T9_b2a_loss_percent": 0.0
+      },
+      "actions": {
+        "DO_NOTHING": {
+          "executed": false,
+          "recovered": false,
+          "action": "DO_NOTHING",
+          "path_after": {
+            "r1": "primary",
+            "r4": "primary"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              3.88,
+              0.97,
+              1.31
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 222.0
+          },
+          "outcomes": {
+            "T1_e2e_ping": "latency",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "slow"
+          },
+          "degraded": [
+            "T1_e2e_ping",
+            "T10_speed"
+          ],
+          "routes_restored": true
+        },
+        "REROUTE": {
+          "executed": true,
+          "recovered": false,
+          "action": "REROUTE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              8.54
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 41.9
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "mtu_fail",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "ok"
+          },
+          "degraded": [
+            "T4_mtu"
+          ],
+          "routes_restored": true
+        },
+        "REBALANCE": {
+          "executed": true,
+          "recovered": true,
+          "action": "REBALANCE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              7.39,
+              9.02
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 42.25
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "ok"
+          },
+          "degraded": [],
+          "routes_restored": true
+        },
+        "ESCALATE": {
+          "executed": false,
+          "note": "no network change; traffic is as under DO_NOTHING"
+        }
+      },
+      "errors": [],
+      "health_loss_percent": 0.0,
+      "residual": [],
+      "measured_valid_fixes": [
+        "REBALANCE"
+      ],
+      "inseparable_from": [],
+      "expected_actions": [
+        "REBALANCE"
+      ],
+      "catalog_fixes": [
+        "REROUTE"
+      ],
+      "matches_catalog": false
+    },
+    "F6": {
+      "kind": "fault",
+      "split": "development",
+      "parts": [
+        "F6"
+      ],
+      "timing_sensitive": false,
+      "signature": {
+        "T1_e2e_ping": "down",
+        "T2_hop_ping": "primary:hostA-r1=ok,r1-r2=ok,r2-r4=down,r4-hostB=ok;backup:hostA-r1=ok,r1-r3=ok,r3-r4=ok,r4-hostB=ok",
+        "T4_mtu": "mtu_fail",
+        "T5_if_errors": "clean",
+        "T6_queue_stats": "drops:r2/r2-eth1",
+        "T7_route_check": "primary",
+        "T8_tcp_vs_ping": "both_fail",
+        "T9_oneway_loss": "a2b_loss",
+        "T10_speed": "slow"
+      },
+      "raw": {
+        "T10_mbit_samples": [
+          null,
+          null,
+          null
+        ],
+        "T1_loss_percent": 100.0,
+        "T1_latency_ms": null,
+        "T9_a2b_loss_percent": 84.0,
+        "T9_b2a_loss_percent": 0.0
+      },
+      "actions": {
+        "DO_NOTHING": {
+          "executed": false,
+          "recovered": false,
+          "action": "DO_NOTHING",
+          "path_after": {
+            "r1": "primary",
+            "r4": "primary"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              null,
+              null,
+              null
+            ],
+            "T1_loss_percent": 100.0,
+            "T1_latency_ms": null
+          },
+          "outcomes": {
+            "T1_e2e_ping": "down",
+            "T4_mtu": "mtu_fail",
+            "T8_tcp_vs_ping": "both_fail",
+            "T10_speed": "slow"
+          },
+          "degraded": [
+            "T1_e2e_ping",
+            "T4_mtu",
+            "T8_tcp_vs_ping"
+          ],
+          "routes_restored": true
+        },
+        "REROUTE": {
+          "executed": true,
+          "recovered": true,
+          "action": "REROUTE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              9.01
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 42.3
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "ok"
+          },
+          "degraded": [],
+          "routes_restored": true
+        },
+        "REBALANCE": {
+          "executed": true,
+          "recovered": true,
+          "action": "REBALANCE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              8.08,
+              9.11
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 44.8
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "ok"
+          },
+          "degraded": [],
+          "routes_restored": true
+        },
+        "ESCALATE": {
+          "executed": false,
+          "note": "no network change; traffic is as under DO_NOTHING"
+        }
+      },
+      "errors": [],
+      "health_loss_percent": 0.0,
+      "residual": [],
+      "measured_valid_fixes": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "inseparable_from": [],
+      "expected_actions": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "catalog_fixes": [
+        "REROUTE"
+      ],
+      "matches_catalog": false
+    },
+    "F7": {
+      "kind": "fault",
+      "split": "development",
+      "parts": [
+        "F7"
+      ],
+      "timing_sensitive": false,
+      "signature": {
+        "T1_e2e_ping": "down",
+        "T2_hop_ping": "primary:hostA-r1=ok,r1-r2=down,r2-r4=ok,r4-hostB=ok;backup:hostA-r1=ok,r1-r3=ok,r3-r4=ok,r4-hostB=ok",
+        "T4_mtu": "mtu_fail",
+        "T5_if_errors": "clean",
+        "T6_queue_stats": "drops:r1/r1-eth1",
+        "T7_route_check": "primary",
+        "T8_tcp_vs_ping": "both_fail",
+        "T9_oneway_loss": "a2b_loss",
+        "T10_speed": "slow"
+      },
+      "raw": {
+        "T10_mbit_samples": [
+          null,
+          null,
+          null
+        ],
+        "T1_loss_percent": 100.0,
+        "T1_latency_ms": null,
+        "T9_a2b_loss_percent": 100.0,
+        "T9_b2a_loss_percent": 0.0
+      },
+      "actions": {
+        "DO_NOTHING": {
+          "executed": false,
+          "recovered": false,
+          "action": "DO_NOTHING",
+          "path_after": {
+            "r1": "primary",
+            "r4": "primary"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              null,
+              null,
+              null
+            ],
+            "T1_loss_percent": 100.0,
+            "T1_latency_ms": null
+          },
+          "outcomes": {
+            "T1_e2e_ping": "down",
+            "T4_mtu": "mtu_fail",
+            "T8_tcp_vs_ping": "both_fail",
+            "T10_speed": "slow"
+          },
+          "degraded": [
+            "T1_e2e_ping",
+            "T4_mtu",
+            "T8_tcp_vs_ping"
+          ],
+          "routes_restored": true
+        },
+        "REROUTE": {
+          "executed": true,
+          "recovered": true,
+          "action": "REROUTE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              7.75,
+              8.25
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 43.3
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "ok"
+          },
+          "degraded": [],
+          "routes_restored": true
+        },
+        "REBALANCE": {
+          "executed": true,
+          "recovered": true,
+          "action": "REBALANCE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              9.05
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 42.849999999999994
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "ok"
+          },
+          "degraded": [],
+          "routes_restored": true
+        },
+        "ESCALATE": {
+          "executed": false,
+          "note": "no network change; traffic is as under DO_NOTHING"
+        }
+      },
+      "errors": [],
+      "health_loss_percent": 0.0,
+      "residual": [],
+      "measured_valid_fixes": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "inseparable_from": [],
+      "expected_actions": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "catalog_fixes": [
+        "REROUTE"
+      ],
+      "matches_catalog": false
+    },
+    "F8": {
+      "kind": "fault",
+      "split": "development",
+      "parts": [
+        "F8"
+      ],
+      "timing_sensitive": true,
+      "signature": {
+        "T1_e2e_ping": "loss",
+        "T2_hop_ping": "primary:hostA-r1=ok,r1-r2=ok,r2-r4=ok,r4-hostB=ok;backup:hostA-r1=ok,r1-r3=ok,r3-r4=ok,r4-hostB=ok",
+        "T4_mtu": "df_ok",
+        "T5_if_errors": "clean",
+        "T6_queue_stats": "clear",
+        "T7_route_check": "primary",
+        "T8_tcp_vs_ping": "both_ok",
+        "T9_oneway_loss": "symmetric",
+        "T10_speed": "ok"
+      },
+      "raw": {
+        "T10_mbit_samples": [
+          7.89,
+          8.7
+        ],
+        "T1_loss_percent": 60.0,
+        "T1_latency_ms": 57.45,
+        "T9_a2b_loss_percent": 0.0,
+        "T9_b2a_loss_percent": 0.0
+      },
+      "actions": {
+        "DO_NOTHING": {
+          "executed": false,
+          "recovered": true,
+          "action": "DO_NOTHING",
+          "path_after": {
+            "r1": "primary",
+            "r4": "primary"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              8.75
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 69.5
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "ok"
+          },
+          "degraded": [],
+          "routes_restored": true
+        },
+        "REROUTE": {
+          "executed": true,
+          "recovered": true,
+          "action": "REROUTE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              7.45,
+              7.15,
+              7.79
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 47.75
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "slow"
+          },
+          "degraded": [],
+          "routes_restored": true
+        },
+        "REBALANCE": {
+          "executed": true,
+          "recovered": false,
+          "action": "REBALANCE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              8.71
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 44.5
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "mtu_fail",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "ok"
+          },
+          "degraded": [
+            "T4_mtu"
+          ],
+          "routes_restored": true
+        },
+        "ESCALATE": {
+          "executed": false,
+          "note": "no network change; traffic is as under DO_NOTHING"
+        }
+      },
+      "errors": [],
+      "health_loss_percent": 0.0,
+      "residual": [],
+      "measured_valid_fixes": [
+        "DO_NOTHING"
+      ],
+      "inseparable_from": [],
+      "expected_actions": [
+        "DO_NOTHING"
+      ],
+      "catalog_fixes": [
+        "REROUTE"
+      ],
+      "matches_catalog": false
+    },
+    "F9": {
+      "kind": "fault",
+      "split": "development",
+      "parts": [
+        "F9"
+      ],
+      "timing_sensitive": false,
+      "signature": {
+        "T1_e2e_ping": "down",
+        "T2_hop_ping": "primary:hostA-r1=ok,r1-r2=ok,r2-r4=ok,r4-hostB=ok;backup:hostA-r1=ok,r1-r3=ok,r3-r4=ok,r4-hostB=ok",
+        "T4_mtu": "mtu_fail",
+        "T5_if_errors": "clean",
+        "T6_queue_stats": "clear",
+        "T7_route_check": "blackhole",
+        "T8_tcp_vs_ping": "both_fail",
+        "T9_oneway_loss": "a2b_loss",
+        "T10_speed": "slow"
+      },
+      "raw": {
+        "T10_mbit_samples": [
+          null,
+          null,
+          null
+        ],
+        "T1_loss_percent": 100.0,
+        "T1_latency_ms": null,
+        "T9_a2b_loss_percent": 100.0,
+        "T9_b2a_loss_percent": 0.0
+      },
+      "actions": {
+        "DO_NOTHING": {
+          "executed": false,
+          "recovered": false,
+          "action": "DO_NOTHING",
+          "path_after": {
+            "r1": "primary",
+            "r4": "primary"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              null,
+              null,
+              null
+            ],
+            "T1_loss_percent": 100.0,
+            "T1_latency_ms": null
+          },
+          "outcomes": {
+            "T1_e2e_ping": "down",
+            "T4_mtu": "mtu_fail",
+            "T8_tcp_vs_ping": "both_fail",
+            "T10_speed": "slow"
+          },
+          "degraded": [
+            "T1_e2e_ping",
+            "T4_mtu",
+            "T8_tcp_vs_ping"
+          ],
+          "routes_restored": true
+        },
+        "REROUTE": {
+          "executed": true,
+          "recovered": true,
+          "action": "REROUTE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              7.28,
+              8.12
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 46.6
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "ok"
+          },
+          "degraded": [],
+          "routes_restored": true
+        },
+        "REBALANCE": {
+          "executed": true,
+          "recovered": true,
+          "action": "REBALANCE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              6.57,
+              7.48,
+              9.63
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 61.8
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "ok"
+          },
+          "degraded": [],
+          "routes_restored": true
+        },
+        "ESCALATE": {
+          "executed": false,
+          "note": "no network change; traffic is as under DO_NOTHING"
+        }
+      },
+      "errors": [],
+      "health_loss_percent": 0.0,
+      "residual": [],
+      "measured_valid_fixes": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "inseparable_from": [],
+      "expected_actions": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "catalog_fixes": [
+        "REROUTE"
+      ],
+      "matches_catalog": false
+    },
+    "F10": {
+      "kind": "fault",
+      "split": "development",
+      "parts": [
+        "F10"
+      ],
+      "timing_sensitive": false,
+      "signature": {
+        "T1_e2e_ping": "ok",
+        "T2_hop_ping": "primary:hostA-r1=ok,r1-r2=ok,r2-r4=ok,r4-hostB=ok;backup:hostA-r1=ok,r1-r3=ok,r3-r4=ok,r4-hostB=ok",
+        "T4_mtu": "df_ok",
+        "T5_if_errors": "clean",
+        "T6_queue_stats": "clear",
+        "T7_route_check": "primary",
+        "T8_tcp_vs_ping": "ping_ok_tcp_fail",
+        "T9_oneway_loss": "symmetric",
+        "T10_speed": "slow"
+      },
+      "raw": {
+        "T10_mbit_samples": [
+          null,
+          null,
+          null
+        ],
+        "T1_loss_percent": 0.0,
+        "T1_latency_ms": 46.1,
+        "T9_a2b_loss_percent": 0.0,
+        "T9_b2a_loss_percent": 0.0
+      },
+      "actions": {
+        "DO_NOTHING": {
+          "executed": false,
+          "recovered": false,
+          "action": "DO_NOTHING",
+          "path_after": {
+            "r1": "primary",
+            "r4": "primary"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              null,
+              null,
+              null
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 42.75
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "ping_ok_tcp_fail",
+            "T10_speed": "slow"
+          },
+          "degraded": [
+            "T8_tcp_vs_ping"
+          ],
+          "routes_restored": true
+        },
+        "REROUTE": {
+          "executed": true,
+          "recovered": false,
+          "action": "REROUTE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              null,
+              null,
+              null
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 42.6
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "ping_ok_tcp_fail",
+            "T10_speed": "slow"
+          },
+          "degraded": [
+            "T8_tcp_vs_ping"
+          ],
+          "routes_restored": true
+        },
+        "REBALANCE": {
+          "executed": true,
+          "recovered": false,
+          "action": "REBALANCE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              null,
+              null,
+              null
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 61.9
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "ping_ok_tcp_fail",
+            "T10_speed": "slow"
+          },
+          "degraded": [
+            "T8_tcp_vs_ping"
+          ],
+          "routes_restored": true
+        },
+        "ESCALATE": {
+          "executed": false,
+          "note": "no network change; traffic is as under DO_NOTHING"
+        }
+      },
+      "errors": [],
+      "health_loss_percent": 0.0,
+      "residual": [],
+      "measured_valid_fixes": [
+        "ESCALATE"
+      ],
+      "inseparable_from": [],
+      "expected_actions": [
+        "ESCALATE"
+      ],
+      "catalog_fixes": [
+        "DO_NOTHING",
+        "ESCALATE"
+      ],
+      "matches_catalog": false
+    },
+    "F11": {
+      "kind": "fault",
+      "split": "development",
+      "parts": [
+        "F11"
+      ],
+      "timing_sensitive": false,
+      "signature": {
+        "T1_e2e_ping": "loss",
+        "T2_hop_ping": "primary:hostA-r1=ok,r1-r2=ok,r2-r4=ok,r4-hostB=loss;backup:hostA-r1=ok,r1-r3=ok,r3-r4=ok,r4-hostB=loss",
+        "T4_mtu": "mtu_fail",
+        "T5_if_errors": "clean",
+        "T6_queue_stats": "clear",
+        "T7_route_check": "primary",
+        "T8_tcp_vs_ping": "both_ok",
+        "T9_oneway_loss": "a2b_loss",
+        "T10_speed": "slow"
+      },
+      "raw": {
+        "T10_mbit_samples": [
+          0.6980000000000001,
+          0.6880000000000001,
+          0.342
+        ],
+        "T1_loss_percent": 16.0,
+        "T1_latency_ms": 55.75,
+        "T9_a2b_loss_percent": 20.0,
+        "T9_b2a_loss_percent": 0.0
+      },
+      "actions": {
+        "DO_NOTHING": {
+          "executed": false,
+          "recovered": false,
+          "action": "DO_NOTHING",
+          "path_after": {
+            "r1": "primary",
+            "r4": "primary"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              0.343,
+              null,
+              null
+            ],
+            "T1_loss_percent": 20.0,
+            "T1_latency_ms": 44.05
+          },
+          "outcomes": {
+            "T1_e2e_ping": "loss",
+            "T4_mtu": "mtu_fail",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "slow"
+          },
+          "degraded": [
+            "T1_e2e_ping",
+            "T4_mtu",
+            "T10_speed"
+          ],
+          "routes_restored": true
+        },
+        "REROUTE": {
+          "executed": true,
+          "recovered": false,
+          "action": "REROUTE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              0.34400000000000003,
+              0.34900000000000003,
+              0.332
+            ],
+            "T1_loss_percent": 13.3333,
+            "T1_latency_ms": 52.150000000000006
+          },
+          "outcomes": {
+            "T1_e2e_ping": "loss",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "slow"
+          },
+          "degraded": [
+            "T1_e2e_ping",
+            "T10_speed"
+          ],
+          "routes_restored": true
+        },
+        "REBALANCE": {
+          "executed": true,
+          "recovered": false,
+          "action": "REBALANCE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              0.34900000000000003,
+              0.311,
+              0.342
+            ],
+            "T1_loss_percent": 6.66667,
+            "T1_latency_ms": 44.1
+          },
+          "outcomes": {
+            "T1_e2e_ping": "loss",
+            "T4_mtu": "mtu_fail",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "slow"
+          },
+          "degraded": [
+            "T1_e2e_ping",
+            "T4_mtu",
+            "T10_speed"
+          ],
+          "routes_restored": true
+        },
+        "ESCALATE": {
+          "executed": false,
+          "note": "no network change; traffic is as under DO_NOTHING"
+        }
+      },
+      "errors": [],
+      "health_loss_percent": 0.0,
+      "residual": [],
+      "measured_valid_fixes": [
+        "ESCALATE"
+      ],
+      "inseparable_from": [],
+      "expected_actions": [
+        "ESCALATE"
+      ],
+      "catalog_fixes": [
+        "DO_NOTHING",
+        "ESCALATE"
+      ],
+      "matches_catalog": false
+    },
+    "F12": {
+      "kind": "fault",
+      "split": "development",
+      "parts": [
+        "F12"
+      ],
+      "timing_sensitive": false,
+      "signature": {
+        "T1_e2e_ping": "ok",
+        "T2_hop_ping": "primary:hostA-r1=ok,r1-r2=ok,r2-r4=ok,r4-hostB=ok;backup:hostA-r1=ok,r1-r3=ok,r3-r4=down,r4-hostB=ok",
+        "T4_mtu": "df_ok",
+        "T5_if_errors": "clean",
+        "T6_queue_stats": "clear",
+        "T7_route_check": "primary",
+        "T8_tcp_vs_ping": "both_ok",
+        "T9_oneway_loss": "symmetric",
+        "T10_speed": "ok"
+      },
+      "raw": {
+        "T10_mbit_samples": [
+          8.77
+        ],
+        "T1_loss_percent": 0.0,
+        "T1_latency_ms": 56.25,
+        "T9_a2b_loss_percent": 0.0,
+        "T9_b2a_loss_percent": 0.0
+      },
+      "actions": {
+        "DO_NOTHING": {
+          "executed": false,
+          "recovered": true,
+          "action": "DO_NOTHING",
+          "path_after": {
+            "r1": "primary",
+            "r4": "primary"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              7.57,
+              7.98,
+              6.34
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 44.3
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "slow"
+          },
+          "degraded": [],
+          "routes_restored": true
+        },
+        "REROUTE": {
+          "executed": true,
+          "recovered": false,
+          "action": "REROUTE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              null,
+              null,
+              null
+            ],
+            "T1_loss_percent": 100.0,
+            "T1_latency_ms": null
+          },
+          "outcomes": {
+            "T1_e2e_ping": "down",
+            "T4_mtu": "mtu_fail",
+            "T8_tcp_vs_ping": "both_fail",
+            "T10_speed": "slow"
+          },
+          "degraded": [
+            "T1_e2e_ping",
+            "T4_mtu",
+            "T8_tcp_vs_ping"
+          ],
+          "routes_restored": true
+        },
+        "REBALANCE": {
+          "executed": true,
+          "recovered": false,
+          "action": "REBALANCE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              null,
+              null,
+              null
+            ],
+            "T1_loss_percent": 100.0,
+            "T1_latency_ms": null
+          },
+          "outcomes": {
+            "T1_e2e_ping": "down",
+            "T4_mtu": "mtu_fail",
+            "T8_tcp_vs_ping": "both_fail",
+            "T10_speed": "slow"
+          },
+          "degraded": [
+            "T1_e2e_ping",
+            "T4_mtu",
+            "T8_tcp_vs_ping"
+          ],
+          "routes_restored": true
+        },
+        "ESCALATE": {
+          "executed": false,
+          "note": "no network change; traffic is as under DO_NOTHING"
+        }
+      },
+      "errors": [],
+      "health_loss_percent": 0.0,
+      "residual": [],
+      "measured_valid_fixes": [
+        "DO_NOTHING"
+      ],
+      "inseparable_from": [],
+      "expected_actions": [
+        "DO_NOTHING"
+      ],
+      "catalog_fixes": [
+        "DO_NOTHING"
+      ],
+      "matches_catalog": true
+    },
+    "U1": {
+      "kind": "fault",
+      "split": "held_out",
+      "parts": [
+        "U1"
+      ],
+      "timing_sensitive": false,
+      "signature": {
+        "T1_e2e_ping": "ok",
+        "T2_hop_ping": "primary:hostA-r1=ok,r1-r2=ok,r2-r4=ok,r4-hostB=ok;backup:hostA-r1=ok,r1-r3=ok,r3-r4=ok,r4-hostB=ok",
+        "T4_mtu": "mtu_fail",
+        "T5_if_errors": "clean",
+        "T6_queue_stats": "clear",
+        "T7_route_check": "primary",
+        "T8_tcp_vs_ping": "both_ok",
+        "T9_oneway_loss": "symmetric",
+        "T10_speed": "slow"
+      },
+      "raw": {
+        "T10_mbit_samples": [
+          7.62,
+          6.62,
+          6.27
+        ],
+        "T1_loss_percent": 0.0,
+        "T1_latency_ms": 61.849999999999994,
+        "T9_a2b_loss_percent": 0.0,
+        "T9_b2a_loss_percent": 0.0
+      },
+      "actions": {
+        "DO_NOTHING": {
+          "executed": false,
+          "recovered": false,
+          "action": "DO_NOTHING",
+          "path_after": {
+            "r1": "primary",
+            "r4": "primary"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              6.55,
+              7.56,
+              5.97
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 44.55
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "mtu_fail",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "slow"
+          },
+          "degraded": [
+            "T4_mtu"
+          ],
+          "routes_restored": true
+        },
+        "REROUTE": {
+          "executed": true,
+          "recovered": true,
+          "action": "REROUTE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              8.63
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 45.3
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "ok"
+          },
+          "degraded": [],
+          "routes_restored": true
+        },
+        "REBALANCE": {
+          "executed": true,
+          "recovered": false,
+          "action": "REBALANCE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              6.08,
+              8.27
+            ],
+            "T1_loss_percent": 3.33333,
+            "T1_latency_ms": 44.4
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "mtu_fail",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "ok"
+          },
+          "degraded": [
+            "T4_mtu"
+          ],
+          "routes_restored": true
+        },
+        "ESCALATE": {
+          "executed": false,
+          "note": "no network change; traffic is as under DO_NOTHING"
+        }
+      },
+      "errors": [],
+      "health_loss_percent": 0.0,
+      "residual": [],
+      "measured_valid_fixes": [
+        "REROUTE"
+      ],
+      "inseparable_from": [],
+      "expected_actions": [
+        "REROUTE"
+      ],
+      "catalog_fixes": [
+        "REROUTE",
+        "ESCALATE"
+      ],
+      "matches_catalog": false
+    },
+    "U2": {
+      "kind": "fault",
+      "split": "held_out",
+      "parts": [
+        "U2"
+      ],
+      "timing_sensitive": false,
+      "signature": {
+        "T1_e2e_ping": "loss",
+        "T2_hop_ping": "primary:hostA-r1=ok,r1-r2=ok,r2-r4=loss,r4-hostB=ok;backup:hostA-r1=ok,r1-r3=ok,r3-r4=ok,r4-hostB=ok",
+        "T4_mtu": "mtu_fail",
+        "T5_if_errors": "clean",
+        "T6_queue_stats": "clear",
+        "T7_route_check": "primary",
+        "T8_tcp_vs_ping": "both_ok",
+        "T9_oneway_loss": "b2a_loss",
+        "T10_speed": "ok"
+      },
+      "raw": {
+        "T10_mbit_samples": [
+          8.47
+        ],
+        "T1_loss_percent": 22.0,
+        "T1_latency_ms": 44.8,
+        "T9_a2b_loss_percent": 0.0,
+        "T9_b2a_loss_percent": 26.0
+      },
+      "actions": {
+        "DO_NOTHING": {
+          "executed": false,
+          "recovered": false,
+          "action": "DO_NOTHING",
+          "path_after": {
+            "r1": "primary",
+            "r4": "primary"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              8.67
+            ],
+            "T1_loss_percent": 30.0,
+            "T1_latency_ms": 44.0
+          },
+          "outcomes": {
+            "T1_e2e_ping": "loss",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "ok"
+          },
+          "degraded": [
+            "T1_e2e_ping"
+          ],
+          "routes_restored": true
+        },
+        "REROUTE": {
+          "executed": true,
+          "recovered": true,
+          "action": "REROUTE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              7.87,
+              7.51,
+              8.4
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 60.0
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "ok"
+          },
+          "degraded": [],
+          "routes_restored": true
+        },
+        "REBALANCE": {
+          "executed": true,
+          "recovered": true,
+          "action": "REBALANCE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              9.03
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 44.1
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "ok"
+          },
+          "degraded": [],
+          "routes_restored": true
+        },
+        "ESCALATE": {
+          "executed": false,
+          "note": "no network change; traffic is as under DO_NOTHING"
+        }
+      },
+      "errors": [],
+      "health_loss_percent": 0.0,
+      "residual": [],
+      "measured_valid_fixes": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "inseparable_from": [],
+      "expected_actions": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "catalog_fixes": [
+        "REROUTE"
+      ],
+      "matches_catalog": false
+    },
+    "U3": {
+      "kind": "fault",
+      "split": "held_out",
+      "parts": [
+        "U3"
+      ],
+      "timing_sensitive": false,
+      "signature": {
+        "T1_e2e_ping": "ok",
+        "T2_hop_ping": "primary:hostA-r1=ok,r1-r2=ok,r2-r4=ok,r4-hostB=ok;backup:hostA-r1=ok,r1-r3=ok,r3-r4=ok,r4-hostB=ok",
+        "T4_mtu": "df_ok",
+        "T5_if_errors": "clean",
+        "T6_queue_stats": "clear",
+        "T7_route_check": "primary",
+        "T8_tcp_vs_ping": "both_ok",
+        "T9_oneway_loss": "symmetric",
+        "T10_speed": "ok"
+      },
+      "raw": {
+        "T10_mbit_samples": [
+          8.1
+        ],
+        "T1_loss_percent": 0.0,
+        "T1_latency_ms": 44.2,
+        "T9_a2b_loss_percent": 0.0,
+        "T9_b2a_loss_percent": 0.0
+      },
+      "actions": {
+        "DO_NOTHING": {
+          "executed": false,
+          "recovered": true,
+          "action": "DO_NOTHING",
+          "path_after": {
+            "r1": "primary",
+            "r4": "primary"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              7.63,
+              8.87
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 45.0
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "ok"
+          },
+          "degraded": [],
+          "routes_restored": true
+        },
+        "REROUTE": {
+          "executed": true,
+          "recovered": true,
+          "action": "REROUTE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              8.76
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 43.599999999999994
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "ok"
+          },
+          "degraded": [],
+          "routes_restored": true
+        },
+        "REBALANCE": {
+          "executed": true,
+          "recovered": true,
+          "action": "REBALANCE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              7.71,
+              7.26,
+              7.77
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 44.599999999999994
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "slow"
+          },
+          "degraded": [],
+          "routes_restored": true
+        },
+        "ESCALATE": {
+          "executed": false,
+          "note": "no network change; traffic is as under DO_NOTHING"
+        }
+      },
+      "errors": [],
+      "health_loss_percent": 0.0,
+      "residual": [],
+      "measured_valid_fixes": [
+        "DO_NOTHING"
+      ],
+      "inseparable_from": [],
+      "expected_actions": [
+        "DO_NOTHING"
+      ],
+      "catalog_fixes": [
+        "REROUTE"
+      ],
+      "matches_catalog": false
+    },
+    "U4": {
+      "kind": "fault",
+      "split": "held_out",
+      "parts": [
+        "U4"
+      ],
+      "timing_sensitive": true,
+      "signature": {
+        "T1_e2e_ping": "ok",
+        "T2_hop_ping": "primary:hostA-r1=ok,r1-r2=ok,r2-r4=ok,r4-hostB=ok;backup:hostA-r1=ok,r1-r3=ok,r3-r4=ok,r4-hostB=ok",
+        "T4_mtu": "df_ok",
+        "T5_if_errors": "clean",
+        "T6_queue_stats": "clear",
+        "T7_route_check": "primary",
+        "T8_tcp_vs_ping": "both_ok",
+        "T9_oneway_loss": "symmetric",
+        "T10_speed": "ok"
+      },
+      "raw": {
+        "T10_mbit_samples": [
+          8.7
+        ],
+        "T1_loss_percent": 0.0,
+        "T1_latency_ms": 43.75,
+        "T9_a2b_loss_percent": 0.0,
+        "T9_b2a_loss_percent": 0.0
+      },
+      "actions": {
+        "DO_NOTHING": {
+          "executed": false,
+          "recovered": true,
+          "action": "DO_NOTHING",
+          "path_after": {
+            "r1": "primary",
+            "r4": "primary"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              6.83,
+              8.39
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 45.5
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "ok"
+          },
+          "degraded": [],
+          "routes_restored": true
+        },
+        "REROUTE": {
+          "executed": true,
+          "recovered": true,
+          "action": "REROUTE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              7.53,
+              7.51,
+              8.64
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 45.2
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "ok"
+          },
+          "degraded": [],
+          "routes_restored": true
+        },
+        "REBALANCE": {
+          "executed": true,
+          "recovered": true,
+          "action": "REBALANCE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              7.87,
+              8.11
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 51.25
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "ok"
+          },
+          "degraded": [],
+          "routes_restored": true
+        },
+        "ESCALATE": {
+          "executed": false,
+          "note": "no network change; traffic is as under DO_NOTHING"
+        }
+      },
+      "errors": [],
+      "health_loss_percent": 0.0,
+      "residual": [],
+      "measured_valid_fixes": [
+        "DO_NOTHING"
+      ],
+      "inseparable_from": [],
+      "expected_actions": [
+        "DO_NOTHING"
+      ],
+      "catalog_fixes": [
+        "DO_NOTHING"
+      ],
+      "matches_catalog": true
+    },
+    "U5": {
+      "kind": "fault",
+      "split": "held_out",
+      "parts": [
+        "U5"
+      ],
+      "timing_sensitive": false,
+      "signature": {
+        "T1_e2e_ping": "ok",
+        "T2_hop_ping": "primary:hostA-r1=ok,r1-r2=ok,r2-r4=ok,r4-hostB=ok;backup:hostA-r1=ok,r1-r3=ok,r3-r4=ok,r4-hostB=ok",
+        "T4_mtu": "df_ok",
+        "T5_if_errors": "clean",
+        "T6_queue_stats": "clear",
+        "T7_route_check": "return_mismatch",
+        "T8_tcp_vs_ping": "both_ok",
+        "T9_oneway_loss": "symmetric",
+        "T10_speed": "ok"
+      },
+      "raw": {
+        "T10_mbit_samples": [
+          8.7
+        ],
+        "T1_loss_percent": 0.0,
+        "T1_latency_ms": 68.1,
+        "T9_a2b_loss_percent": 0.0,
+        "T9_b2a_loss_percent": 0.0
+      },
+      "actions": {
+        "DO_NOTHING": {
+          "executed": false,
+          "recovered": true,
+          "action": "DO_NOTHING",
+          "path_after": {
+            "r1": "primary",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              6.64,
+              7.41,
+              7.31
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 60.150000000000006
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "slow"
+          },
+          "degraded": [],
+          "routes_restored": true
+        },
+        "REROUTE": {
+          "executed": true,
+          "recovered": true,
+          "action": "REROUTE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              6.53,
+              8.91
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 45.0
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "ok"
+          },
+          "degraded": [],
+          "routes_restored": true
+        },
+        "REBALANCE": {
+          "executed": true,
+          "recovered": true,
+          "action": "REBALANCE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              8.78
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 45.8
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "ok"
+          },
+          "degraded": [],
+          "routes_restored": true
+        },
+        "ESCALATE": {
+          "executed": false,
+          "note": "no network change; traffic is as under DO_NOTHING"
+        }
+      },
+      "errors": [],
+      "health_loss_percent": 0.0,
+      "residual": [],
+      "measured_valid_fixes": [
+        "DO_NOTHING"
+      ],
+      "inseparable_from": [],
+      "expected_actions": [
+        "DO_NOTHING"
+      ],
+      "catalog_fixes": [
+        "REROUTE",
+        "ESCALATE"
+      ],
+      "matches_catalog": false
+    },
+    "C1": {
+      "kind": "compound",
+      "split": "development",
+      "parts": [
+        "F3",
+        "F11"
+      ],
+      "timing_sensitive": false,
+      "signature": {
+        "T1_e2e_ping": "loss",
+        "T2_hop_ping": "primary:hostA-r1=ok,r1-r2=ok,r2-r4=loss,r4-hostB=loss;backup:hostA-r1=ok,r1-r3=ok,r3-r4=ok,r4-hostB=loss",
+        "T4_mtu": "mtu_fail",
+        "T5_if_errors": "clean",
+        "T6_queue_stats": "clear",
+        "T7_route_check": "primary",
+        "T8_tcp_vs_ping": "both_ok",
+        "T9_oneway_loss": "a2b_loss",
+        "T10_speed": "slow"
+      },
+      "raw": {
+        "T10_mbit_samples": [
+          0.34600000000000003,
+          null,
+          0.34900000000000003
+        ],
+        "T1_loss_percent": 40.0,
+        "T1_latency_ms": 45.0,
+        "T9_a2b_loss_percent": 32.0,
+        "T9_b2a_loss_percent": 0.0
+      },
+      "actions": {
+        "DO_NOTHING": {
+          "executed": false,
+          "recovered": false,
+          "action": "DO_NOTHING",
+          "path_after": {
+            "r1": "primary",
+            "r4": "primary"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              null,
+              0.34900000000000003,
+              0.342
+            ],
+            "T1_loss_percent": 30.0,
+            "T1_latency_ms": 61.4
+          },
+          "outcomes": {
+            "T1_e2e_ping": "loss",
+            "T4_mtu": "mtu_fail",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "slow"
+          },
+          "degraded": [
+            "T1_e2e_ping",
+            "T4_mtu",
+            "T10_speed"
+          ],
+          "routes_restored": true
+        },
+        "REROUTE": {
+          "executed": true,
+          "recovered": false,
+          "action": "REROUTE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              0.34900000000000003,
+              0.341,
+              0.34700000000000003
+            ],
+            "T1_loss_percent": 23.3333,
+            "T1_latency_ms": 44.1
+          },
+          "outcomes": {
+            "T1_e2e_ping": "loss",
+            "T4_mtu": "mtu_fail",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "slow"
+          },
+          "degraded": [
+            "T1_e2e_ping",
+            "T4_mtu",
+            "T10_speed"
+          ],
+          "routes_restored": true
+        },
+        "REBALANCE": {
+          "executed": true,
+          "recovered": false,
+          "action": "REBALANCE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              0.6880000000000001,
+              0.34900000000000003,
+              0.6880000000000001
+            ],
+            "T1_loss_percent": 23.3333,
+            "T1_latency_ms": 44.3
+          },
+          "outcomes": {
+            "T1_e2e_ping": "loss",
+            "T4_mtu": "mtu_fail",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "slow"
+          },
+          "degraded": [
+            "T1_e2e_ping",
+            "T4_mtu",
+            "T10_speed"
+          ],
+          "routes_restored": true
+        },
+        "ESCALATE": {
+          "executed": false,
+          "note": "no network change; traffic is as under DO_NOTHING"
+        }
+      },
+      "errors": [],
+      "health_loss_percent": 0.0,
+      "residual": [],
+      "measured_valid_fixes": [
+        "ESCALATE"
+      ],
+      "inseparable_from": [],
+      "expected_actions": [
+        "ESCALATE"
+      ],
+      "catalog_fixes": [
+        "DO_NOTHING",
+        "ESCALATE"
+      ],
+      "matches_catalog": false
+    },
+    "C2": {
+      "kind": "compound",
+      "split": "development",
+      "parts": [
+        "F6",
+        "F12"
+      ],
+      "timing_sensitive": false,
+      "signature": {
+        "T1_e2e_ping": "down",
+        "T2_hop_ping": "primary:hostA-r1=ok,r1-r2=ok,r2-r4=down,r4-hostB=ok;backup:hostA-r1=ok,r1-r3=ok,r3-r4=down,r4-hostB=ok",
+        "T4_mtu": "mtu_fail",
+        "T5_if_errors": "clean",
+        "T6_queue_stats": "drops:r2/r2-eth1",
+        "T7_route_check": "primary",
+        "T8_tcp_vs_ping": "both_fail",
+        "T9_oneway_loss": "a2b_loss",
+        "T10_speed": "slow"
+      },
+      "raw": {
+        "T10_mbit_samples": [
+          null,
+          null,
+          null
+        ],
+        "T1_loss_percent": 100.0,
+        "T1_latency_ms": null,
+        "T9_a2b_loss_percent": 98.0,
+        "T9_b2a_loss_percent": 0.0
+      },
+      "actions": {
+        "DO_NOTHING": {
+          "executed": false,
+          "recovered": false,
+          "action": "DO_NOTHING",
+          "path_after": {
+            "r1": "primary",
+            "r4": "primary"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              null,
+              null,
+              null
+            ],
+            "T1_loss_percent": 100.0,
+            "T1_latency_ms": null
+          },
+          "outcomes": {
+            "T1_e2e_ping": "down",
+            "T4_mtu": "mtu_fail",
+            "T8_tcp_vs_ping": "both_fail",
+            "T10_speed": "slow"
+          },
+          "degraded": [
+            "T1_e2e_ping",
+            "T4_mtu",
+            "T8_tcp_vs_ping"
+          ],
+          "routes_restored": true
+        },
+        "REROUTE": {
+          "executed": true,
+          "recovered": false,
+          "action": "REROUTE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              null,
+              null,
+              null
+            ],
+            "T1_loss_percent": 100.0,
+            "T1_latency_ms": null
+          },
+          "outcomes": {
+            "T1_e2e_ping": "down",
+            "T4_mtu": "mtu_fail",
+            "T8_tcp_vs_ping": "both_fail",
+            "T10_speed": "slow"
+          },
+          "degraded": [
+            "T1_e2e_ping",
+            "T4_mtu",
+            "T8_tcp_vs_ping"
+          ],
+          "routes_restored": true
+        },
+        "REBALANCE": {
+          "executed": true,
+          "recovered": false,
+          "action": "REBALANCE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              null,
+              null,
+              null
+            ],
+            "T1_loss_percent": 100.0,
+            "T1_latency_ms": null
+          },
+          "outcomes": {
+            "T1_e2e_ping": "down",
+            "T4_mtu": "mtu_fail",
+            "T8_tcp_vs_ping": "both_fail",
+            "T10_speed": "slow"
+          },
+          "degraded": [
+            "T1_e2e_ping",
+            "T4_mtu",
+            "T8_tcp_vs_ping"
+          ],
+          "routes_restored": true
+        },
+        "ESCALATE": {
+          "executed": false,
+          "note": "no network change; traffic is as under DO_NOTHING"
+        }
+      },
+      "errors": [],
+      "health_loss_percent": 0.0,
+      "residual": [],
+      "measured_valid_fixes": [
+        "ESCALATE"
+      ],
+      "inseparable_from": [],
+      "expected_actions": [
+        "ESCALATE"
+      ],
+      "catalog_fixes": [
+        "DO_NOTHING"
+      ],
+      "matches_catalog": false
+    },
+    "C3": {
+      "kind": "compound",
+      "split": "development",
+      "parts": [
+        "F3",
+        "F6"
+      ],
+      "timing_sensitive": false,
+      "signature": {
+        "T1_e2e_ping": "loss",
+        "T2_hop_ping": "primary:hostA-r1=ok,r1-r2=ok,r2-r4=loss,r4-hostB=ok;backup:hostA-r1=ok,r1-r3=ok,r3-r4=ok,r4-hostB=ok",
+        "T4_mtu": "mtu_fail",
+        "T5_if_errors": "clean",
+        "T6_queue_stats": "drops:r2/r2-eth1",
+        "T7_route_check": "primary",
+        "T8_tcp_vs_ping": "both_ok",
+        "T9_oneway_loss": "a2b_loss",
+        "T10_speed": "slow"
+      },
+      "raw": {
+        "T10_mbit_samples": [
+          0.34900000000000003,
+          0.343,
+          0.34900000000000003
+        ],
+        "T1_loss_percent": 14.0,
+        "T1_latency_ms": 78.2,
+        "T9_a2b_loss_percent": 20.0,
+        "T9_b2a_loss_percent": 0.0
+      },
+      "actions": {
+        "DO_NOTHING": {
+          "executed": false,
+          "recovered": false,
+          "action": "DO_NOTHING",
+          "path_after": {
+            "r1": "primary",
+            "r4": "primary"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              0.34400000000000003,
+              0.318,
+              0.34900000000000003
+            ],
+            "T1_loss_percent": 20.0,
+            "T1_latency_ms": 58.1
+          },
+          "outcomes": {
+            "T1_e2e_ping": "loss",
+            "T4_mtu": "mtu_fail",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "slow"
+          },
+          "degraded": [
+            "T1_e2e_ping",
+            "T4_mtu",
+            "T10_speed"
+          ],
+          "routes_restored": true
+        },
+        "REROUTE": {
+          "executed": true,
+          "recovered": true,
+          "action": "REROUTE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              7.06,
+              8.4
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 63.5
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "ok"
+          },
+          "degraded": [],
+          "routes_restored": true
+        },
+        "REBALANCE": {
+          "executed": true,
+          "recovered": true,
+          "action": "REBALANCE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              8.05,
+              7.22,
+              7.62
+            ],
+            "T1_loss_percent": 0.0,
+            "T1_latency_ms": 44.35
+          },
+          "outcomes": {
+            "T1_e2e_ping": "ok",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "slow"
+          },
+          "degraded": [],
+          "routes_restored": true
+        },
+        "ESCALATE": {
+          "executed": false,
+          "note": "no network change; traffic is as under DO_NOTHING"
+        }
+      },
+      "errors": [],
+      "health_loss_percent": 0.0,
+      "residual": [],
+      "measured_valid_fixes": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "inseparable_from": [],
+      "expected_actions": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "catalog_fixes": [
+        "REROUTE"
+      ],
+      "matches_catalog": false
+    },
+    "C4": {
+      "kind": "compound",
+      "split": "held_out",
+      "parts": [
+        "F5",
+        "F11"
+      ],
+      "timing_sensitive": false,
+      "signature": {
+        "T1_e2e_ping": "loss+latency",
+        "T2_hop_ping": "primary:hostA-r1=ok,r1-r2=ok,r2-r4=delay,r4-hostB=loss;backup:hostA-r1=ok,r1-r3=ok,r3-r4=ok,r4-hostB=loss",
+        "T4_mtu": "mtu_fail",
+        "T5_if_errors": "clean",
+        "T6_queue_stats": "clear",
+        "T7_route_check": "primary",
+        "T8_tcp_vs_ping": "both_ok",
+        "T9_oneway_loss": "a2b_loss",
+        "T10_speed": "slow"
+      },
+      "raw": {
+        "T10_mbit_samples": [
+          null,
+          null,
+          null
+        ],
+        "T1_loss_percent": 30.0,
+        "T1_latency_ms": 244.0,
+        "T9_a2b_loss_percent": 26.0,
+        "T9_b2a_loss_percent": 0.0
+      },
+      "actions": {
+        "DO_NOTHING": {
+          "executed": false,
+          "recovered": false,
+          "action": "DO_NOTHING",
+          "path_after": {
+            "r1": "primary",
+            "r4": "primary"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              null,
+              0.34900000000000003,
+              0.34800000000000003
+            ],
+            "T1_loss_percent": 20.0,
+            "T1_latency_ms": 221.5
+          },
+          "outcomes": {
+            "T1_e2e_ping": "loss+latency",
+            "T4_mtu": "df_ok",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "slow"
+          },
+          "degraded": [
+            "T1_e2e_ping",
+            "T10_speed"
+          ],
+          "routes_restored": true
+        },
+        "REROUTE": {
+          "executed": true,
+          "recovered": false,
+          "action": "REROUTE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              null,
+              null,
+              0.6880000000000001
+            ],
+            "T1_loss_percent": 16.6667,
+            "T1_latency_ms": 56.2
+          },
+          "outcomes": {
+            "T1_e2e_ping": "loss",
+            "T4_mtu": "mtu_fail",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "slow"
+          },
+          "degraded": [
+            "T1_e2e_ping",
+            "T4_mtu",
+            "T10_speed"
+          ],
+          "routes_restored": true
+        },
+        "REBALANCE": {
+          "executed": true,
+          "recovered": false,
+          "action": "REBALANCE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              0.34900000000000003,
+              0.343,
+              0.316
+            ],
+            "T1_loss_percent": 20.0,
+            "T1_latency_ms": 46.85
+          },
+          "outcomes": {
+            "T1_e2e_ping": "loss",
+            "T4_mtu": "mtu_fail",
+            "T8_tcp_vs_ping": "both_ok",
+            "T10_speed": "slow"
+          },
+          "degraded": [
+            "T1_e2e_ping",
+            "T4_mtu",
+            "T10_speed"
+          ],
+          "routes_restored": true
+        },
+        "ESCALATE": {
+          "executed": false,
+          "note": "no network change; traffic is as under DO_NOTHING"
+        }
+      },
+      "errors": [],
+      "health_loss_percent": 0.0,
+      "residual": [],
+      "measured_valid_fixes": [
+        "ESCALATE"
+      ],
+      "inseparable_from": [],
+      "expected_actions": [
+        "ESCALATE"
+      ],
+      "catalog_fixes": [
+        "DO_NOTHING",
+        "ESCALATE"
+      ],
+      "matches_catalog": false
+    },
+    "C5": {
+      "kind": "compound",
+      "split": "held_out",
+      "parts": [
+        "F9",
+        "F12"
+      ],
+      "timing_sensitive": false,
+      "signature": {
+        "T1_e2e_ping": "down",
+        "T2_hop_ping": "primary:hostA-r1=ok,r1-r2=ok,r2-r4=ok,r4-hostB=ok;backup:hostA-r1=ok,r1-r3=ok,r3-r4=down,r4-hostB=ok",
+        "T4_mtu": "mtu_fail",
+        "T5_if_errors": "clean",
+        "T6_queue_stats": "clear",
+        "T7_route_check": "blackhole",
+        "T8_tcp_vs_ping": "both_fail",
+        "T9_oneway_loss": "a2b_loss",
+        "T10_speed": "slow"
+      },
+      "raw": {
+        "T10_mbit_samples": [
+          null,
+          null,
+          null
+        ],
+        "T1_loss_percent": 100.0,
+        "T1_latency_ms": null,
+        "T9_a2b_loss_percent": 100.0,
+        "T9_b2a_loss_percent": 0.0
+      },
+      "actions": {
+        "DO_NOTHING": {
+          "executed": false,
+          "recovered": false,
+          "action": "DO_NOTHING",
+          "path_after": {
+            "r1": "primary",
+            "r4": "primary"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              null,
+              null,
+              null
+            ],
+            "T1_loss_percent": 100.0,
+            "T1_latency_ms": null
+          },
+          "outcomes": {
+            "T1_e2e_ping": "down",
+            "T4_mtu": "mtu_fail",
+            "T8_tcp_vs_ping": "both_fail",
+            "T10_speed": "slow"
+          },
+          "degraded": [
+            "T1_e2e_ping",
+            "T4_mtu",
+            "T8_tcp_vs_ping"
+          ],
+          "routes_restored": true
+        },
+        "REROUTE": {
+          "executed": true,
+          "recovered": false,
+          "action": "REROUTE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              null,
+              null,
+              null
+            ],
+            "T1_loss_percent": 100.0,
+            "T1_latency_ms": null
+          },
+          "outcomes": {
+            "T1_e2e_ping": "down",
+            "T4_mtu": "mtu_fail",
+            "T8_tcp_vs_ping": "both_fail",
+            "T10_speed": "slow"
+          },
+          "degraded": [
+            "T1_e2e_ping",
+            "T4_mtu",
+            "T8_tcp_vs_ping"
+          ],
+          "routes_restored": true
+        },
+        "REBALANCE": {
+          "executed": true,
+          "recovered": false,
+          "action": "REBALANCE",
+          "path": "backup",
+          "path_after": {
+            "r1": "backup",
+            "r4": "backup"
+          },
+          "raw": {
+            "T10_mbit_samples": [
+              null,
+              null,
+              null
+            ],
+            "T1_loss_percent": 100.0,
+            "T1_latency_ms": null
+          },
+          "outcomes": {
+            "T1_e2e_ping": "down",
+            "T4_mtu": "mtu_fail",
+            "T8_tcp_vs_ping": "both_fail",
+            "T10_speed": "slow"
+          },
+          "degraded": [
+            "T1_e2e_ping",
+            "T4_mtu",
+            "T8_tcp_vs_ping"
+          ],
+          "routes_restored": true
+        },
+        "ESCALATE": {
+          "executed": false,
+          "note": "no network change; traffic is as under DO_NOTHING"
+        }
+      },
+      "errors": [],
+      "health_loss_percent": 0.0,
+      "residual": [],
+      "measured_valid_fixes": [
+        "ESCALATE"
+      ],
+      "inseparable_from": [],
+      "expected_actions": [
+        "ESCALATE"
+      ],
+      "catalog_fixes": [
+        "ESCALATE"
+      ],
+      "matches_catalog": true
+    }
+  },
+  "pairs": [
+    {
+      "fault_a": "H0",
+      "fault_b": "F1",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T8_tcp_vs_ping",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "H0",
+      "fault_b": "F2",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "REROUTE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T7_route_check",
+        "T8_tcp_vs_ping",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "H0",
+      "fault_b": "F3",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "H0",
+      "fault_b": "F4",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T2_hop_ping",
+        "T4_mtu",
+        "T5_if_errors",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "H0",
+      "fault_b": "F5",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "REBALANCE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "H0",
+      "fault_b": "F6",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T6_queue_stats",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "H0",
+      "fault_b": "F7",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T6_queue_stats",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "H0",
+      "fault_b": "F9",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T4_mtu",
+        "T7_route_check",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "H0",
+      "fault_b": "F10",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T8_tcp_vs_ping",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "H0",
+      "fault_b": "F11",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "H0",
+      "fault_b": "U1",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "REROUTE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T4_mtu",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "H0",
+      "fault_b": "U2",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T9_oneway_loss"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "H0",
+      "fault_b": "C1",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "H0",
+      "fault_b": "C2",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T6_queue_stats",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "H0",
+      "fault_b": "C3",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T6_queue_stats",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "H0",
+      "fault_b": "C4",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "H0",
+      "fault_b": "C5",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T7_route_check",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F1",
+      "fault_b": "F8",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T8_tcp_vs_ping",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F1",
+      "fault_b": "F10",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T8_tcp_vs_ping"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F1",
+      "fault_b": "F11",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F1",
+      "fault_b": "F12",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T8_tcp_vs_ping",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F1",
+      "fault_b": "U3",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T8_tcp_vs_ping",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F1",
+      "fault_b": "U4",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T8_tcp_vs_ping",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F1",
+      "fault_b": "U5",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T7_route_check",
+        "T8_tcp_vs_ping",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F1",
+      "fault_b": "C1",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F1",
+      "fault_b": "C2",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T2_hop_ping",
+        "T6_queue_stats",
+        "T9_oneway_loss"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F1",
+      "fault_b": "C4",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F1",
+      "fault_b": "C5",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T2_hop_ping",
+        "T7_route_check",
+        "T9_oneway_loss"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F2",
+      "fault_b": "F5",
+      "fixes_a": [
+        "REROUTE"
+      ],
+      "fixes_b": [
+        "REBALANCE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T7_route_check",
+        "T8_tcp_vs_ping"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F2",
+      "fault_b": "F8",
+      "fixes_a": [
+        "REROUTE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T7_route_check",
+        "T8_tcp_vs_ping",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F2",
+      "fault_b": "F10",
+      "fixes_a": [
+        "REROUTE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T7_route_check",
+        "T8_tcp_vs_ping"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F2",
+      "fault_b": "F11",
+      "fixes_a": [
+        "REROUTE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T7_route_check",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F2",
+      "fault_b": "F12",
+      "fixes_a": [
+        "REROUTE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T7_route_check",
+        "T8_tcp_vs_ping",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F2",
+      "fault_b": "U3",
+      "fixes_a": [
+        "REROUTE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T7_route_check",
+        "T8_tcp_vs_ping",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F2",
+      "fault_b": "U4",
+      "fixes_a": [
+        "REROUTE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T7_route_check",
+        "T8_tcp_vs_ping",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F2",
+      "fault_b": "U5",
+      "fixes_a": [
+        "REROUTE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T7_route_check",
+        "T8_tcp_vs_ping",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F2",
+      "fault_b": "C1",
+      "fixes_a": [
+        "REROUTE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T7_route_check",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F2",
+      "fault_b": "C2",
+      "fixes_a": [
+        "REROUTE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T2_hop_ping",
+        "T6_queue_stats",
+        "T7_route_check",
+        "T9_oneway_loss"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F2",
+      "fault_b": "C4",
+      "fixes_a": [
+        "REROUTE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T7_route_check",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F2",
+      "fault_b": "C5",
+      "fixes_a": [
+        "REROUTE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T2_hop_ping",
+        "T7_route_check",
+        "T9_oneway_loss"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F3",
+      "fault_b": "F8",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T2_hop_ping",
+        "T4_mtu",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F3",
+      "fault_b": "F10",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F3",
+      "fault_b": "F11",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T2_hop_ping"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F3",
+      "fault_b": "F12",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F3",
+      "fault_b": "U3",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F3",
+      "fault_b": "U4",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F3",
+      "fault_b": "U5",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T7_route_check",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F3",
+      "fault_b": "C1",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T2_hop_ping"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F3",
+      "fault_b": "C2",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T6_queue_stats",
+        "T8_tcp_vs_ping"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F3",
+      "fault_b": "C4",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F3",
+      "fault_b": "C5",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T7_route_check",
+        "T8_tcp_vs_ping"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F4",
+      "fault_b": "F8",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T5_if_errors",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F4",
+      "fault_b": "F10",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T2_hop_ping",
+        "T4_mtu",
+        "T5_if_errors",
+        "T8_tcp_vs_ping"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F4",
+      "fault_b": "F11",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T5_if_errors",
+        "T9_oneway_loss"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F4",
+      "fault_b": "F12",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T2_hop_ping",
+        "T4_mtu",
+        "T5_if_errors",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F4",
+      "fault_b": "U3",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T2_hop_ping",
+        "T4_mtu",
+        "T5_if_errors",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F4",
+      "fault_b": "U4",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T2_hop_ping",
+        "T4_mtu",
+        "T5_if_errors",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F4",
+      "fault_b": "U5",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T2_hop_ping",
+        "T4_mtu",
+        "T5_if_errors",
+        "T7_route_check",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F4",
+      "fault_b": "C1",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T5_if_errors",
+        "T9_oneway_loss"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F4",
+      "fault_b": "C2",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T5_if_errors",
+        "T6_queue_stats",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F4",
+      "fault_b": "C4",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T5_if_errors",
+        "T9_oneway_loss"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F4",
+      "fault_b": "C5",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T5_if_errors",
+        "T7_route_check",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F5",
+      "fault_b": "F8",
+      "fixes_a": [
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F5",
+      "fault_b": "F10",
+      "fixes_a": [
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T8_tcp_vs_ping"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F5",
+      "fault_b": "F11",
+      "fixes_a": [
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T9_oneway_loss"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F5",
+      "fault_b": "F12",
+      "fixes_a": [
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F5",
+      "fault_b": "U1",
+      "fixes_a": [
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "REROUTE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F5",
+      "fault_b": "U3",
+      "fixes_a": [
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F5",
+      "fault_b": "U4",
+      "fixes_a": [
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F5",
+      "fault_b": "U5",
+      "fixes_a": [
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T7_route_check",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F5",
+      "fault_b": "C1",
+      "fixes_a": [
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T9_oneway_loss"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F5",
+      "fault_b": "C2",
+      "fixes_a": [
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T6_queue_stats",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F5",
+      "fault_b": "C4",
+      "fixes_a": [
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T9_oneway_loss"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F5",
+      "fault_b": "C5",
+      "fixes_a": [
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T7_route_check",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F6",
+      "fault_b": "F8",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T6_queue_stats",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F6",
+      "fault_b": "F10",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T6_queue_stats",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F6",
+      "fault_b": "F11",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T6_queue_stats",
+        "T8_tcp_vs_ping"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F6",
+      "fault_b": "F12",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T6_queue_stats",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F6",
+      "fault_b": "U3",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T6_queue_stats",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F6",
+      "fault_b": "U4",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T6_queue_stats",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F6",
+      "fault_b": "U5",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T6_queue_stats",
+        "T7_route_check",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F6",
+      "fault_b": "C1",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T6_queue_stats",
+        "T8_tcp_vs_ping"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F6",
+      "fault_b": "C2",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T2_hop_ping"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F6",
+      "fault_b": "C4",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T6_queue_stats",
+        "T8_tcp_vs_ping"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F6",
+      "fault_b": "C5",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T2_hop_ping",
+        "T6_queue_stats",
+        "T7_route_check"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F7",
+      "fault_b": "F8",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T6_queue_stats",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F7",
+      "fault_b": "F10",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T6_queue_stats",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F7",
+      "fault_b": "F11",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T6_queue_stats",
+        "T8_tcp_vs_ping"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F7",
+      "fault_b": "F12",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T6_queue_stats",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F7",
+      "fault_b": "U3",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T6_queue_stats",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F7",
+      "fault_b": "U4",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T6_queue_stats",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F7",
+      "fault_b": "U5",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T6_queue_stats",
+        "T7_route_check",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F7",
+      "fault_b": "C1",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T6_queue_stats",
+        "T8_tcp_vs_ping"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F7",
+      "fault_b": "C2",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T2_hop_ping",
+        "T6_queue_stats"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F7",
+      "fault_b": "C4",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T6_queue_stats",
+        "T8_tcp_vs_ping"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F7",
+      "fault_b": "C5",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T2_hop_ping",
+        "T6_queue_stats",
+        "T7_route_check"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F8",
+      "fault_b": "F9",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T4_mtu",
+        "T7_route_check",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F8",
+      "fault_b": "F10",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T8_tcp_vs_ping",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F8",
+      "fault_b": "F11",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T2_hop_ping",
+        "T4_mtu",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F8",
+      "fault_b": "U1",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "REROUTE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T4_mtu",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F8",
+      "fault_b": "U2",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T2_hop_ping",
+        "T4_mtu",
+        "T9_oneway_loss"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F8",
+      "fault_b": "C1",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T2_hop_ping",
+        "T4_mtu",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F8",
+      "fault_b": "C2",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T6_queue_stats",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F8",
+      "fault_b": "C3",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T2_hop_ping",
+        "T4_mtu",
+        "T6_queue_stats",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F8",
+      "fault_b": "C4",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F8",
+      "fault_b": "C5",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T7_route_check",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F9",
+      "fault_b": "F10",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T4_mtu",
+        "T7_route_check",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F9",
+      "fault_b": "F11",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T7_route_check",
+        "T8_tcp_vs_ping"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F9",
+      "fault_b": "F12",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T7_route_check",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F9",
+      "fault_b": "U3",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T4_mtu",
+        "T7_route_check",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F9",
+      "fault_b": "U4",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T4_mtu",
+        "T7_route_check",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F9",
+      "fault_b": "U5",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T4_mtu",
+        "T7_route_check",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F9",
+      "fault_b": "C1",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T7_route_check",
+        "T8_tcp_vs_ping"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F9",
+      "fault_b": "C2",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T2_hop_ping",
+        "T6_queue_stats",
+        "T7_route_check"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F9",
+      "fault_b": "C4",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T7_route_check",
+        "T8_tcp_vs_ping"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F9",
+      "fault_b": "C5",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T2_hop_ping"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F10",
+      "fault_b": "F12",
+      "fixes_a": [
+        "ESCALATE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T2_hop_ping",
+        "T8_tcp_vs_ping",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F10",
+      "fault_b": "U1",
+      "fixes_a": [
+        "ESCALATE"
+      ],
+      "fixes_b": [
+        "REROUTE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T4_mtu",
+        "T8_tcp_vs_ping"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F10",
+      "fault_b": "U2",
+      "fixes_a": [
+        "ESCALATE"
+      ],
+      "fixes_b": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F10",
+      "fault_b": "U3",
+      "fixes_a": [
+        "ESCALATE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T8_tcp_vs_ping",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F10",
+      "fault_b": "U4",
+      "fixes_a": [
+        "ESCALATE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T8_tcp_vs_ping",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F10",
+      "fault_b": "U5",
+      "fixes_a": [
+        "ESCALATE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T7_route_check",
+        "T8_tcp_vs_ping",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F10",
+      "fault_b": "C3",
+      "fixes_a": [
+        "ESCALATE"
+      ],
+      "fixes_b": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T6_queue_stats",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F11",
+      "fault_b": "F12",
+      "fixes_a": [
+        "ESCALATE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F11",
+      "fault_b": "U1",
+      "fixes_a": [
+        "ESCALATE"
+      ],
+      "fixes_b": [
+        "REROUTE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T9_oneway_loss"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F11",
+      "fault_b": "U2",
+      "fixes_a": [
+        "ESCALATE"
+      ],
+      "fixes_b": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T2_hop_ping",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F11",
+      "fault_b": "U3",
+      "fixes_a": [
+        "ESCALATE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F11",
+      "fault_b": "U4",
+      "fixes_a": [
+        "ESCALATE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F11",
+      "fault_b": "U5",
+      "fixes_a": [
+        "ESCALATE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T7_route_check",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F11",
+      "fault_b": "C3",
+      "fixes_a": [
+        "ESCALATE"
+      ],
+      "fixes_b": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T2_hop_ping",
+        "T6_queue_stats"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F12",
+      "fault_b": "U1",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "REROUTE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T2_hop_ping",
+        "T4_mtu",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F12",
+      "fault_b": "U2",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T9_oneway_loss"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F12",
+      "fault_b": "C1",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F12",
+      "fault_b": "C2",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T6_queue_stats",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F12",
+      "fault_b": "C3",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T6_queue_stats",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "F12",
+      "fault_b": "C4",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "F12",
+      "fault_b": "C5",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T4_mtu",
+        "T7_route_check",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "U1",
+      "fault_b": "U3",
+      "fixes_a": [
+        "REROUTE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T4_mtu",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "U1",
+      "fault_b": "U4",
+      "fixes_a": [
+        "REROUTE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T4_mtu",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "U1",
+      "fault_b": "U5",
+      "fixes_a": [
+        "REROUTE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T4_mtu",
+        "T7_route_check",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "U1",
+      "fault_b": "C1",
+      "fixes_a": [
+        "REROUTE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T9_oneway_loss"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "U1",
+      "fault_b": "C2",
+      "fixes_a": [
+        "REROUTE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T6_queue_stats",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "U1",
+      "fault_b": "C4",
+      "fixes_a": [
+        "REROUTE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T9_oneway_loss"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "U1",
+      "fault_b": "C5",
+      "fixes_a": [
+        "REROUTE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T7_route_check",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "U2",
+      "fault_b": "U3",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T9_oneway_loss"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "U2",
+      "fault_b": "U4",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T9_oneway_loss"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "U2",
+      "fault_b": "U5",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "DO_NOTHING"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T7_route_check",
+        "T9_oneway_loss"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "U2",
+      "fault_b": "C1",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T2_hop_ping",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "U2",
+      "fault_b": "C2",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T6_queue_stats",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "U2",
+      "fault_b": "C4",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "U2",
+      "fault_b": "C5",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T7_route_check",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "U3",
+      "fault_b": "C1",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "U3",
+      "fault_b": "C2",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T6_queue_stats",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "U3",
+      "fault_b": "C3",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T6_queue_stats",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "U3",
+      "fault_b": "C4",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "U3",
+      "fault_b": "C5",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T7_route_check",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "U4",
+      "fault_b": "C1",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "U4",
+      "fault_b": "C2",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T6_queue_stats",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "U4",
+      "fault_b": "C3",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T6_queue_stats",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "U4",
+      "fault_b": "C4",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "U4",
+      "fault_b": "C5",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T7_route_check",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "U5",
+      "fault_b": "C1",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T7_route_check",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "U5",
+      "fault_b": "C2",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T6_queue_stats",
+        "T7_route_check",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "U5",
+      "fault_b": "C3",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T6_queue_stats",
+        "T7_route_check",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "U5",
+      "fault_b": "C4",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T7_route_check",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "U5",
+      "fault_b": "C5",
+      "fixes_a": [
+        "DO_NOTHING"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T4_mtu",
+        "T7_route_check",
+        "T8_tcp_vs_ping",
+        "T9_oneway_loss",
+        "T10_speed"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "C1",
+      "fault_b": "C3",
+      "fixes_a": [
+        "ESCALATE"
+      ],
+      "fixes_b": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T2_hop_ping",
+        "T6_queue_stats"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "C2",
+      "fault_b": "C3",
+      "fixes_a": [
+        "ESCALATE"
+      ],
+      "fixes_b": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T8_tcp_vs_ping"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": false
+    },
+    {
+      "fault_a": "C3",
+      "fault_b": "C4",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T6_queue_stats"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    },
+    {
+      "fault_a": "C3",
+      "fault_b": "C5",
+      "fixes_a": [
+        "REROUTE",
+        "REBALANCE"
+      ],
+      "fixes_b": [
+        "ESCALATE"
+      ],
+      "different_fixes": true,
+      "separating_tests": [
+        "T1_e2e_ping",
+        "T2_hop_ping",
+        "T6_queue_stats",
+        "T7_route_check",
+        "T8_tcp_vs_ping"
+      ],
+      "inseparable": false,
+      "expected_action": null,
+      "held_out": true
+    }
+  ]
+}

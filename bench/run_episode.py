@@ -597,8 +597,13 @@ def _self_check():
     def once(decision, approved, current=None, after=None):
         calls.clear()
         current = approved if current is None else current
+        gate_decision = {"decision": decision} if decision is not None else None
+        if decision == "allow":
+            from gate.integrity import bind_gate_decision
+
+            gate_decision = bind_gate_decision(gate_decision, approved, proposal, [])
         return apply_authorized_action(
-            {"decision": decision} if decision is not None else None,
+            gate_decision,
             proposal,
             execute,
             approved,
@@ -652,7 +657,15 @@ def _self_check():
         raise RuntimeError("link update failed")
 
     calls.clear()
-    failed = apply_authorized_action({"decision": "allow"}, proposal, boom, healthy, lambda: healthy)
+    from gate.integrity import bind_gate_decision
+
+    failed = apply_authorized_action(
+        bind_gate_decision({"decision": "allow"}, healthy, proposal, []),
+        proposal,
+        boom,
+        healthy,
+        lambda: healthy,
+    )
     assert len(calls) == 1 and failed["remediation_succeeded"] is False
     assert failed["execution_error"] == "RuntimeError: link update failed"
 
@@ -701,7 +714,7 @@ def _self_check():
     primary_down = _snapshot(primary_up=False, active_path="primary")
     calls.clear()
     blocked_primary = apply_authorized_action(
-        {"decision": "allow"},
+        bind_gate_decision({"decision": "allow"}, primary_down, primary, []),
         primary,
         execute,
         primary_down,
@@ -712,7 +725,7 @@ def _self_check():
 
     calls.clear()
     stayed = apply_authorized_action(
-        {"decision": "allow"},
+        bind_gate_decision({"decision": "allow"}, healthy, backup, []),
         backup,
         execute,
         healthy,
@@ -1245,6 +1258,24 @@ def _self_check():
     assert unsigned["binding"]["signed"] is False
     assert not binding_errors(unsigned, healthy, proposal)
 
+    from gate.checks import _prediction_matches
+
+    assert _prediction_matches("loss", "loss=15.0")
+    assert _prediction_matches("ok", "ok")
+    assert not _prediction_matches("ok", "both_ok")
+    assert not _prediction_matches("0", "100")
+
+    calls.clear()
+    unbound_allow = apply_authorized_action(
+        {"decision": "allow"},
+        proposal,
+        execute,
+        healthy,
+        lambda: healthy,
+    )
+    assert calls == [] and unbound_allow["execution_attempted"] is False
+    assert unbound_allow["execution_error"] == "allow is missing decision binding", unbound_allow
+
     from agent.validate import MAX_EXPECTED_LEN
 
     fabricated = _cause_proposal("REROUTE", "H0")
@@ -1292,7 +1323,13 @@ def _self_check():
     backup_claim_out = gate_decide(None, backup_claim, healthy, [], mode="full", run_missing_tests=False)
     assert backup_claim_out["decision"] == "block" and backup_claim_out["reason"] == "proposal contradicted", backup_claim_out
     calls.clear()
-    down_exec = apply_authorized_action({"decision": "allow"}, backup, execute, hidden_snap, lambda: hidden_snap)
+    down_exec = apply_authorized_action(
+        bind_gate_decision({"decision": "allow"}, hidden_snap, backup, []),
+        backup,
+        execute,
+        hidden_snap,
+        lambda: hidden_snap,
+    )
     assert calls == [] and down_exec["execution_error"] == "backup path is down", down_exec
 
     withheld = []
@@ -1493,6 +1530,7 @@ def live_recheck():
         return 2
     from bench.mininet_util import mn_cleanup, run_in_node
     from control.actions import execute, proposal_to_action
+    from gate.integrity import bind_gate_decision
     from network import controller as ctl
     from network.topology import create_network
 
@@ -1523,7 +1561,14 @@ def live_recheck():
 
     def attempt(execute_fn=controller, approved=None):
         executed.clear()
-        return apply_authorized_action(allow, proposal, execute_fn, approved or read(), read)
+        approved_snap = approved or read()
+        return apply_authorized_action(
+            bind_gate_decision(dict(allow), approved_snap, proposal, []),
+            proposal,
+            execute_fn,
+            approved_snap,
+            read,
+        )
 
     failures = []
 
@@ -1896,6 +1941,7 @@ def live_safety():
     from bench.mininet_util import mn_cleanup, run_in_node
     from control.actions import execute, proposal_to_action
     from gate.decide import decide as gate_decide
+    from gate.integrity import bind_gate_decision
     from network import controller as ctl
     from network.topology import create_network
 
@@ -1989,7 +2035,13 @@ def live_safety():
         stale_approved = read()
         ctl.set_active_path(net, "backup")
         executed.clear()
-        stale = apply_authorized_action({"decision": "allow"}, _cause_proposal("REROUTE", "F1"), stub, stale_approved, read)
+        stale = apply_authorized_action(
+            bind_gate_decision({"decision": "allow"}, stale_approved, _cause_proposal("REROUTE", "F1"), []),
+            _cause_proposal("REROUTE", "F1"),
+            stub,
+            stale_approved,
+            read,
+        )
         expect(
             "changed state between verification and execution is refused",
             not executed
@@ -2009,7 +2061,13 @@ def live_safety():
         backup_out = gate_decide(net, backup_claim, snap12, [], mode="full", run_missing_tests=False, noise_id="N0")
         executed.clear()
         hidden_exec = apply_authorized_action(hidden_out, hidden, stub, approved12, read)
-        backup_exec = apply_authorized_action({"decision": "allow"}, backup_claim, stub, approved12, read)
+        backup_exec = apply_authorized_action(
+            bind_gate_decision({"decision": "allow"}, approved12, backup_claim, []),
+            backup_claim,
+            stub,
+            approved12,
+            read,
+        )
         loss = oam._parse_ping(run_in_node(net.get("hostA"), "ping -c 5 -i 0.2 -W 1 10.0.4.2"))["packet_loss_percent"]
         expect(
             "look-alike primary-down diagnosis is not allowed on backup-down",

@@ -1,8 +1,9 @@
-"""B3: nearest-neighbor classifier on a capped OAM information budget.
+"""B3: matrix nearest-neighbor on a capped OAM information budget.
 
-The lookup uses the development observability matrix only. Held-out
-faults never enter the signature table. When the matrix is missing,
-T1 loss/latency thresholds are the fallback.
+This is not a trained ML model. The lookup uses the development
+observability matrix only. Held-out faults never enter the signature
+table. When the matrix is missing, T1 loss/latency thresholds are the
+fallback.
 """
 
 from bench import tests as oam
@@ -116,6 +117,7 @@ def decide(proposal, snapshot, test_results, net=None, budget_seconds=None):
     agree = proposed_canon == pred
     return {
         "method": "B3",
+        "classifier": "nearest_neighbor",
         "decision": "allow" if agree else "block",
         "action": pred,
         "predicted": pred,

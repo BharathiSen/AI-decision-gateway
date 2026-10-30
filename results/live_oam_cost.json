@@ -1,0 +1,81 @@
+{
+  "status": "pass",
+  "cost": {
+    "tests": [
+      {
+        "test_id": "T1_e2e_ping",
+        "duration_seconds": 1.8647676399996271,
+        "additional_packets": 10,
+        "additional_bytes": 640
+      },
+      {
+        "test_id": "T2_hop_ping",
+        "duration_seconds": 14.717438568999569,
+        "additional_packets": 80,
+        "additional_bytes": 5120
+      },
+      {
+        "test_id": "T4_mtu",
+        "duration_seconds": 0.8681838509992303,
+        "additional_packets": 5,
+        "additional_bytes": 7040
+      },
+      {
+        "test_id": "T5_if_errors",
+        "duration_seconds": 0.12755662500057952,
+        "additional_packets": 0,
+        "additional_bytes": 0
+      },
+      {
+        "test_id": "T6_queue_stats",
+        "duration_seconds": 0.07209348699961993,
+        "additional_packets": 0,
+        "additional_bytes": 0
+      },
+      {
+        "test_id": "T7_route_check",
+        "duration_seconds": 0.03646034599933046,
+        "additional_packets": 0,
+        "additional_bytes": 0
+      },
+      {
+        "test_id": "T8_tcp_vs_ping",
+        "duration_seconds": 0.9223903199999768,
+        "additional_packets": 6,
+        "additional_bytes": 320
+      },
+      {
+        "test_id": "T9_oneway_loss",
+        "duration_seconds": 3.7313285540003562,
+        "additional_packets": 20,
+        "additional_bytes": 1280
+      },
+      {
+        "test_id": "T10_speed",
+        "duration_seconds": 3.957252686999709,
+        "additional_packets": 0,
+        "additional_bytes": 5505024
+      }
+    ],
+    "test_count": 9,
+    "total_duration_seconds": 26.297472078998,
+    "total_additional_packets": 121,
+    "total_additional_bytes": 5519424
+  },
+  "T10": {
+    "test_id": "T10_speed",
+    "mbit_per_sec": null,
+    "intervals": [],
+    "raw": "Connecting to host 10.0.4.2, port 5201\n[  5] local 10.0.1.2 port 60816 connected to 10.0.4.2 port 5201\n[ ID] Interval           Transfer     Bitrate         Retr  Cwnd\n[  5]   0.00-1.00   sec  2.38 MBytes  19.9 Mbits/sec    0    290 KBytes       \n[  5]   1.00-2.00   sec  1.38 MBytes  11.5 Mbits/sec    0    348 KBytes       \n[  5]   2.00-3.00   sec  1.50 MBytes  12.6 Mbits/sec    0    406 KBytes       \n- - - - - - - - - - - - - - - - - - - - - - - - -\n[ ID] Interval           Transfer     Bitrate         Retr\n[  5]   0.00-3.00   sec  5.25 MBytes  14.7 Mbits/sec    0            sender\n[  5]   0.00-3.35   sec  3.62 MBytes  9.07 Mbits/sec                  receiver\n\niperf Done.\n",
+    "duration_seconds": 3.957252686999709,
+    "probes": [
+      {
+        "kind": "iperf3",
+        "bytes": 5505024
+      }
+    ],
+    "error": null,
+    "server_listening": true,
+    "server_log": ""
+  }
+}

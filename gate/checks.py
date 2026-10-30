@@ -49,16 +49,28 @@ def _summarize_observation(obs, thresholds=None):
     return grade_result(obs, thresholds)
 
 
+def _prediction_tokens(text):
+    cleaned = (text or "").lower().replace(";", " ").replace(",", " ").replace("=", " ")
+    return [token for token in cleaned.split() if token]
+
+
 def _prediction_matches(expected, observed):
-    exp = (expected or "").lower()
-    obs = (observed or "").lower()
-    if exp in obs or obs in exp:
+    """True when the predicted grade matches the observed grade as whole tokens.
+
+    Substring search is not used: 'ok' must not match 'both_ok', and a lone
+    '0' must not match '100'.
+    """
+    exp = (expected or "").strip().lower()
+    obs = (observed or "").strip().lower()
+    if not exp or not obs:
+        return False
+    if exp == obs:
         return True
-    # numeric loose match
-    for token in exp.replace(",", " ").split():
-        if token and token in obs:
-            return True
-    return exp == "ok" and obs == "ok"
+    if obs.startswith(exp + "=") or exp.startswith(obs + "="):
+        return True
+    wanted = _prediction_tokens(exp)
+    got = _prediction_tokens(obs)
+    return bool(wanted) and all(token in got for token in wanted)
 
 
 def check_discrimination(ruled_out_alternatives):
