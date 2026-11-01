@@ -25,8 +25,39 @@ from openai import OpenAI
 from bench.contracts import TEST_IDS, llm_proposal_schema
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
-MODEL = "openai/gpt-4o-mini"
+# LLM_PROVIDER picks the backend; LLM_MODEL overrides its default model.
+# Both speak the OpenAI chat-completions API, so one client serves both.
+PROVIDERS = {
+    "openrouter": {
+        "base_url": OPENROUTER_BASE_URL,
+        "key_env": "OPENROUTER_API_KEY",
+        "model": "openai/gpt-4o-mini",
+    },
+    "gemini": {
+        "base_url": GEMINI_BASE_URL,
+        "key_env": "GEMINI_API_KEY",
+        "model": "gemini-2.5-flash",
+    },
+}
+
+
+def provider_config():
+    """{"provider", "base_url", "key_env", "api_key", "model"} from the environment."""
+    name = (os.environ.get("LLM_PROVIDER") or "openrouter").strip().lower()
+    if name not in PROVIDERS:
+        raise ValueError(f"LLM_PROVIDER must be one of {sorted(PROVIDERS)}, got {name!r}")
+    cfg = dict(PROVIDERS[name], provider=name)
+    cfg["model"] = (os.environ.get("LLM_MODEL") or "").strip() or cfg["model"]
+    cfg["api_key"] = os.environ.get(cfg["key_env"])
+    return cfg
+
+
+def _client():
+    cfg = provider_config()
+    # Extra retries ride out per-minute rate limits on free tiers.
+    return OpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"], max_retries=5)
 
 
 def _model_cost(response, started):
@@ -142,10 +173,7 @@ def propose_decision(
     allowed_actions = list(allowed_actions or DEFAULT_ALLOWED_ACTIONS)
     policy_context = policy_context or DEFAULT_POLICY_CONTEXT
     target = target or DEFAULT_TARGET
-    client = client or OpenAI(
-        base_url=OPENROUTER_BASE_URL,
-        api_key=os.environ.get("OPENROUTER_API_KEY"),
-    )
+    client = client or _client()
 
     user_payload = {
         "current_network_state": network_state,
@@ -157,7 +185,7 @@ def propose_decision(
 
     started = time.monotonic()
     response = client.chat.completions.create(
-        model=MODEL,
+        model=provider_config()["model"],
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": json.dumps(user_payload, indent=2)},
@@ -203,10 +231,7 @@ def propose_with_predictions(
     oam_test_catalog = oam_test_catalog or DEFAULT_OAM_CATALOG
     policy_context = policy_context or DEFAULT_POLICY_CONTEXT
     target = target or DEFAULT_TARGET
-    client = client or OpenAI(
-        base_url=OPENROUTER_BASE_URL,
-        api_key=os.environ.get("OPENROUTER_API_KEY"),
-    )
+    client = client or _client()
 
     user_payload = {
         "current_network_state": network_state,
@@ -222,7 +247,7 @@ def propose_with_predictions(
 
     started = time.monotonic()
     response = client.chat.completions.create(
-        model=MODEL,
+        model=provider_config()["model"],
         messages=[
             {"role": "system", "content": PREDICTION_SYSTEM_PROMPT},
             {"role": "user", "content": json.dumps(user_payload, indent=2)},

@@ -3,7 +3,8 @@ Phase 9 / Stage 13 pilot: ~500 resumable episodes, gate v0 vs B5.
 
 Main live run (real LLM, Mininet VM):
 
-    sudo --preserve-env=OPENROUTER_API_KEY python3 bench/run_pilot.py \\
+    export LLM_PROVIDER=gemini GEMINI_API_KEY=...
+    sudo --preserve-env=LLM_PROVIDER,GEMINI_API_KEY python3 bench/run_pilot.py \\
         --episodes 500 --require-model --resume --save-episodes
 
 Smoke (stub, two episodes):
@@ -174,15 +175,40 @@ def _propose(snapshot, fault_id, use_model, stress_mode=None, ticket_text=None):
     )
 
 
+def _provider():
+    from agent.decision_agent import provider_config
+
+    return provider_config()
+
+
 def resolve_agent(stub=False, require_model=False):
-    key = bool(os.environ.get("OPENROUTER_API_KEY"))
     if stub and require_model:
         raise ValueError("cannot combine --stub with --require-model")
     if stub:
         return False
+    cfg = _provider()
+    key = bool(cfg["api_key"])
     if require_model and not key:
-        raise ValueError("main pilot requires OPENROUTER_API_KEY")
+        raise ValueError(f"main pilot requires {cfg['key_env']} (LLM_PROVIDER={cfg['provider']})")
     return key
+
+
+# Errors that will hit every later episode too (bad key, no credits,
+# quota spent). Stop instead of recording them as finished episodes, so
+# --resume picks up at the same episode once the cause is fixed.
+_FATAL_AGENT_ERRORS = (
+    "AuthenticationError",
+    "PermissionDeniedError",
+    "RateLimitError",
+    "Error code: 401",
+    "Error code: 402",
+    "Error code: 403",
+    "Error code: 429",
+)
+
+
+def fatal_agent_error(message):
+    return bool(message) and any(marker in message for marker in _FATAL_AGENT_ERRORS)
 
 
 def _cost_for_tests(test_ids):
@@ -443,7 +469,7 @@ def _parser():
     parser.add_argument(
         "--require-model",
         action="store_true",
-        help="Fail closed unless OPENROUTER_API_KEY is set (main pilot)",
+        help="Fail closed unless the API key for LLM_PROVIDER is set (main pilot)",
     )
     parser.add_argument("--out", default=str(DEFAULT_OUT))
     return parser
@@ -458,11 +484,14 @@ def run_loop(args, net, links):
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    agent = "model" if use_model else "stub"
-    print(
-        "agent: OpenRouter model" if use_model else "agent: local stub (OPENROUTER_API_KEY is not set or --stub)",
-        flush=True,
-    )
+    if use_model:
+        cfg = _provider()
+        # The model name is part of the resume key, so a run never mixes models.
+        agent = f"model:{cfg['provider']}/{cfg['model']}"
+        print(f"agent: {cfg['provider']} {cfg['model']}", flush=True)
+    else:
+        agent = "stub"
+        print("agent: local stub (no API key for LLM_PROVIDER, or --stub)", flush=True)
 
     out_path = Path(args.out)
     state = load_state(out_path) if args.resume else None
@@ -525,6 +554,15 @@ def run_loop(args, net, links):
             gate_fn=gate_fn,
         )
         record["pilot_scenario"] = scenario["kind"]
+        if fatal_agent_error(record.get("agent_error")):
+            print(f"  model error: {record['agent_error']}", flush=True)
+            print(
+                f"stopping: this error will repeat. Fix it, then rerun with --resume "
+                f"to continue from episode {index + 1}.",
+                file=sys.stderr,
+                flush=True,
+            )
+            return 3
         if record.get("agent_error"):
             stats["model_errors"] += 1
             print(f"  model error: {record['agent_error']}", flush=True)
@@ -658,9 +696,10 @@ def _self_check():
         raise AssertionError("stub+require-model")
     except ValueError:
         pass
-    previous = os.environ.get("OPENROUTER_API_KEY")
+    key_env = _provider()["key_env"]
+    previous = os.environ.get(key_env)
     try:
-        os.environ.pop("OPENROUTER_API_KEY", None)
+        os.environ.pop(key_env, None)
         try:
             resolve_agent(stub=False, require_model=True)
             raise AssertionError("require-model without key")
@@ -669,9 +708,36 @@ def _self_check():
         assert resolve_agent(stub=True, require_model=False) is False
     finally:
         if previous is None:
-            os.environ.pop("OPENROUTER_API_KEY", None)
+            os.environ.pop(key_env, None)
         else:
-            os.environ["OPENROUTER_API_KEY"] = previous
+            os.environ[key_env] = previous
+
+    assert fatal_agent_error("AuthenticationError: Error code: 401 - missing")
+    assert fatal_agent_error("APIStatusError: Error code: 402 - more credits")
+    assert fatal_agent_error("RateLimitError: Error code: 429 - quota")
+    assert not fatal_agent_error("ValueError: invalid agent output: bad action")
+    assert not fatal_agent_error(None)
+
+    saved = {name: os.environ.get(name) for name in ("LLM_PROVIDER", "LLM_MODEL")}
+    try:
+        os.environ["LLM_PROVIDER"] = "gemini"
+        os.environ.pop("LLM_MODEL", None)
+        cfg = _provider()
+        assert cfg["key_env"] == "GEMINI_API_KEY" and cfg["model"].startswith("gemini"), cfg
+        os.environ["LLM_MODEL"] = "gemini-x"
+        assert _provider()["model"] == "gemini-x"
+        os.environ["LLM_PROVIDER"] = "nope"
+        try:
+            _provider()
+            raise AssertionError("unknown provider accepted")
+        except ValueError:
+            pass
+    finally:
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
     from agent.validate import catalog_cause_ids, validate_proposal
 
