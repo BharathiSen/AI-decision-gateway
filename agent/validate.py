@@ -37,12 +37,25 @@ def _parse_iso_timestamp(value):
     return parsed
 
 
-def catalog_cause_ids():
-    cached = getattr(catalog_cause_ids, "_ids", None)
+def catalog_entries():
+    """Catalog rows from config/faults.yaml: id plus description. No compounds."""
+    cached = getattr(catalog_entries, "_rows", None)
     if cached is None:
         with _FAULTS.open(encoding="utf-8") as handle:
             doc = yaml.safe_load(handle)
-        cached = {item["id"] for item in (doc.get("faults") or []) if item.get("id")}
+        cached = [
+            {"id": item["id"], "description": item.get("description") or ""}
+            for item in (doc.get("faults") or [])
+            if item.get("id")
+        ]
+        catalog_entries._rows = cached
+    return list(cached)
+
+
+def catalog_cause_ids():
+    cached = getattr(catalog_cause_ids, "_ids", None)
+    if cached is None:
+        cached = {item["id"] for item in catalog_entries()}
         catalog_cause_ids._ids = cached
     return cached
 

@@ -10,10 +10,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from agent.validate import (
     MAX_EXPECTED_LEN,
     MAX_PROPOSAL_BYTES,
+    SUPPORTED_TARGETS,
+    catalog_cause_ids,
     proposal_freshness_errors,
     validate_batch,
     validate_proposal,
 )
+from agent.decision_agent import _canonical_target
+from bench.contracts import llm_proposal_schema
 
 
 def good_proposal():
@@ -74,6 +78,21 @@ def main():
     other_flow["target"] = "HostC_to_HostD"
     ok, errs = validate_proposal(other_flow)
     check("unsupported target rejected", not ok, errs)
+
+    schema = llm_proposal_schema(
+        ["REROUTE", "DO_NOTHING", "ESCALATE"],
+        predictions=True,
+        cause_ids=catalog_cause_ids(),
+        targets=sorted(SUPPORTED_TARGETS),
+    )
+    check("llm schema pins target", schema["properties"]["target"].get("enum") == ["HostA_to_HostB"])
+    cause_enum = schema["properties"]["causes"]["items"]["properties"]["cause_id"].get("enum") or []
+    check("llm schema includes catalog F1", "F1" in cause_enum)
+    check("llm schema includes held-out U1", "U1" in cause_enum)
+    check("llm schema excludes compounds", "C1" not in cause_enum)
+    check("target alias hostA to hostB", _canonical_target("hostA to hostB") == "HostA_to_HostB")
+    check("target alias hostA", _canonical_target("hostA") == "HostA_to_HostB")
+    check("unsupported target alias left alone", _canonical_target("HostC_to_HostD") == "HostC_to_HostD")
 
     for action in ("REBALANCE", "reroute_traffic", "no_action", "reboot"):
         unsupported = copy.deepcopy(good)

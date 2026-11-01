@@ -163,24 +163,39 @@ SCHEMAS = {
 }
 
 
-def llm_proposal_schema(allowed_actions, predictions=False):
+def llm_proposal_schema(allowed_actions, predictions=False, cause_ids=None, targets=None):
     """Schema sent to the model. Same fields as the stored proposal."""
+    target_prop = {"type": "string"}
+    if targets:
+        target_prop["enum"] = list(targets)
     schema = {
         "type": "object",
         "additionalProperties": False,
         "required": ["action", "target", "proposed_path", "reason"],
         "properties": {
             "action": {"type": "string", "enum": list(allowed_actions)},
-            "target": {"type": "string"},
+            "target": target_prop,
             "proposed_path": {"type": "array", "items": {"type": "string"}},
             "reason": {"type": "string"},
         },
     }
     if predictions:
+        cause_prop = {"type": "string", "minLength": 1}
+        if cause_ids:
+            cause_prop = {"type": "string", "enum": sorted(cause_ids)}
+        cause_item = {
+            "type": "object",
+            "required": ["cause_id", "predicted_tests"],
+            "additionalProperties": False,
+            "properties": {
+                "cause_id": cause_prop,
+                "predicted_tests": _CAUSE["properties"]["predicted_tests"],
+            },
+        }
         schema["properties"]["causes"] = {
             "type": "array",
             "maxItems": 5,
-            "items": _CAUSE,
+            "items": cause_item,
         }
         schema["required"] = list(schema["required"]) + ["causes"]
     return schema

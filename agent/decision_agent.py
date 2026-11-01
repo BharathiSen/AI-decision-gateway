@@ -49,6 +49,30 @@ def _model_cost(response, started):
 
 DEFAULT_ALLOWED_ACTIONS = ["REROUTE", "DO_NOTHING", "ESCALATE"]
 DEFAULT_OAM_CATALOG = list(TEST_IDS)
+DEFAULT_TARGET = "HostA_to_HostB"
+
+
+def _canonical_target(value, default=DEFAULT_TARGET):
+    """Map common flow spellings onto the single supported target token."""
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if text == default:
+        return text
+    tokens = [
+        part
+        for part in text.lower().replace("-", " ").replace("_", " ").replace(">", " ").replace("<", " ").split()
+        if part
+    ]
+    if tokens in (["hosta", "to", "hostb"], ["hosta", "hostb"], ["hosta"], ["a", "to", "b"]):
+        return default
+    return text
+
+
+def _apply_target(decision, target):
+    if isinstance(decision, dict):
+        decision["target"] = _canonical_target(decision.get("target"), target)
+    return decision
 
 # Policy context now lives in policy/policy.yaml (sibling of this file's
 # package), not as a literal here, so it can be edited without touching
@@ -72,15 +96,17 @@ Your only job is to PROPOSE exactly one action. You never execute \
 anything yourself -- a separate, independent verification and control \
 system decides whether your proposal is ever applied to the real \
 network. Base your decision only on the data you were given; do not \
-assume state that isn't reported. Name the specific target and (when \
-the action involves one) the concrete router path using the real node \
-names given to you, and give a short, factual reason grounded in the \
-telemetry."""
+assume state that isn't reported. target must be exactly the \
+supported_target from the user payload (HostA_to_HostB). When the \
+action involves a path, use the real node names given to you. Give a \
+short, factual reason grounded in the telemetry."""
 
 PREDICTION_SYSTEM_PROMPT = SYSTEM_PROMPT + """
 
-Also return up to five candidate causes. For each cause, predict how \
-named OAM tests from oam_test_catalog would read if that cause were true \
+Also return up to five candidate causes. Each cause_id must be one of \
+the ids in fault_catalog (H0, F1–F12, U1–U5). Do not invent prose \
+labels, link names, or compound ids. For each cause, predict how named \
+OAM tests from oam_test_catalog would read if that cause were true \
 (use test_id and a short expected field). You still do not execute \
 anything or choose which tests the gate runs."""
 
@@ -89,7 +115,7 @@ def propose_decision(
     network_state,
     allowed_actions=None,
     policy_context=None,
-    target="HostA_to_HostB",
+    target=DEFAULT_TARGET,
     client=None,
 ):
     """Ask the LLM to propose one action for the given network state.
@@ -111,8 +137,11 @@ def propose_decision(
     allowed_actions (belt-and-suspenders on top of the enforced schema).
     Never applies anything to the network.
     """
+    from agent.validate import SUPPORTED_TARGETS, validate_proposal
+
     allowed_actions = list(allowed_actions or DEFAULT_ALLOWED_ACTIONS)
     policy_context = policy_context or DEFAULT_POLICY_CONTEXT
+    target = target or DEFAULT_TARGET
     client = client or OpenAI(
         base_url=OPENROUTER_BASE_URL,
         api_key=os.environ.get("OPENROUTER_API_KEY"),
@@ -122,6 +151,7 @@ def propose_decision(
         "current_network_state": network_state,
         "allowed_action_types": allowed_actions,
         "policy_context": policy_context,
+        "supported_target": target,
         "target": target,
     }
 
@@ -137,18 +167,17 @@ def propose_decision(
             "json_schema": {
                 "name": "network_decision",
                 "strict": True,
-                "schema": llm_proposal_schema(allowed_actions),
+                "schema": llm_proposal_schema(allowed_actions, targets=sorted(SUPPORTED_TARGETS)),
             },
         },
     )
-
-    from agent.validate import validate_proposal
 
     try:
         decision = json.loads(response.choices[0].message.content)
     except json.JSONDecodeError as exc:
         raise ValueError(f"invalid agent output: malformed JSON: {exc}") from exc
 
+    _apply_target(decision, target)
     ok, errors = validate_proposal(decision, allowed_actions=allowed_actions)
     if not ok:
         raise ValueError(f"invalid agent output: {errors}")
@@ -162,17 +191,18 @@ def propose_with_predictions(
     allowed_actions=None,
     policy_context=None,
     oam_test_catalog=None,
-    target="HostA_to_HostB",
+    target=DEFAULT_TARGET,
     stress_mode=None,
     ticket_text=None,
     client=None,
 ):
     """Phase 8: fix proposal plus structured OAM predictions per cause."""
-    from agent.validate import validate_proposal
+    from agent.validate import SUPPORTED_TARGETS, catalog_cause_ids, catalog_entries, validate_proposal
 
     allowed_actions = list(allowed_actions or DEFAULT_ALLOWED_ACTIONS)
     oam_test_catalog = oam_test_catalog or DEFAULT_OAM_CATALOG
     policy_context = policy_context or DEFAULT_POLICY_CONTEXT
+    target = target or DEFAULT_TARGET
     client = client or OpenAI(
         base_url=OPENROUTER_BASE_URL,
         api_key=os.environ.get("OPENROUTER_API_KEY"),
@@ -183,7 +213,9 @@ def propose_with_predictions(
         "allowed_action_types": allowed_actions,
         "policy_context": policy_context,
         "oam_test_catalog": oam_test_catalog,
+        "supported_target": target,
         "target": target,
+        "fault_catalog": catalog_entries(),
         "stress_mode": stress_mode,
         "ticket_text": ticket_text,
     }
@@ -200,7 +232,12 @@ def propose_with_predictions(
             "json_schema": {
                 "name": "network_decision_with_predictions",
                 "strict": True,
-                "schema": llm_proposal_schema(allowed_actions, predictions=True),
+                "schema": llm_proposal_schema(
+                    allowed_actions,
+                    predictions=True,
+                    cause_ids=catalog_cause_ids(),
+                    targets=sorted(SUPPORTED_TARGETS),
+                ),
             },
         },
     )
@@ -209,6 +246,7 @@ def propose_with_predictions(
         decision = json.loads(response.choices[0].message.content)
     except json.JSONDecodeError as exc:
         raise ValueError(f"invalid agent output: malformed JSON: {exc}") from exc
+    _apply_target(decision, target)
     ok, errors = validate_proposal(decision, allowed_actions=allowed_actions)
     if not ok:
         raise ValueError(f"invalid agent output: {errors}")
