@@ -15,6 +15,7 @@ network.fault_injector).
 """
 
 import json
+import logging
 import os
 import time
 from pathlib import Path
@@ -54,7 +55,25 @@ def provider_config():
     return cfg
 
 
+LOG = logging.getLogger("gemini")
+
+
+def _setup_logging():
+    """GEMINI_LOG=info shows each HTTP request, retry wait and call latency;
+    GEMINI_LOG=debug adds full request/response detail. Unset: silent."""
+    level = (os.environ.get("GEMINI_LOG") or "").strip().lower()
+    if level not in ("info", "debug"):
+        return
+    if not logging.getLogger().handlers:
+        logging.basicConfig(format="  [%(asctime)s %(name)s] %(message)s", datefmt="%H:%M:%S")
+    value = logging.DEBUG if level == "debug" else logging.INFO
+    # The HTTP client libraries log the requests and retries; "gemini" logs our timings.
+    for name in ("gemini", "openai", "httpx"):
+        logging.getLogger(name).setLevel(value)
+
+
 def _client():
+    _setup_logging()
     cfg = provider_config()
     # Extra retries ride out per-minute rate limits on free tiers.
     return OpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"], max_retries=5)
@@ -72,11 +91,18 @@ def _model_cost(response, started):
             return None
         return value
 
-    return {
+    cost = {
         "latency_seconds": time.monotonic() - started,
         "prompt_tokens": field("prompt_tokens"),
         "completion_tokens": field("completion_tokens"),
     }
+    LOG.info(
+        "model call took %.1fs (prompt_tokens=%s, completion_tokens=%s)",
+        cost["latency_seconds"],
+        cost["prompt_tokens"],
+        cost["completion_tokens"],
+    )
+    return cost
 
 DEFAULT_ALLOWED_ACTIONS = ["REROUTE", "DO_NOTHING", "ESCALATE"]
 DEFAULT_OAM_CATALOG = list(TEST_IDS)
