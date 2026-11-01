@@ -200,9 +200,11 @@ _FATAL_AGENT_ERRORS = (
     "AuthenticationError",
     "PermissionDeniedError",
     "RateLimitError",
+    "NotFoundError",
     "Error code: 401",
     "Error code: 402",
     "Error code: 403",
+    "Error code: 404",
     "Error code: 429",
 )
 
