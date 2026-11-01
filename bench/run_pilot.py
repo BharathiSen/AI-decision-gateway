@@ -489,8 +489,12 @@ def run_loop(args, net, links):
     if use_model:
         cfg = _provider()
         # The model name is part of the resume key, so a run never mixes models.
-        agent = f"model:{cfg['provider']}/{cfg['model']}"
-        print(f"agent: {cfg['provider']} {cfg['model']}", flush=True)
+        effort = cfg.get("reasoning_effort")
+        agent = f"model:{cfg['provider']}/{cfg['model']}" + (f"@{effort}" if effort else "")
+        print(
+            f"agent: {cfg['provider']} {cfg['model']} (reasoning_effort={effort or 'model default'})",
+            flush=True,
+        )
     else:
         agent = "stub"
         print("agent: local stub (no API key for LLM_PROVIDER, or --stub)", flush=True)
@@ -720,14 +724,29 @@ def _self_check():
     assert not fatal_agent_error("ValueError: invalid agent output: bad action")
     assert not fatal_agent_error(None)
 
-    saved = {name: os.environ.get(name) for name in ("LLM_PROVIDER", "LLM_MODEL")}
+    saved = {name: os.environ.get(name) for name in ("LLM_PROVIDER", "LLM_MODEL", "LLM_REASONING_EFFORT")}
     try:
         os.environ["LLM_PROVIDER"] = "gemini"
         os.environ.pop("LLM_MODEL", None)
         cfg = _provider()
         assert cfg["key_env"] == "GEMINI_API_KEY" and cfg["model"].startswith("gemini"), cfg
+        assert cfg["reasoning_effort"] == "low", cfg
         os.environ["LLM_MODEL"] = "gemini-x"
         assert _provider()["model"] == "gemini-x"
+        from agent.decision_agent import _request_args
+
+        assert _request_args() == {"model": "gemini-x", "reasoning_effort": "low"}
+        os.environ["LLM_REASONING_EFFORT"] = "default"
+        assert _request_args() == {"model": "gemini-x"}
+        os.environ["LLM_REASONING_EFFORT"] = "minimal"
+        assert _request_args()["reasoning_effort"] == "minimal"
+        os.environ["LLM_REASONING_EFFORT"] = "turbo"
+        try:
+            _provider()
+            raise AssertionError("bad effort accepted")
+        except ValueError:
+            pass
+        os.environ.pop("LLM_REASONING_EFFORT", None)
         os.environ["LLM_PROVIDER"] = "nope"
         try:
             _provider()

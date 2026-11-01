@@ -40,19 +40,45 @@ PROVIDERS = {
         "base_url": GEMINI_BASE_URL,
         "key_env": "GEMINI_API_KEY",
         "model": "gemini-3.8-flash",
+        # Default thinking took 36-87 s per call, past the 120 s proposal
+        # freshness window once telemetry and OAM time are added.
+        "reasoning_effort": "low",
     },
 }
 
+REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high")
+
 
 def provider_config():
-    """{"provider", "base_url", "key_env", "api_key", "model"} from the environment."""
+    """{"provider", "base_url", "key_env", "api_key", "model", "reasoning_effort"}
+    from the environment. LLM_REASONING_EFFORT overrides the provider default;
+    "default" sends nothing and leaves the model's own setting."""
     name = (os.environ.get("LLM_PROVIDER") or "openrouter").strip().lower()
     if name not in PROVIDERS:
         raise ValueError(f"LLM_PROVIDER must be one of {sorted(PROVIDERS)}, got {name!r}")
     cfg = dict(PROVIDERS[name], provider=name)
+    cfg.setdefault("reasoning_effort", None)
     cfg["model"] = (os.environ.get("LLM_MODEL") or "").strip() or cfg["model"]
+    effort = (os.environ.get("LLM_REASONING_EFFORT") or "").strip().lower()
+    if effort == "default":
+        cfg["reasoning_effort"] = None
+    elif effort:
+        if effort not in REASONING_EFFORTS:
+            raise ValueError(
+                f"LLM_REASONING_EFFORT must be one of {list(REASONING_EFFORTS) + ['default']}, got {effort!r}"
+            )
+        cfg["reasoning_effort"] = effort
     cfg["api_key"] = os.environ.get(cfg["key_env"])
     return cfg
+
+
+def _request_args():
+    """Per-request arguments for the configured provider."""
+    cfg = provider_config()
+    args = {"model": cfg["model"]}
+    if cfg["reasoning_effort"]:
+        args["reasoning_effort"] = cfg["reasoning_effort"]
+    return args
 
 
 LOG = logging.getLogger("gemini")
@@ -96,11 +122,22 @@ def _model_cost(response, started):
         "prompt_tokens": field("prompt_tokens"),
         "completion_tokens": field("completion_tokens"),
     }
+    details = None
+    if usage is not None:
+        details = usage.get("completion_tokens_details") if isinstance(usage, dict) else getattr(
+            usage, "completion_tokens_details", None
+        )
+    reasoning = None
+    if details is not None:
+        reasoning = details.get("reasoning_tokens") if isinstance(details, dict) else getattr(
+            details, "reasoning_tokens", None
+        )
     LOG.info(
-        "model call took %.1fs (prompt_tokens=%s, completion_tokens=%s)",
+        "model call took %.1fs (prompt_tokens=%s, completion_tokens=%s, thinking_tokens=%s)",
         cost["latency_seconds"],
         cost["prompt_tokens"],
         cost["completion_tokens"],
+        reasoning,
     )
     return cost
 
@@ -211,7 +248,7 @@ def propose_decision(
 
     started = time.monotonic()
     response = client.chat.completions.create(
-        model=provider_config()["model"],
+        **_request_args(),
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": json.dumps(user_payload, indent=2)},
@@ -273,7 +310,7 @@ def propose_with_predictions(
 
     started = time.monotonic()
     response = client.chat.completions.create(
-        model=provider_config()["model"],
+        **_request_args(),
         messages=[
             {"role": "system", "content": PREDICTION_SYSTEM_PROMPT},
             {"role": "user", "content": json.dumps(user_payload, indent=2)},
