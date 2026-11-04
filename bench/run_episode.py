@@ -1513,6 +1513,76 @@ def live_diamond():
     return 0
 
 
+def live_model():
+    """One live diamond snapshot through the configured LLM. No frozen writes.
+
+    On the VM, as root, with the provider key in the same sudo environment:
+
+        sudo --preserve-env=GROQ_API_KEY python3 bench/run_episode.py --live-model
+    """
+    import os
+
+    if not hasattr(os, "geteuid") or os.geteuid() != 0:
+        print("live model check must run as root on the Mininet VM.", file=sys.stderr)
+        return 2
+    from agent.decision_agent import propose_with_predictions, provider_config
+
+    cfg = provider_config()
+    print(
+        f"provider={cfg['provider']} model={cfg['model']} "
+        f"effort={cfg['reasoning_effort']} {cfg['key_env']}="
+        f"{'set' if cfg['api_key'] else 'missing'}"
+    )
+    if not cfg["api_key"]:
+        print(
+            f"set {cfg['key_env']} and rerun with sudo --preserve-env={cfg['key_env']}",
+            file=sys.stderr,
+        )
+        return 2
+    from bench.mininet_util import mn_cleanup
+    from network.topology import create_network
+
+    mn_cleanup()
+    state = create_network()
+    net, links = state["net"], state["links"]
+    try:
+        snapshot = collect_current_state(net, links)
+        decision = propose_with_predictions(snapshot)
+    finally:
+        net.stop()
+
+    cost = decision.get("_cost") or {}
+    names = {node.get("name") for node in (snapshot.get("nodes") or [])}
+    metrics = snapshot.get("metrics") or {}
+    print(
+        f"live nodes={sorted(names)} "
+        f"path={metrics.get('active_path')} "
+        f"loss={metrics.get('packet_loss_percent')} "
+        f"latency_ms={metrics.get('latency_ms')}"
+    )
+    print(
+        f"latency_seconds={cost.get('latency_seconds')} "
+        f"prompt_tokens={cost.get('prompt_tokens')} "
+        f"completion_tokens={cost.get('completion_tokens')}"
+    )
+    print(
+        f"action={decision.get('action')} "
+        f"causes={[c.get('cause_id') for c in decision.get('causes') or []]}"
+    )
+    failures = []
+    if not validate_record("telemetry", snapshot)[0]:
+        failures.append("telemetry")
+    if not {"hostA", "hostB", "r1", "r2", "r3", "r4"} <= names:
+        failures.append("diamond nodes")
+    if not validate_record("proposal", decision)[0]:
+        failures.append("proposal")
+    if failures:
+        print("live model: FAIL " + "; ".join(failures))
+        return 1
+    print("live model: PASS")
+    return 0
+
+
 def live_recheck():
     """Execution recheck against the live diamond, one case per stale-state kind.
 
@@ -2119,6 +2189,8 @@ if __name__ == "__main__":
         sys.exit(live_integrity())
     if "--live-safety" in sys.argv:
         sys.exit(live_safety())
+    if "--live-model" in sys.argv:
+        sys.exit(live_model())
     if "--live" in sys.argv:
         sys.exit(live_diamond())
     if "--live-cost" in sys.argv:

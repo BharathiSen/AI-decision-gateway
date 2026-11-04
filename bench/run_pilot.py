@@ -3,8 +3,8 @@ Phase 9 / Stage 13 pilot: ~500 resumable episodes, gate v0 vs B5.
 
 Main live run (real LLM, Mininet VM):
 
-    export XAI_API_KEY=...          # or GROK_API_KEY; Grok is the default provider
-    sudo --preserve-env=XAI_API_KEY,GROK_API_KEY python3 bench/run_pilot.py \\
+    export GROQ_API_KEY=gsk_...     # Groq is the default provider (LLM_PROVIDER=grok for xAI)
+    sudo --preserve-env=GROQ_API_KEY python3 bench/run_pilot.py \\
         --episodes 500 --require-model --resume --save-episodes
 
 Smoke (stub, two episodes):
@@ -736,13 +736,22 @@ def _self_check():
     try:
         for name in saved:
             os.environ.pop(name, None)
+        groq = _provider()
+        assert groq["provider"] == "groq" and groq["key_env"] == "GROQ_API_KEY", groq
+        assert groq["base_url"] == "https://api.groq.com/openai/v1" and groq["reasoning_effort"] == "low", groq
+        os.environ["LLM_PROVIDER"] = "grok"
         grok = _provider()
         assert grok["provider"] == "grok" and grok["key_env"] == "XAI_API_KEY", grok
         assert grok["base_url"] == "https://api.x.ai/v1" and grok["reasoning_effort"] == "none", grok
         from agent.decision_agent import _clean_api_key, _key_mismatch_hint
 
         assert _clean_api_key("  'xai-abc'  ") == "xai-abc"
+        assert _clean_api_key("export GROQ_API_KEY=gsk_abc") == "gsk_abc"
+        assert _clean_api_key('$env:GROQ_API_KEY = "gsk_abc"') == "gsk_abc"
         assert "OpenRouter" in (_key_mismatch_hint({"provider": "grok", "api_key": "sk-or-v1-abc"}) or "")
+        assert "Groq" in (_key_mismatch_hint({"provider": "grok", "api_key": "gsk_abc"}) or "")
+        assert _key_mismatch_hint({"provider": "groq", "api_key": "gsk_abc"}) is None
+        assert "xAI" in (_key_mismatch_hint({"provider": "groq", "api_key": "xai-abc"}) or "")
         assert _clean_api_key("xai-...") == "xai-..."
         os.environ["LLM_PROVIDER"] = "xai"
         assert _provider()["provider"] == "grok"

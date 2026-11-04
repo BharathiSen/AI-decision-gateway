@@ -6,7 +6,7 @@ Offline (no Mininet, e.g. Windows dev / CI smoke):
     python scripts/finish_evaluation.py --mode offline --episodes 500
 
 Live (Mininet VM, root):
-    sudo --preserve-env=XAI_API_KEY python3 scripts/finish_evaluation.py --mode live --episodes 500
+    sudo --preserve-env=GROQ_API_KEY python3 scripts/finish_evaluation.py --mode live --episodes 500
 """
 
 import argparse

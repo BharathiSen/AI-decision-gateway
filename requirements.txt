@@ -11,10 +11,10 @@
 #
 # Nothing else is required for the network/telemetry layer.
 #
-# The AI decision agent calls xAI Grok (OpenAI-API-compatible) via the
-# OpenAI SDK, pointed at https://api.x.ai/v1. Needs a real key in the
-# environment (XAI_API_KEY or GROK_API_KEY). LLM_PROVIDER=openrouter or
-# gemini switches backends. Unlike the
+# The AI decision agent calls Groq (OpenAI-API-compatible) via the
+# OpenAI SDK, pointed at https://api.groq.com/openai/v1. Needs a real key
+# in the environment (GROQ_API_KEY, starts gsk_). LLM_PROVIDER=grok (xAI),
+# openrouter or gemini switches backends. Unlike the
 # network/telemetry layer, this has no dependency on Mininet/Linux and
 # can run anywhere Python and this package are installed. It also
 # loads its policy context from policy/policy.yaml, hence pyyaml.

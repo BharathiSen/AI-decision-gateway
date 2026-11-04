@@ -33,7 +33,7 @@ _CAUSE = {
     "additionalProperties": False,
     "properties": {
         "cause_id": {"type": "string", "minLength": 1},
-        "predicted_tests": {"type": "array", "items": _PREDICTED_TEST, "maxItems": 8},
+        "predicted_tests": {"type": "array", "items": _PREDICTED_TEST, "maxItems": len(TEST_IDS)},
     },
 }
 

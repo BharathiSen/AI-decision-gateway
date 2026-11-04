@@ -17,7 +17,7 @@ from agent.validate import (
     validate_proposal,
 )
 from agent.decision_agent import _canonical_target
-from bench.contracts import llm_proposal_schema
+from bench.contracts import TEST_IDS, llm_proposal_schema
 
 
 def good_proposal():
@@ -90,6 +90,11 @@ def main():
     check("llm schema includes catalog F1", "F1" in cause_enum)
     check("llm schema includes held-out U1", "U1" in cause_enum)
     check("llm schema excludes compounds", "C1" not in cause_enum)
+    check(
+        "llm schema allows a full OAM catalog",
+        schema["properties"]["causes"]["items"]["properties"]["predicted_tests"].get("maxItems")
+        == len(TEST_IDS),
+    )
     check("target alias hostA to hostB", _canonical_target("hostA to hostB") == "HostA_to_HostB")
     check("target alias hostA", _canonical_target("hostA") == "HostA_to_HostB")
     check("unsupported target alias left alone", _canonical_target("HostC_to_HostD") == "HostC_to_HostD")

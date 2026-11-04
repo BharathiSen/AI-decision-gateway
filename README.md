@@ -21,7 +21,7 @@ Telemetry ──► LLM agent (propose only) ──► Gate (verify) ──► C
 |------|---------|
 | [`network/`](network/) | Mininet topology, link control, interactive fault injection |
 | [`telemetry/`](telemetry/) | Live metrics/topology JSON for agent and gate |
-| [`agent/`](agent/) | Grok (xAI) LLM proposer + JSON schema validation |
+| [`agent/`](agent/) | Groq LLM proposer (xAI Grok / OpenRouter / Gemini optional) + JSON schema validation |
 | [`gate/`](gate/) | Consistency, discrimination, safety; adaptive test selection |
 | [`control/`](control/) | Canonical actions (`REROUTE`, `DO_NOTHING`, `ESCALATE`, …) |
 | [`bench/`](bench/) | OAM tests T1–T10, episodes, pilot, calibration, observability matrix |
@@ -37,8 +37,8 @@ Telemetry ──► LLM agent (propose only) ──► Gate (verify) ──► C
 
 ```bash
 pip install -r requirements.txt
-export XAI_API_KEY=xai-...      # optional; stub agent used if unset
-python agent/decision_agent.py  # one live Grok call: prints latency + tokens
+export GROQ_API_KEY=gsk_...     # optional; stub agent used if unset
+python agent/decision_agent.py  # one live Groq call: prints latency + tokens
 ```
 
 ### Mininet VM (live network + benchmarks)
@@ -73,7 +73,7 @@ python scripts/finish_evaluation.py --mode offline --episodes 500
 **Live pilot** (paper-grade; Mininet + root):
 
 ```bash
-sudo --preserve-env=XAI_API_KEY python3 scripts/finish_evaluation.py --mode live --episodes 500
+sudo --preserve-env=GROQ_API_KEY python3 scripts/finish_evaluation.py --mode live --episodes 500
 ```
 
 Outputs:
@@ -113,10 +113,11 @@ The model prompt is `SYSTEM_PROMPT` in `agent/decision_agent.py`. It returns one
 
 | Variable | Used by |
 |----------|---------|
-| `XAI_API_KEY` (or `GROK_API_KEY`) | `agent/decision_agent.py`, live pilot when set (default provider) |
-| `LLM_PROVIDER` | `grok` (default), `openrouter`, or `gemini` |
-| `LLM_MODEL` / `LLM_REASONING_EFFORT` | Override model (default `grok-4.3`) / effort (default `none`) |
-| `GROK_LOG=info` | Log each HTTP request, retry and call latency |
+| `GROQ_API_KEY` (`gsk_...`) | `agent/decision_agent.py`, live pilot when set (default provider) |
+| `XAI_API_KEY` | xAI Grok, with `LLM_PROVIDER=grok` |
+| `LLM_PROVIDER` | `groq` (default), `grok`, `openrouter`, or `gemini` |
+| `LLM_MODEL` / `LLM_REASONING_EFFORT` | Override model (Groq default `openai/gpt-oss-120b`) / effort (default `low`) |
+| `GROQ_LOG=info` | Log each HTTP request, retry and call latency |
 
 ## License / release
 

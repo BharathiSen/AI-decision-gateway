@@ -1,7 +1,7 @@
 """
 AI decision agent.
 
-propose_decision() sends an LLM (Grok by default; see PROVIDERS) the current network
+propose_decision() sends an LLM (Groq by default; see PROVIDERS) the current network
 state (telemetry + topology, as returned by
 telemetry.collector.collect_current_state()), the action types the
 agent is allowed to choose from, and policy context, and returns the
@@ -31,12 +31,23 @@ from bench.contracts import TEST_IDS, llm_proposal_schema
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 XAI_BASE_URL = "https://api.x.ai/v1"
+GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 
-DEFAULT_PROVIDER = "grok"
+DEFAULT_PROVIDER = "groq"
 
 # LLM_PROVIDER picks the backend; LLM_MODEL overrides its default model.
 # All speak the OpenAI chat-completions API, so one client serves them all.
+# Note: Groq (groq.com, keys start gsk_) and Grok (xAI, keys start xai-) are
+# different services.
 PROVIDERS = {
+    "groq": {
+        "base_url": GROQ_BASE_URL,
+        "key_env": "GROQ_API_KEY",
+        # gpt-oss supports strict json_schema output on Groq; low effort keeps
+        # it fast. Groq does not accept "none" for this model.
+        "model": "openai/gpt-oss-120b",
+        "reasoning_effort": "low",
+    },
     "grok": {
         "base_url": XAI_BASE_URL,
         "key_env": "XAI_API_KEY",
@@ -64,19 +75,47 @@ REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high")
 
 
 def _clean_api_key(value):
-    """Strip whitespace and a single pair of wrapping quotes from a pasted key."""
+    """Strip whitespace, wrapping quotes, and a pasted export/$env assignment."""
     if not isinstance(value, str):
         return value
     text = value.strip()
     if len(text) >= 2 and text[0] == text[-1] and text[0] in ("'", '"'):
         text = text[1:-1].strip()
+    lowered = text.lower()
+    if lowered.startswith("export ") or lowered.startswith("$env:"):
+        _, _, rest = text.partition("=")
+        text = rest.strip()
+        if len(text) >= 2 and text[0] == text[-1] and text[0] in ("'", '"'):
+            text = text[1:-1].strip()
     return text
 
 
 def _key_mismatch_hint(cfg):
     key = cfg.get("api_key") or ""
-    if cfg.get("provider") != "grok" or not key:
+    provider = cfg.get("provider")
+    if not key:
         return None
+    if provider == "groq":
+        if key.startswith("xai-"):
+            return "GROQ_API_KEY holds an xAI key; for Grok set LLM_PROVIDER=grok and XAI_API_KEY"
+        if key.lower().startswith("export ") or key.lower().startswith("$env:"):
+            return (
+                "GROQ_API_KEY still contains the export/$env assignment. "
+                "In PowerShell set only the secret: $env:GROQ_API_KEY = 'gsk_...'"
+            )
+        if not key.startswith("gsk_"):
+            return (
+                "Groq keys start with gsk_. Create one at https://console.groq.com/keys "
+                "and in PowerShell set $env:GROQ_API_KEY = 'gsk_...'"
+            )
+        return None
+    if provider != "grok":
+        return None
+    if key.startswith("gsk_"):
+        return (
+            "that is a Groq key (gsk_), not an xAI Grok key. Use it with "
+            "LLM_PROVIDER=groq and GROQ_API_KEY=gsk_..."
+        )
     if key.startswith("sk-or-"):
         return (
             "XAI_API_KEY looks like an OpenRouter key; Grok needs a key from "
@@ -95,7 +134,7 @@ def provider_config():
     from the environment. LLM_REASONING_EFFORT overrides the provider default;
     "default" sends nothing and leaves the model's own setting."""
     name = (os.environ.get("LLM_PROVIDER") or DEFAULT_PROVIDER).strip().lower()
-    name = {"xai": "grok"}.get(name, name)
+    name = {"xai": "grok", "groqcloud": "groq"}.get(name, name)
     if name not in PROVIDERS:
         raise ValueError(f"LLM_PROVIDER must be one of {sorted(PROVIDERS)}, got {name!r}")
     cfg = dict(PROVIDERS[name], provider=name)
@@ -127,7 +166,7 @@ def _request_args():
     return args
 
 
-LOG_ENVS = ("GROK_LOG", "GEMINI_LOG", "LLM_LOG")
+LOG_ENVS = ("GROQ_LOG", "GROK_LOG", "GEMINI_LOG", "LLM_LOG")
 
 
 def _log():
@@ -277,7 +316,7 @@ def propose_decision(
         (defaults to DEFAULT_POLICY_CONTEXT).
     target: identifier for the traffic flow this decision concerns.
     client: an openai.OpenAI() instance to reuse; created fresh if
-        omitted from provider_config() (Grok: XAI_API_KEY / GROK_API_KEY).
+        omitted from provider_config() (Groq: GROQ_API_KEY).
 
     Returns a plain dict: {"action", "target", "proposed_path", "reason"}.
     Raises ValueError if the model's chosen action somehow isn't one of
@@ -404,16 +443,15 @@ def _speed_check():
         f"{'set' if cfg['api_key'] else 'missing'}"
     )
     if not cfg["api_key"]:
-        raise SystemExit(f"set {cfg['key_env']} (or GROK_API_KEY) before a speed check")
+        raise SystemExit(f"set {cfg['key_env']} before a speed check (LLM_PROVIDER={cfg['provider']})")
     key = cfg["api_key"]
     print(f"key_len={len(key)} key_prefix={key[:4]!r}")
     hint = _key_mismatch_hint(cfg)
     if hint:
         raise SystemExit(hint)
-    if len(key) < 20 or key in {"xai-...", "xai-xxx", "your-key"}:
+    if len(key) < 20 or key in {"xai-...", "xai-xxx", "gsk_...", "gsk_xxx", "your-key"}:
         raise SystemExit(
-            "that is a placeholder, not a real key. Create one at https://console.x.ai "
-            "and export the full secret: export XAI_API_KEY=xai-<the-rest-of-the-key>"
+            f"that is a placeholder, not a real key. Export the full secret in {cfg['key_env']}"
         )
     snapshot = {
         "timestamp": "2026-01-01T00:00:00+00:00",

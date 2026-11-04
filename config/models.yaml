@@ -1,9 +1,9 @@
 version: 1
 
 agents:
-  - id: grok_4_3
-    provider: grok
-    model: grok-4.3
+  - id: groq_gpt_oss_120b
+    provider: groq
+    model: openai/gpt-oss-120b
     temperature: 0.2
   - id: openrouter_llama
     provider: openrouter
