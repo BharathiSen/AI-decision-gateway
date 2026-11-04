@@ -1108,7 +1108,7 @@ def _self_check():
         None,
         predicted_ok,
         lossy_snap,
-        [],
+        t1_ok,
         mode="full",
         run_missing_tests=False,
         budget_seconds=0.1,
@@ -1119,7 +1119,7 @@ def _self_check():
         None,
         predicted_ok,
         lossy_snap,
-        [],
+        t1_ok,
         mode="pilot_v0",
         run_missing_tests=False,
         budget_seconds=0.1,
@@ -1286,13 +1286,14 @@ def _self_check():
     assert not binding_errors(unsigned, healthy, proposal)
 
     from gate.checks import _prediction_matches, check_consistency
-    from bench.contracts import expected_grade_ok
+    from bench.contracts import expected_grade_ok, prediction_matches
 
     assert _prediction_matches("loss", "loss=15.0")
     assert _prediction_matches("ok", "ok")
     assert not _prediction_matches("ok", "both_ok")
     assert not _prediction_matches("0", "100")
-    assert _prediction_matches("r2\u2011r4=down", "primary:hostA-r1=ok,r2-r4=down")
+    assert _prediction_matches("r2\u2011r4=down", "primary:hostA-r1=ok,r2-r4=down", test_id="T2_hop_ping")
+    assert not _prediction_matches("r2-r4=ok", "primary:hostA-r1=ok,r2-r4=down", test_id="T2_hop_ping")
     assert not _prediction_matches("success", "ok")
     assert not _prediction_matches("timeout / no reply", "down")
     assert expected_grade_ok("T1_e2e_ping", "down")
@@ -1377,6 +1378,225 @@ def _self_check():
     )
     english_gate = gate_decide(None, english_f1, healthy, f1_obs, mode="full", run_missing_tests=False)
     assert english_gate["decision"] == "block" and "invalid proposal" in (english_gate.get("reason") or ""), english_gate
+
+    from bench.contracts import (
+        T2_HOP_OUTCOMES,
+        T2_HOPS_BACKUP,
+        T2_HOPS_PRIMARY,
+        T6_IFACES,
+        parse_t2_prediction,
+        parse_t6_prediction,
+    )
+    from bench.outcomes import HOP_NAMES, grade_result, load_yaml_thresholds
+    from gate.grader import grade_test
+
+    ip_by_hop = {name: ip for ip, name in HOP_NAMES.items()}
+    n0_limits = load_yaml_thresholds("N0")
+
+    def _hop_row(name, outcome="ok"):
+        if outcome == "down":
+            body = {"packet_loss_percent": 100.0}
+        elif outcome == "loss":
+            body = {"packet_loss_percent": 50.0, "latency_ms": 10.0}
+        elif outcome == "delay":
+            body = {"packet_loss_percent": 0.0, "latency_ms": 200.0}
+        else:
+            body = {"packet_loss_percent": 0.0, "latency_ms": 10.0}
+        return {"dst_ip": ip_by_hop[name], **body}
+
+    def _t2_obs(primary_outcomes=None, backup_outcomes=None, include_backup=True):
+        primary_outcomes = primary_outcomes or {}
+        backup_outcomes = backup_outcomes or {}
+        row = {
+            "test_id": "T2_hop_ping",
+            "hops_primary": [_hop_row(name, primary_outcomes.get(name, "ok")) for name in T2_HOPS_PRIMARY],
+        }
+        if include_backup:
+            row["hops_backup"] = [_hop_row(name, backup_outcomes.get(name, "ok")) for name in T2_HOPS_BACKUP]
+        return row
+
+    round_trip_pairs = 0
+    for path, hops in (("primary", T2_HOPS_PRIMARY), ("backup", T2_HOPS_BACKUP)):
+        for hop in hops:
+            for outcome in sorted(T2_HOP_OUTCOMES):
+                observed = _t2_obs(
+                    primary_outcomes={hop: outcome} if path == "primary" else None,
+                    backup_outcomes={hop: outcome} if path == "backup" else None,
+                )
+                graded = grade_result(observed, n0_limits)
+                parsed = parse_t2_prediction(graded)
+                assert parsed["ok"] and parsed["errors"] == [], (path, hop, outcome, parsed, graded)
+                assert parsed["pairs"][(path, hop)] == outcome, (path, hop, outcome, parsed, graded)
+                round_trip_pairs += 1
+    assert round_trip_pairs == 32, round_trip_pairs
+    healthy_t2 = grade_result(_t2_obs(), n0_limits)
+    healthy_parsed = parse_t2_prediction(healthy_t2)
+    assert healthy_parsed["ok"] and len(healthy_parsed["pairs"]) == 8, (healthy_t2, healthy_parsed)
+
+    f1_grade = grade_result(t2_f1, n0_limits)
+    assert prediction_matches("T2_hop_ping", "r2-r4=down", f1_grade)
+    assert prediction_matches("T2_hop_ping", "  r2-r4 = down  ", f1_grade)
+    assert not prediction_matches("T2_hop_ping", "r2 - r4=down", f1_grade)
+    assert prediction_matches("T2_hop_ping", "primary:r2-r4=down", f1_grade)
+    assert not prediction_matches("T2_hop_ping", "r1-r2=down", f1_grade)
+    assert not prediction_matches("T2_hop_ping", "r3-r4=down", f1_grade)
+    assert not prediction_matches("T2_hop_ping", "r2-r4=ok", f1_grade)
+    assert prediction_matches("T2_hop_ping", "primary:hostA-r1=ok", f1_grade)
+    assert not expected_grade_ok("T2_hop_ping", "hostA-r1=ok")
+    assert not expected_grade_ok("T2_hop_ping", "hop=ok")
+    assert not expected_grade_ok("T2_hop_ping", "10.0.24.2=down")
+
+    primary_only_grade = grade_result(_t2_obs(include_backup=False, primary_outcomes={"r2-r4": "down"}), n0_limits)
+    assert "backup:" not in primary_only_grade
+    assert not prediction_matches("T2_hop_ping", "backup:r3-r4=ok", primary_only_grade)
+    assert not prediction_matches("T2_hop_ping", "primary:r2-r4=down;backup:r3-r4=ok", primary_only_grade)
+    missing_backup = check_consistency(
+        {
+            "action": "REROUTE",
+            "target": "HostA_to_HostB",
+            "reason": "backup missing",
+            "proposed_path": ["r1", "r3", "r4"],
+            "causes": [{"cause_id": "F1", "predicted_tests": [{"test_id": "T2_hop_ping", "expected": "backup:r3-r4=ok"}]}],
+        },
+        [_t2_obs(include_backup=False, primary_outcomes={"r2-r4": "down"})],
+    )
+    assert not missing_backup["passed"], missing_backup
+    assert missing_backup["predictions_checked"] == 1
+    assert any("no backup section" in (row.get("reason") or "") for row in missing_backup["mismatches"]), missing_backup
+
+    comma_parsed = parse_t2_prediction("primary:r2-r4=down,backup:r3-r4=ok")
+    assert comma_parsed["ok"] and comma_parsed["delimiter_normalized"] is True
+    assert comma_parsed["original"] == "primary:r2-r4=down,backup:r3-r4=ok"
+    assert ";backup:" in comma_parsed["normalized"]
+    hop_comma = parse_t2_prediction("primary:hostA-r1=ok,r2-r4=down")
+    assert hop_comma["ok"] and hop_comma["delimiter_normalized"] is False
+    assert not parse_t2_prediction("primary:r2-r4=down,not-a-path:r3-r4=ok")["ok"]
+
+    t6_drops = {
+        "test_id": "T6_queue_stats",
+        "queues": {
+            "r1/r1-eth1": {"drops": 4, "backlog_bytes": 0, "backlog_packets": 0},
+            "r2/r2-eth1": {"drops": 2, "backlog_bytes": 9, "backlog_packets": 1},
+        },
+    }
+    t6_grade = grade_result(t6_drops, n0_limits)
+    assert t6_grade.startswith("drops:"), t6_grade
+    assert prediction_matches("T6_queue_stats", "drops:r2/r2-eth1", t6_grade)
+    assert prediction_matches("T6_queue_stats", "drops:r2/r2-eth1|r1/r1-eth1", t6_grade)
+    assert prediction_matches("T6_queue_stats", "drops:r1/r1-eth1|r2/r2-eth1", t6_grade)
+    assert not prediction_matches("T6_queue_stats", "backlog:r2/r2-eth1", t6_grade)
+    assert not expected_grade_ok("T6_queue_stats", "drops:")
+    assert not expected_grade_ok("T6_queue_stats", "drops:r2/r2-eth1|r2/r2-eth1")
+    assert not expected_grade_ok("T6_queue_stats", "drops:r4/r4-eth2")
+    assert "r4/r4-eth2" not in T6_IFACES
+    t6_backlog = {
+        "test_id": "T6_queue_stats",
+        "queues": {"r2/r2-eth1": {"drops": 0, "backlog_bytes": 8, "backlog_packets": 1}},
+    }
+    assert grade_result(t6_backlog, n0_limits) == "backlog:r2/r2-eth1"
+    assert prediction_matches("T6_queue_stats", "backlog:r2/r2-eth1", "backlog:r2/r2-eth1")
+
+    empty_preds = check_consistency(
+        {
+            "action": "REROUTE",
+            "target": "HostA_to_HostB",
+            "reason": "empty preds",
+            "proposed_path": ["r1", "r3", "r4"],
+            "causes": [{"cause_id": "F1", "predicted_tests": []}],
+        },
+        f1_obs,
+    )
+    assert empty_preds["passed"] is False and empty_preds["reason"] == "no checked predictions", empty_preds
+    assert empty_preds["predictions_total"] == empty_preds["predictions_checked"] == 0
+
+    unrun = check_consistency(
+        {
+            "action": "REROUTE",
+            "target": "HostA_to_HostB",
+            "reason": "unrun tests",
+            "proposed_path": ["r1", "r3", "r4"],
+            "causes": [{"cause_id": "F1", "predicted_tests": [
+                {"test_id": "T10_speed", "expected": "slow"},
+                {"test_id": "T5_if_errors", "expected": "clean"},
+            ]}],
+        },
+        f1_obs,
+    )
+    assert unrun["passed"] is False and unrun["reason"] == "no checked predictions", unrun
+    assert unrun["predictions_total"] == 2 and unrun["predictions_checked"] == 0
+    assert unrun["predictions_unchecked"] == 2
+    unrun_gate = gate_decide(
+        None,
+        {
+            "action": "REROUTE",
+            "target": "HostA_to_HostB",
+            "reason": "unrun tests",
+            "proposed_path": ["r1", "r3", "r4"],
+            "causes": [{"cause_id": "F1", "predicted_tests": [{"test_id": "T10_speed", "expected": "slow"}]}],
+        },
+        healthy,
+        f1_obs,
+        mode="full",
+        run_missing_tests=False,
+    )
+    assert unrun_gate["decision"] == "block" and unrun_gate["reason"] == "consistency failed", unrun_gate
+    assert unrun_gate["checks"]["consistency"]["reason"] == "no checked predictions"
+
+    from agent.validate import validate_proposal as _validate_proposal
+
+    dup_ok, dup_errs = _validate_proposal(dict(
+        f1_vocab,
+        causes=[{"cause_id": "F1", "predicted_tests": [
+            {"test_id": "T2_hop_ping", "expected": "r2-r4=down"},
+            {"test_id": "T2_hop_ping", "expected": "r2-r4=ok"},
+        ]}],
+    ))
+    assert not dup_ok and any("duplicate test_id" in err for err in dup_errs), dup_errs
+
+    from bench.run_pilot import prediction_overlap
+
+    overlap_ok, overlap_matched = prediction_overlap(
+        {"causes": [{"cause_id": "F1", "predicted_tests": [{"test_id": "T2_hop_ping", "expected": "r2-r4=down"}]}]},
+        [t2_f1],
+        thresholds=n0_limits,
+    )
+    overlap_wrong, overlap_wrong_matched = prediction_overlap(
+        {"causes": [{"cause_id": "F1", "predicted_tests": [{"test_id": "T2_hop_ping", "expected": "r2-r4=ok"}]}]},
+        [t2_f1],
+        thresholds=n0_limits,
+    )
+    assert overlap_ok == 1 and overlap_matched == 1
+    assert overlap_wrong == 1 and overlap_wrong_matched == 0
+    assert prediction_matches("T2_hop_ping", "r2-r4=down", f1_grade) is True
+    assert grade_test("T2_hop_ping", f1_grade, "r2-r4=down", use_model=False) == 1.0
+    assert grade_test("T2_hop_ping", f1_grade, "r2-r4=ok", use_model=False) == 0.5
+    cons_t2 = check_consistency(
+        {"causes": [{"cause_id": "F1", "predicted_tests": [{"test_id": "T2_hop_ping", "expected": "r2-r4=down"}]}]},
+        [t2_f1],
+    )
+    assert cons_t2["passed"] and cons_t2["predictions_checked"] == 1 and cons_t2["predictions_matched"] == 1
+
+    import tempfile as _tmp
+
+    model_dir = Path(_tmp.mkdtemp())
+    model_path = model_dir / "grader_model.json"
+    model_path.write_text(json.dumps({"T1_e2e_ping|loss": 0.91}), encoding="utf-8")
+    assert grade_test("T1_e2e_ping", "ok", "loss", use_model=True, model_path=model_path) == 0.91
+    assert grade_test("T1_e2e_ping", "ok", "loss", use_model=True, model_path=model_dir / "missing.json") == 0.5
+    assert grade_test("T1_e2e_ping", "loss", "loss", use_model=True, model_path=model_path) == 1.0
+    assert model_path.resolve() != (Path(__file__).resolve().parent.parent / "results" / "grader_model.json").resolve()
+    repo = Path(__file__).resolve().parent.parent
+    caller_sources = {
+        "gate/checks.py": ("from bench.contracts import", "prediction_matches"),
+        "gate/grader.py": ("from bench.contracts import", "prediction_matches"),
+        "agent/validate.py": ("from bench.contracts import", "expected_grade_ok"),
+        "bench/run_pilot.py": ("from bench.contracts import", "prediction_matches"),
+    }
+    for rel, needles in caller_sources.items():
+        text = (repo / rel).read_text(encoding="utf-8")
+        for needle in needles:
+            assert needle in text, (rel, needle)
+        assert "replace(\";\"" not in text and "replace(';'," not in text, rel
 
     t4_fail = [{"test_id": "T4_mtu", "df_ping_ok": False}]
     idle_mtu = gate_decide(None, idle, healthy, t4_fail, mode="full", run_missing_tests=False)

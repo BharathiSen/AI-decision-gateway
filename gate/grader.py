@@ -10,15 +10,16 @@ from pathlib import Path
 _MODEL = Path(__file__).resolve().parent.parent / "results" / "grader_model.json"
 
 
-def grade_test(test_id, observation, predicted_expected, use_model=True):
+def grade_test(test_id, observation, predicted_expected, use_model=True, model_path=None):
     """Return confidence 0..1 that observation supports prediction."""
-    from gate.checks import _prediction_matches
+    from bench.contracts import prediction_matches
 
-    if _prediction_matches(predicted_expected, observation):
+    if prediction_matches(test_id, predicted_expected, observation):
         return 1.0
-    if use_model and _MODEL.exists():
-        data = json.loads(_MODEL.read_text(encoding="utf-8"))
-        key = f"{test_id}|{exp}"
+    path = Path(model_path) if model_path is not None else _MODEL
+    if use_model and path.exists():
+        data = json.loads(path.read_text(encoding="utf-8"))
+        key = f"{test_id}|{(predicted_expected or '').lower()}"
         return float(data.get(key, 0.5))
     return 0.5
 

@@ -283,9 +283,10 @@ def diagnosis_correct(proposal, fault_id):
     return bool(causes) and causes[0] == fault_id
 
 
-def prediction_overlap(proposal, oam_results):
+def prediction_overlap(proposal, oam_results, thresholds=None):
     """(checked, matched) predicted tests that have an observed row."""
-    from gate.checks import _prediction_matches, _summarize_observation
+    from bench.contracts import prediction_matches
+    from gate.checks import _summarize_observation
 
     causes = (proposal or {}).get("causes") or []
     if not causes or not isinstance(causes[0], dict):
@@ -300,11 +301,12 @@ def prediction_overlap(proposal, oam_results):
     for pred in causes[0].get("predicted_tests") or []:
         if not isinstance(pred, dict):
             continue
-        obs = by_id.get(pred.get("test_id"))
+        tid = pred.get("test_id")
+        obs = by_id.get(tid)
         if obs is None:
             continue
         checked += 1
-        if _prediction_matches(pred.get("expected"), _summarize_observation(obs)):
+        if prediction_matches(tid, pred.get("expected"), _summarize_observation(obs, thresholds)):
             matched += 1
     return checked, matched
 
@@ -395,8 +397,13 @@ def record_episode(stats, scenario, proposal, fault_id, gate, baseline, record):
     b_cost = _cost_for_tests((baseline or {}).get("tests_run"))
     pred_checked = pred_matched = 0
     if diagnosis_correct(proposal, fault_id):
+        from bench.outcomes import load_thresholds
+
+        noise_id = (record or {}).get("noise_id") or "N0"
         pred_checked, pred_matched = prediction_overlap(
-            proposal, (record.get("oam") or {}).get("results") or []
+            proposal,
+            (record.get("oam") or {}).get("results") or [],
+            thresholds=load_thresholds(noise_id),
         )
     elapsed = episode_seconds(record)
     recovered = elapsed if record.get("remediation_succeeded") is True else None
@@ -883,6 +890,46 @@ def _self_check():
     assert checked == 2 and matched >= 1, (checked, matched)
     assert diagnosis_correct(proposal, "H0")
     assert not diagnosis_correct(proposal, "F1")
+
+    from bench.outcomes import load_yaml_thresholds
+
+    slow_ping = [{"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0, "latency_ms": 180.0}]
+    ok_pred = {
+        "causes": [{"cause_id": "H0", "predicted_tests": [{"test_id": "T1_e2e_ping", "expected": "ok"}]}]
+    }
+    n0_limits = load_yaml_thresholds("N0")
+    n2_limits = load_yaml_thresholds("N2")
+    assert n0_limits["T1_e2e_ping"]["max_latency_ms"] < 180.0 < n2_limits["T1_e2e_ping"]["max_latency_ms"]
+    n0_checked, n0_matched = prediction_overlap(ok_pred, slow_ping, thresholds=n0_limits)
+    n2_checked, n2_matched = prediction_overlap(ok_pred, slow_ping, thresholds=n2_limits)
+    assert n0_checked == 1 and n0_matched == 0, (n0_checked, n0_matched)
+    assert n2_checked == 1 and n2_matched == 1, (n2_checked, n2_matched)
+    t2_pred = {
+        "causes": [{"cause_id": "F1", "predicted_tests": [{"test_id": "T2_hop_ping", "expected": "r2-r4=down"}]}]
+    }
+    t2_obs = [{
+        "test_id": "T2_hop_ping",
+        "hops_primary": [
+            {"dst_ip": "10.0.1.1", "packet_loss_percent": 0.0},
+            {"dst_ip": "10.0.12.2", "packet_loss_percent": 0.0},
+            {"dst_ip": "10.0.24.2", "packet_loss_percent": 100.0},
+            {"dst_ip": "10.0.4.2", "packet_loss_percent": 0.0},
+        ],
+        "hops_backup": [
+            {"dst_ip": "10.0.1.1", "packet_loss_percent": 0.0},
+            {"dst_ip": "10.0.13.2", "packet_loss_percent": 0.0},
+            {"dst_ip": "10.0.34.2", "packet_loss_percent": 0.0},
+            {"dst_ip": "10.0.4.2", "packet_loss_percent": 0.0},
+        ],
+    }]
+    t2_checked, t2_matched = prediction_overlap(t2_pred, t2_obs, thresholds=n0_limits)
+    t2_wrong_checked, t2_wrong_matched = prediction_overlap(
+        {"causes": [{"cause_id": "F1", "predicted_tests": [{"test_id": "T2_hop_ping", "expected": "r2-r4=ok"}]}]},
+        t2_obs,
+        thresholds=n0_limits,
+    )
+    assert t2_checked == 1 and t2_matched == 1, (t2_checked, t2_matched)
+    assert t2_wrong_checked == 1 and t2_wrong_matched == 0, (t2_wrong_checked, t2_wrong_matched)
 
     now = datetime.now(timezone.utc)
     record = {

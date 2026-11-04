@@ -296,12 +296,15 @@ labels, link names, or compound ids. For each cause, predict how named \
 OAM tests from oam_test_catalog would read if that cause were true. \
 expected must be exactly a grade token from oam_grade_vocabulary for \
 that test_id (T1: ok, down, loss, latency, loss+latency; T4: df_ok or \
-mtu_fail; T5: clean or errors:iface; T6: clear, drops:iface, or \
-backlog:iface; T7: primary, backup, blackhole, return_mismatch, none; \
+mtu_fail; T5: clean or errors:iface; T6: clear, drops:r2/r2-eth1, or \
+backlog:r2/r2-eth1; T7: primary, backup, blackhole, return_mismatch, none; \
 T8: both_ok, ping_ok_tcp_fail, ping_fail_tcp_ok, both_fail; T9: \
 symmetric, a2b_loss, b2a_loss; T10: ok or slow). For T2_hop_ping use \
-hop=ok|down|loss|delay or primary:...;backup:... hop assignments. \
-Do not paraphrase (not success, fail, timeout, no errors, or \
+real hop names (hostA-r1, r1-r2, r2-r4, r4-hostB, r1-r3, r3-r4) with \
+outcomes ok|down|loss|delay. Separate primary and backup with a \
+semicolon: primary:hostA-r1=ok,r2-r4=down;backup:r3-r4=ok. Shared hops \
+hostA-r1 and r4-hostB need a path prefix. Do not write hop= as a \
+placeholder. Do not paraphrase (not success, fail, timeout, no errors, or \
 packet loss 100%). You still do not execute anything or choose which \
 tests the gate runs."""
 

@@ -119,11 +119,16 @@ def validate_proposal(data, allowed_actions=None, max_causes=5, max_bytes=MAX_PR
             if not isinstance(preds, list):
                 errors.append(f"causes[{i}].predicted_tests must be array")
                 continue
+            seen_tids = []
             for j, pred in enumerate(preds):
                 if not isinstance(pred, dict):
                     errors.append(f"causes[{i}].predicted_tests[{j}] must be object")
                     continue
                 tid = pred.get("test_id")
+                if tid in seen_tids:
+                    errors.append(f"causes[{i}] duplicate test_id {tid!r}")
+                elif tid in ALLOWED_TESTS:
+                    seen_tids.append(tid)
                 if tid not in ALLOWED_TESTS:
                     errors.append(f"unknown test_id {tid!r}")
                 expected = pred.get("expected")

@@ -17,7 +17,13 @@ from agent.validate import (
     validate_proposal,
 )
 from agent.decision_agent import _canonical_target
-from bench.contracts import TEST_IDS, expected_grade_ok, llm_proposal_schema
+from bench.contracts import (
+    TEST_IDS,
+    expected_grade_ok,
+    llm_proposal_schema,
+    parse_t2_prediction,
+    parse_t6_prediction,
+)
 
 
 def good_proposal():
@@ -175,6 +181,42 @@ def main():
     check("T2 atomic down rejected", not expected_grade_ok("T2_hop_ping", "down"))
     hyphen = "r2\u2011r4=down"
     check("T2 unicode hyphen normalized", expected_grade_ok("T2_hop_ping", hyphen))
+    check("T2 whitespace around hop and outcome accepted", expected_grade_ok("T2_hop_ping", "  r2-r4 = down  "))
+    check(
+        "T2 whitespace around path delimiters accepted",
+        expected_grade_ok("T2_hop_ping", " primary : r2-r4 = down ; backup : r3-r4 = ok "),
+    )
+    check("T2 interior hop whitespace rejected", not expected_grade_ok("T2_hop_ping", "r2 - r4=down"))
+    check("T2 placeholder hop= rejected", not expected_grade_ok("T2_hop_ping", "hop=ok"))
+    check("T2 IP address hop rejected", not expected_grade_ok("T2_hop_ping", "10.0.24.2=down"))
+    check("T2 unknown hop rejected", not expected_grade_ok("T2_hop_ping", "r9-r9=down"))
+    check("T2 shared hop without prefix rejected", not expected_grade_ok("T2_hop_ping", "hostA-r1=ok"))
+    check("T2 mixed-case topology name accepted", expected_grade_ok("T2_hop_ping", "primary:HOSTA-R1=ok"))
+    comma = parse_t2_prediction("primary:r2-r4=down,backup:r3-r4=ok")
+    check("T2 comma path transition normalized", comma["ok"] and comma["delimiter_normalized"])
+    hop_comma = parse_t2_prediction("primary:hostA-r1=ok,r2-r4=down")
+    check("T2 hop comma is not a path rewrite", hop_comma["ok"] and not hop_comma["delimiter_normalized"])
+    check("T6 whitespace around iface accepted", expected_grade_ok("T6_queue_stats", " drops : r2/r2-eth1 "))
+    check("T6 empty drops list rejected", not expected_grade_ok("T6_queue_stats", "drops:"))
+    check("T6 empty backlog list rejected", not expected_grade_ok("T6_queue_stats", "backlog:"))
+    check("T6 duplicate iface rejected", not expected_grade_ok("T6_queue_stats", "drops:r2/r2-eth1|r2/r2-eth1"))
+    check("T6 r4 iface rejected", not expected_grade_ok("T6_queue_stats", "drops:r4/r4-eth2"))
+    check("T6 bare iface rejected", not expected_grade_ok("T6_queue_stats", "drops:r2-eth1"))
+    check("T6 mixed-case iface accepted", expected_grade_ok("T6_queue_stats", "drops:R2/R2-ETH1"))
+    ordered = parse_t6_prediction("drops:r2/r2-eth1|r1/r1-eth1")
+    reversed_ifaces = parse_t6_prediction("drops:r1/r1-eth1|r2/r2-eth1")
+    check(
+        "T6 iface order does not change the parsed set",
+        ordered["ok"] and ordered["ifaces"] == reversed_ifaces["ifaces"],
+    )
+
+    dup_ids = copy.deepcopy(good)
+    dup_ids["causes"][0]["predicted_tests"] = [
+        {"test_id": "T1_e2e_ping", "expected": "loss"},
+        {"test_id": "T1_e2e_ping", "expected": "down"},
+    ]
+    ok, errs = validate_proposal(dup_ids)
+    check("duplicate test_id rejected", not ok and any("duplicate test_id" in err for err in errs), errs)
     nbsp = copy.deepcopy(good)
     nbsp["causes"][0]["predicted_tests"][0]["expected"] = "ok"
     ok, errs = validate_proposal(nbsp)

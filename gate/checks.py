@@ -18,28 +18,108 @@ def check_consistency(proposal, test_results, primary_cause_id=None, thresholds=
     Compare observed tests to predictions on the AI's primary cause
     (first cause if not specified). thresholds are the episode's noise
     level limits; None grades at N0.
+
+    passed is False when zero predictions were compared with observations
+    (empty predicted_tests, or only tests that were not run).
     """
+    from bench.contracts import parse_t2_prediction, parse_t6_prediction, prediction_matches
+
     causes = proposal.get("causes") or []
     if not causes:
-        return {"passed": False, "reason": "no causes to check"}
+        return {
+            "passed": False,
+            "reason": "no causes to check",
+            "mismatches": [],
+            "checked_cause": None,
+            "predictions_total": 0,
+            "predictions_checked": 0,
+            "predictions_unchecked": 0,
+            "predictions_matched": 0,
+            "predictions_mismatched": 0,
+            "predictions": [],
+        }
     cid = primary_cause_id or causes[0].get("cause_id")
     cause = next((c for c in causes if c.get("cause_id") == cid), causes[0])
-    preds = {p["test_id"]: p["expected"] for p in cause.get("predicted_tests", [])}
-    by_id = {r["test_id"]: r for r in test_results}
+    raw_preds = [p for p in (cause.get("predicted_tests") or []) if isinstance(p, dict)]
+    by_id = {r["test_id"]: r for r in test_results if isinstance(r, dict) and r.get("test_id")}
 
+    seen_ids = []
+    rows = []
     mismatches = []
-    for tid, expected in preds.items():
+    checked = matched = mismatched = unchecked = 0
+    for pred in raw_preds:
+        tid = pred.get("test_id")
+        expected = pred.get("expected")
+        record = {
+            "test_id": tid,
+            "original": expected,
+            "normalized": expected,
+            "delimiter_normalized": False,
+            "status": "unchecked",
+            "observed": None,
+            "reason": None,
+        }
+        if tid == "T2_hop_ping":
+            parsed = parse_t2_prediction(expected)
+            record["normalized"] = parsed.get("normalized")
+            record["delimiter_normalized"] = bool(parsed.get("delimiter_normalized"))
+        elif tid == "T6_queue_stats":
+            parsed = parse_t6_prediction(expected)
+            record["normalized"] = parsed.get("normalized")
+        if tid in seen_ids:
+            record["status"] = "mismatched"
+            record["reason"] = f"duplicate test_id {tid!r}"
+            mismatched += 1
+            checked += 1
+            mismatches.append(record)
+            rows.append(record)
+            continue
+        seen_ids.append(tid)
         obs = by_id.get(tid)
         if obs is None:
+            record["reason"] = "test was not executed"
+            unchecked += 1
+            rows.append(record)
             continue
         obs_str = _summarize_observation(obs, thresholds)
-        if not _prediction_matches(expected, obs_str):
-            mismatches.append({"test_id": tid, "expected": expected, "observed": obs_str})
+        record["observed"] = obs_str
+        checked += 1
+        if prediction_matches(tid, expected, obs_str):
+            record["status"] = "matched"
+            matched += 1
+        else:
+            record["status"] = "mismatched"
+            mismatched += 1
+            if tid == "T2_hop_ping":
+                pred_parse = parse_t2_prediction(expected)
+                obs_parse = parse_t2_prediction(obs_str)
+                if "backup" in pred_parse.get("paths", ()) and "backup" not in obs_parse.get("paths", ()):
+                    record["reason"] = "observed T2 has no backup section"
+                else:
+                    record["reason"] = "hop/outcome mismatch"
+            else:
+                record["reason"] = "prediction mismatch"
+            mismatches.append(record)
+        rows.append(record)
 
+    total = len(raw_preds)
+    if checked == 0:
+        reason = "no checked predictions"
+        passed = False
+    else:
+        passed = mismatched == 0
+        reason = None if passed else "consistency failed"
     return {
-        "passed": len(mismatches) == 0,
+        "passed": passed,
+        "reason": reason,
         "mismatches": mismatches,
         "checked_cause": cause.get("cause_id"),
+        "predictions_total": total,
+        "predictions_checked": checked,
+        "predictions_unchecked": unchecked,
+        "predictions_matched": matched,
+        "predictions_mismatched": mismatched,
+        "predictions": rows,
     }
 
 
@@ -49,31 +129,13 @@ def _summarize_observation(obs, thresholds=None):
     return grade_result(obs, thresholds)
 
 
-def _prediction_tokens(text):
-    cleaned = (text or "").lower().replace(";", " ").replace(",", " ").replace("=", " ")
-    return [token for token in cleaned.split() if token]
+def _prediction_matches(expected, observed, test_id=None):
+    """Delegate to the shared contracts matcher. Prefer passing test_id."""
+    from bench.contracts import prediction_matches, scalar_prediction_matches
 
-
-def _prediction_matches(expected, observed):
-    """True when the predicted grade matches the observed grade as whole tokens.
-
-    Substring search is not used: 'ok' must not match 'both_ok', and a lone
-    '0' must not match '100'. Unicode dashes/spaces are folded first; English
-    paraphrases are not mapped to grade tokens.
-    """
-    from bench.contracts import normalize_prediction_text
-
-    exp = normalize_prediction_text(expected).lower()
-    obs = normalize_prediction_text(observed).lower()
-    if not exp or not obs:
-        return False
-    if exp == obs:
-        return True
-    if obs.startswith(exp + "=") or exp.startswith(obs + "="):
-        return True
-    wanted = _prediction_tokens(exp)
-    got = _prediction_tokens(obs)
-    return bool(wanted) and all(token in got for token in wanted)
+    if test_id:
+        return prediction_matches(test_id, expected, observed)
+    return scalar_prediction_matches(expected, observed)
 
 
 def check_discrimination(ruled_out_alternatives):

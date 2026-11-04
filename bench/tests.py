@@ -25,9 +25,11 @@ except ImportError:
     from mininet_util import run_in_node
 
 try:
+    from bench.contracts import T6_QUEUE_NODES
     from bench.outcomes import grade_result, is_degraded, load_thresholds as _load_thresholds
     from bench.outcomes import parse_qdisc_stats
 except ImportError:
+    from contracts import T6_QUEUE_NODES
     from outcomes import grade_result, is_degraded, load_thresholds as _load_thresholds
     from outcomes import parse_qdisc_stats
 
@@ -257,9 +259,10 @@ def T5_if_errors(net, probe_count=0):
 
 
 def T6_queue_stats(net):
+    """Queue stats for r1/r2/r3 only. r4 is not measured."""
     t0 = time.monotonic()
     queues = {}
-    for name in ("r1", "r2", "r3"):
+    for name in T6_QUEUE_NODES:
         node = net.get(name)
         intfs = [intf.name for intf in node.intfList() if intf.name != "lo"]
         if not intfs:
@@ -734,6 +737,8 @@ def evaluate_against_thresholds(test_results, noise_id="N0"):
 
 def _check_costs():
     """Accounting only. Does not start Mininet."""
+    assert T6_QUEUE_NODES == ("r1", "r2", "r3")
+    assert "r4" not in T6_QUEUE_NODES
     ping = {
         "test_id": "T1_e2e_ping",
         "duration_seconds": 1.5,
