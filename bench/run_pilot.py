@@ -3,8 +3,8 @@ Phase 9 / Stage 13 pilot: ~500 resumable episodes, gate v0 vs B5.
 
 Main live run (real LLM, Mininet VM):
 
-    export XAI_API_KEY=...          # Grok is the default provider
-    sudo --preserve-env=XAI_API_KEY python3 bench/run_pilot.py \\
+    export XAI_API_KEY=...          # or GROK_API_KEY; Grok is the default provider
+    sudo --preserve-env=XAI_API_KEY,GROK_API_KEY python3 bench/run_pilot.py \\
         --episodes 500 --require-model --resume --save-episodes
 
 Smoke (stub, two episodes):
@@ -738,7 +738,7 @@ def _self_check():
             os.environ.pop(name, None)
         grok = _provider()
         assert grok["provider"] == "grok" and grok["key_env"] == "XAI_API_KEY", grok
-        assert grok["base_url"] == "https://api.x.ai/v1" and grok["reasoning_effort"] is None, grok
+        assert grok["base_url"] == "https://api.x.ai/v1" and grok["reasoning_effort"] == "none", grok
         os.environ["LLM_PROVIDER"] = "xai"
         assert _provider()["provider"] == "grok"
         os.environ["LLM_PROVIDER"] = "gemini"

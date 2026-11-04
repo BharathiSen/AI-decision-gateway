@@ -37,9 +37,10 @@ PROVIDERS = {
     "grok": {
         "base_url": XAI_BASE_URL,
         "key_env": "XAI_API_KEY",
-        # The fast non-reasoning variant: the proposal must reach the gate
-        # inside the 120 s freshness window, after ~55 s of telemetry + OAM.
-        "model": "grok-4-fast-non-reasoning",
+        # grok-4-fast-non-reasoning retired 2026-05-15 and now redirects here.
+        # none-effort keeps the proposal inside the 120 s freshness window.
+        "model": "grok-4.3",
+        "reasoning_effort": "none",
     },
     "openrouter": {
         "base_url": OPENROUTER_BASE_URL,
@@ -80,6 +81,10 @@ def provider_config():
             )
         cfg["reasoning_effort"] = effort
     cfg["api_key"] = os.environ.get(cfg["key_env"])
+    if not cfg["api_key"] and name == "grok":
+        cfg["api_key"] = os.environ.get("GROK_API_KEY")
+        if cfg["api_key"]:
+            cfg["key_env"] = "GROK_API_KEY"
     return cfg
 
 
@@ -359,3 +364,43 @@ def propose_with_predictions(
         raise ValueError(f"invalid agent output: {errors}")
     decision["_cost"] = _model_cost(response, started)
     return decision
+
+
+def _speed_check():
+    """One live propose_with_predictions call. Prints provider and latency."""
+    cfg = provider_config()
+    print(
+        f"provider={cfg['provider']} model={cfg['model']} "
+        f"effort={cfg['reasoning_effort']} {cfg['key_env']}="
+        f"{'set' if cfg['api_key'] else 'missing'}"
+    )
+    if not cfg["api_key"]:
+        raise SystemExit(f"set {cfg['key_env']} (or GROK_API_KEY) before a speed check")
+    snapshot = {
+        "timestamp": "2026-01-01T00:00:00+00:00",
+        "metrics": {
+            "packet_loss_percent": 0.0,
+            "connectivity": True,
+            "active_path": "primary",
+            "latency_ms": 50.0,
+        },
+        "nodes": [],
+        "links": [],
+        "routes": [],
+    }
+    decision = propose_with_predictions(snapshot)
+    cost = decision.get("_cost") or {}
+    print(
+        f"latency_seconds={cost.get('latency_seconds')} "
+        f"prompt_tokens={cost.get('prompt_tokens')} "
+        f"completion_tokens={cost.get('completion_tokens')}"
+    )
+    print(
+        f"action={decision.get('action')} "
+        f"causes={[c.get('cause_id') for c in decision.get('causes') or []]}"
+    )
+
+
+if __name__ == "__main__":
+    _speed_check()
+
