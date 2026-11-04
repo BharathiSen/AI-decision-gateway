@@ -1381,6 +1381,29 @@ def _self_check():
     t4_fail = [{"test_id": "T4_mtu", "df_ping_ok": False}]
     idle_mtu = gate_decide(None, idle, healthy, t4_fail, mode="full", run_missing_tests=False)
     assert idle_mtu["decision"] != "allow", idle_mtu
+    f12_snap = _snapshot(backup_up=False, active_path="primary")
+    f12_snap["metrics"] = {"active_path": "primary", "packet_loss_percent": 0.0, "connectivity": True}
+    t2_backup_down = {
+        "test_id": "T2_hop_ping",
+        "hops_primary": [
+            {"dst_ip": "10.0.1.1", "packet_loss_percent": 0.0},
+            {"dst_ip": "10.0.12.2", "packet_loss_percent": 0.0},
+            {"dst_ip": "10.0.24.2", "packet_loss_percent": 0.0},
+            {"dst_ip": "10.0.4.2", "packet_loss_percent": 0.0},
+        ],
+        "hops_backup": [
+            {"dst_ip": "10.0.1.1", "packet_loss_percent": 0.0},
+            {"dst_ip": "10.0.13.2", "packet_loss_percent": 0.0},
+            {"dst_ip": "10.0.34.2", "packet_loss_percent": 100.0},
+            {"dst_ip": "10.0.4.2", "packet_loss_percent": 0.0},
+        ],
+    }
+    idle_f12 = gate_decide(None, idle, f12_snap, t1_ok + [t2_backup_down], mode="full", run_missing_tests=False)
+    assert idle_f12["decision"] == "allow" and idle_f12["reason"] == "healthy no-op", idle_f12
+    f12_reroute = gate_decide(
+        None, _cause_proposal("REROUTE", "F12"), f12_snap, t1_ok + [t2_backup_down], mode="full", run_missing_tests=False
+    )
+    assert f12_reroute["decision"] == "block" and f12_reroute["reason"] == "safety failed", f12_reroute
 
     calls.clear()
     unbound_allow = apply_authorized_action(

@@ -38,6 +38,16 @@ COSTS = yaml.safe_load((ROOT / "config" / "costs.yaml").read_text(encoding="utf-
 OUT = ROOT / "results" / "pilot"
 DEFAULT_OUT = OUT / "summary.json"
 SMOKE_OUT = OUT / "smoke.json"
+PROTECTED_OUT = frozenset(
+    {
+        DEFAULT_OUT,
+        OUT / "groq_small.json",
+        OUT / "groq_small_v2.json",
+        OUT / "groq_small_v3.json",
+        OUT / "groq_small_v3b.json",
+        OUT / "groq_small_v3b_manifest.json",
+    }
+)
 STATE_NAME = "_pilot_state.json"
 TARGET_EPISODES = 500
 HEALTHY_SHARE = 0.30
@@ -487,6 +497,15 @@ def _write_json(path, payload):
     tmp.replace(path)
 
 
+def refuse_protected_out(out_path):
+    """Fail closed instead of overwriting frozen or prior live summaries."""
+    target = Path(out_path).resolve()
+    for frozen in PROTECTED_OUT:
+        if target == frozen.resolve():
+            raise ValueError(f"refusing to overwrite preserved pilot artifact {frozen}")
+    return Path(out_path)
+
+
 def _state_path(out_path):
     return Path(out_path).parent / STATE_NAME
 
@@ -549,7 +568,11 @@ def run_loop(args, net, links):
         agent = "stub"
         print("agent: local stub (no API key for LLM_PROVIDER, or --stub)", flush=True)
 
-    out_path = Path(args.out)
+    try:
+        out_path = refuse_protected_out(args.out)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     state = load_state(out_path) if args.resume else None
     if state and state.get("seed") == args.seed and state.get("agent") == agent:
         start = int(state.get("completed") or 0)
@@ -999,6 +1022,17 @@ def _self_check():
 
     after = summary.read_bytes() if summary.exists() else None
     assert before == after, "self-check must not write results/pilot/summary.json"
+    try:
+        refuse_protected_out(DEFAULT_OUT)
+        raise AssertionError("frozen summary.json was writable")
+    except ValueError:
+        pass
+    try:
+        refuse_protected_out(OUT / "groq_small_v3b.json")
+        raise AssertionError("run 2 summary was writable")
+    except ValueError:
+        pass
+    refuse_protected_out(Path(tempfile.gettempdir()) / "groq_small_v4.json")
     print("pilot self-check: PASS")
     return 0
 
