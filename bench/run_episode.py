@@ -2103,8 +2103,9 @@ def live_safety():
             "proposed_path": ["r1", "r2", "r4"],
         }
         allowed = gate_decide(net, nothing, snap, [], mode="full", run_missing_tests=False, noise_id="N0")
+        bound_nothing = bind_gate_decision(allowed, approved, nothing, [])
         executed.clear()
-        nothing_exec = apply_authorized_action(allowed, nothing, controller, approved, read)
+        nothing_exec = apply_authorized_action(bound_nothing, nothing, controller, approved, read)
         expect(
             "gate allow and network outcome agree for do_nothing",
             allowed.get("decision") == "allow"
