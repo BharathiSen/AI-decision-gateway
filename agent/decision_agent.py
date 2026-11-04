@@ -27,10 +27,20 @@ from bench.contracts import TEST_IDS, llm_proposal_schema
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+XAI_BASE_URL = "https://api.x.ai/v1"
+
+DEFAULT_PROVIDER = "grok"
 
 # LLM_PROVIDER picks the backend; LLM_MODEL overrides its default model.
-# Both speak the OpenAI chat-completions API, so one client serves both.
+# All speak the OpenAI chat-completions API, so one client serves them all.
 PROVIDERS = {
+    "grok": {
+        "base_url": XAI_BASE_URL,
+        "key_env": "XAI_API_KEY",
+        # The fast non-reasoning variant: the proposal must reach the gate
+        # inside the 120 s freshness window, after ~55 s of telemetry + OAM.
+        "model": "grok-4-fast-non-reasoning",
+    },
     "openrouter": {
         "base_url": OPENROUTER_BASE_URL,
         "key_env": "OPENROUTER_API_KEY",
@@ -53,7 +63,8 @@ def provider_config():
     """{"provider", "base_url", "key_env", "api_key", "model", "reasoning_effort"}
     from the environment. LLM_REASONING_EFFORT overrides the provider default;
     "default" sends nothing and leaves the model's own setting."""
-    name = (os.environ.get("LLM_PROVIDER") or "openrouter").strip().lower()
+    name = (os.environ.get("LLM_PROVIDER") or DEFAULT_PROVIDER).strip().lower()
+    name = {"xai": "grok"}.get(name, name)
     if name not in PROVIDERS:
         raise ValueError(f"LLM_PROVIDER must be one of {sorted(PROVIDERS)}, got {name!r}")
     cfg = dict(PROVIDERS[name], provider=name)
@@ -81,20 +92,28 @@ def _request_args():
     return args
 
 
-LOG = logging.getLogger("gemini")
+LOG_ENVS = ("GROK_LOG", "GEMINI_LOG", "LLM_LOG")
+
+
+def _log():
+    # Named after the active provider, e.g. "[12:00:00 grok] model call took ...".
+    try:
+        return logging.getLogger(provider_config()["provider"])
+    except ValueError:
+        return logging.getLogger("llm")
 
 
 def _setup_logging():
-    """GEMINI_LOG=info shows each HTTP request, retry wait and call latency;
-    GEMINI_LOG=debug adds full request/response detail. Unset: silent."""
-    level = (os.environ.get("GEMINI_LOG") or "").strip().lower()
+    """GROK_LOG=info (or GEMINI_LOG / LLM_LOG) shows each HTTP request, retry
+    wait and call latency; =debug adds full request/response detail. Unset: silent."""
+    level = next((os.environ[n].strip().lower() for n in LOG_ENVS if os.environ.get(n)), "")
     if level not in ("info", "debug"):
         return
     if not logging.getLogger().handlers:
         logging.basicConfig(format="  [%(asctime)s %(name)s] %(message)s", datefmt="%H:%M:%S")
     value = logging.DEBUG if level == "debug" else logging.INFO
-    # The HTTP client libraries log the requests and retries; "gemini" logs our timings.
-    for name in ("gemini", "openai", "httpx"):
+    # The HTTP client libraries log the requests and retries; the provider logger logs our timings.
+    for name in tuple(PROVIDERS) + ("llm", "openai", "httpx"):
         logging.getLogger(name).setLevel(value)
 
 
@@ -132,7 +151,7 @@ def _model_cost(response, started):
         reasoning = details.get("reasoning_tokens") if isinstance(details, dict) else getattr(
             details, "reasoning_tokens", None
         )
-    LOG.info(
+    _log().info(
         "model call took %.1fs (prompt_tokens=%s, completion_tokens=%s, thinking_tokens=%s)",
         cost["latency_seconds"],
         cost["prompt_tokens"],

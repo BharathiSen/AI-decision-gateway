@@ -3,8 +3,8 @@ Phase 9 / Stage 13 pilot: ~500 resumable episodes, gate v0 vs B5.
 
 Main live run (real LLM, Mininet VM):
 
-    export LLM_PROVIDER=gemini GEMINI_API_KEY=...
-    sudo --preserve-env=LLM_PROVIDER,GEMINI_API_KEY python3 bench/run_pilot.py \\
+    export XAI_API_KEY=...          # Grok is the default provider
+    sudo --preserve-env=XAI_API_KEY python3 bench/run_pilot.py \\
         --episodes 500 --require-model --resume --save-episodes
 
 Smoke (stub, two episodes):
@@ -205,6 +205,10 @@ _FATAL_AGENT_ERRORS = (
     "Error code: 402",
     "Error code: 403",
     "Error code: 404",
+    # xAI answers a bad key with 400 rather than 401.
+    "Incorrect API key",
+    "API key not valid",
+    "API_KEY_INVALID",
     "Error code: 429",
 )
 
@@ -721,11 +725,22 @@ def _self_check():
     assert fatal_agent_error("AuthenticationError: Error code: 401 - missing")
     assert fatal_agent_error("APIStatusError: Error code: 402 - more credits")
     assert fatal_agent_error("RateLimitError: Error code: 429 - quota")
+    assert fatal_agent_error(
+        "BadRequestError: Error code: 400 - {'code': 'invalid-argument', 'error': 'Incorrect API key provided.'}"
+    )
+    assert not fatal_agent_error("BadRequestError: Error code: 400 - invalid schema")
     assert not fatal_agent_error("ValueError: invalid agent output: bad action")
     assert not fatal_agent_error(None)
 
     saved = {name: os.environ.get(name) for name in ("LLM_PROVIDER", "LLM_MODEL", "LLM_REASONING_EFFORT")}
     try:
+        for name in saved:
+            os.environ.pop(name, None)
+        grok = _provider()
+        assert grok["provider"] == "grok" and grok["key_env"] == "XAI_API_KEY", grok
+        assert grok["base_url"] == "https://api.x.ai/v1" and grok["reasoning_effort"] is None, grok
+        os.environ["LLM_PROVIDER"] = "xai"
+        assert _provider()["provider"] == "grok"
         os.environ["LLM_PROVIDER"] = "gemini"
         os.environ.pop("LLM_MODEL", None)
         cfg = _provider()
