@@ -7,9 +7,9 @@ fault that the snapshot symptoms make plausible and that needs a different fix.
 
 from gate import selector
 from gate.catalog import plausible_alternatives
-from gate.checks import check_safety
+from gate.checks import check_safety, noop_justified
 from gate.decide import _symptoms_from_snapshot
-from control.actions import normalize_action, RISKY_ACTIONS
+from control.actions import Action, normalize_action, RISKY_ACTIONS
 from bench import tests as oam
 
 
@@ -28,8 +28,12 @@ def decide_b5(net, proposal, snapshot, test_results, run_tests=True):
         }
     record = {"method": "B5", "action": action.value, "tests_run": list(ran)}
 
+    if action == Action.DO_NOTHING:
+        if noop_justified(snapshot, tests_run):
+            return {**record, "decision": "allow", "reason": "healthy no-op"}
+        return {**record, "decision": "escalate", "reason": "no-op not justified"}
     if action not in RISKY_ACTIONS:
-        return {**record, "decision": "allow", "reason": "pass-through"}
+        return {**record, "decision": "escalate", "reason": "non-risky not auto-allowed"}
 
     causes = [c.get("cause_id") for c in (proposal or {}).get("causes") or [] if c.get("cause_id")]
     if not causes:

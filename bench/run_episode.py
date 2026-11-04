@@ -1127,6 +1127,22 @@ def _self_check():
     assert v0_same["decision"] == "allow", v0_same
     assert tight["decision"] != "allow"
 
+    idle = _cause_proposal("DO_NOTHING", "H0")
+    idle_ok = gate_decide(None, idle, healthy, t1_ok, mode="full", run_missing_tests=False)
+    assert idle_ok["decision"] == "allow" and idle_ok["reason"] == "healthy no-op", idle_ok
+    t1_loss = [{"test_id": "T1_e2e_ping", "packet_loss_percent": 30.0, "latency_ms": 40.0}]
+    idle_loss = gate_decide(None, idle, lossy_snap, t1_loss, mode="full", run_missing_tests=False)
+    assert idle_loss["decision"] != "allow", idle_loss
+    t8_acl = [{"test_id": "T8_tcp_vs_ping", "ping_ok": True, "tcp_ok": False}]
+    idle_acl = gate_decide(None, idle, healthy, t8_acl, mode="full", run_missing_tests=False)
+    assert idle_acl["decision"] != "allow", idle_acl
+    idle_snap_loss = gate_decide(None, idle, lossy_snap, [], mode="full", run_missing_tests=False)
+    assert idle_snap_loss["decision"] != "allow", idle_snap_loss
+    h0_snap = _snapshot()
+    h0_snap["metrics"] = {"active_path": "primary", "packet_loss_percent": 0.0, "connectivity": True}
+    idle_empty = gate_decide(None, idle, h0_snap, [], mode="full", run_missing_tests=False)
+    assert idle_empty["decision"] == "allow" and idle_empty["reason"] == "healthy no-op", idle_empty
+
     oam._check_costs()
     priced = {
         "action": "DO_NOTHING",

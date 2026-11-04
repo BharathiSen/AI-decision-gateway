@@ -118,6 +118,36 @@ def path_links_up(snapshot, choice):
     return not down, down
 
 
+# Traffic tests that can justify a no-op. T2 backup-down and T10 speed-floor
+# must not veto DO_NOTHING when end-to-end ICMP/TCP/MTU still work (F12, H0).
+NOOP_EVIDENCE_TESTS = ("T1_e2e_ping", "T4_mtu", "T8_tcp_vs_ping")
+
+
+def noop_justified(snapshot, test_results, thresholds=None):
+    """True when leaving the network unchanged is supported by evidence."""
+    from bench.outcomes import grade_result, is_degraded, load_thresholds
+
+    thresholds = thresholds or load_thresholds("N0")
+    seen = False
+    for row in test_results or []:
+        tid = row.get("test_id")
+        if tid not in NOOP_EVIDENCE_TESTS:
+            continue
+        seen = True
+        if is_degraded(tid, grade_result(row, thresholds), thresholds):
+            return False
+    if seen:
+        return True
+    metrics = (snapshot or {}).get("metrics") or {}
+    if metrics.get("connectivity") is False:
+        return False
+    loss = metrics.get("packet_loss_percent")
+    if loss is None:
+        return False
+    max_loss = (thresholds.get("T1_e2e_ping") or {}).get("max_loss_percent", 5.0)
+    return loss <= max_loss
+
+
 def check_safety(proposal, network_snapshot):
     try:
         action = normalize_action(proposal.get("action"))

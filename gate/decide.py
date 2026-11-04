@@ -5,7 +5,7 @@ Independent gate: allow / block / escalate risky AI proposals.
 import json
 from datetime import datetime, timezone
 
-from control.actions import normalize_action, RISKY_ACTIONS
+from control.actions import Action, normalize_action, RISKY_ACTIONS
 from gate import checks, selector
 from gate.grader import grade_test
 from gate.inputs import (
@@ -205,8 +205,12 @@ def decide(
     max_age = float(cfg.get("reuse_max_age_seconds") or 120.0)
     fingerprint = evidence_fingerprint(network_snapshot)
 
+    if action == Action.DO_NOTHING:
+        if checks.noop_justified(network_snapshot, test_results, thresholds):
+            return audit("allow", proposal, test_results, {}, "healthy no-op", supplied=supplied)
+        return audit("escalate", proposal, test_results, {}, "no-op not justified", supplied=supplied)
     if action not in RISKY_ACTIONS:
-        return audit("allow", proposal, test_results, {}, "non-risky pass-through", supplied=supplied)
+        return audit("escalate", proposal, test_results, {}, "non-risky not auto-allowed", supplied=supplied)
 
     snap_errors = validate_snapshot(network_snapshot)
     if snap_errors:
