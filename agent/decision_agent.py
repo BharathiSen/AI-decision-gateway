@@ -63,6 +63,33 @@ PROVIDERS = {
 REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high")
 
 
+def _clean_api_key(value):
+    """Strip whitespace and a single pair of wrapping quotes from a pasted key."""
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in ("'", '"'):
+        text = text[1:-1].strip()
+    return text
+
+
+def _key_mismatch_hint(cfg):
+    key = cfg.get("api_key") or ""
+    if cfg.get("provider") != "grok" or not key:
+        return None
+    if key.startswith("sk-or-"):
+        return (
+            "XAI_API_KEY looks like an OpenRouter key; Grok needs a key from "
+            "https://console.x.ai (usually starts with xai-)"
+        )
+    if not key.startswith("xai-"):
+        return (
+            "xAI keys usually start with xai-. Create one at https://console.x.ai "
+            "and export it without quotes"
+        )
+    return None
+
+
 def provider_config():
     """{"provider", "base_url", "key_env", "api_key", "model", "reasoning_effort"}
     from the environment. LLM_REASONING_EFFORT overrides the provider default;
@@ -83,9 +110,9 @@ def provider_config():
                 f"LLM_REASONING_EFFORT must be one of {list(REASONING_EFFORTS) + ['default']}, got {effort!r}"
             )
         cfg["reasoning_effort"] = effort
-    cfg["api_key"] = os.environ.get(cfg["key_env"])
+    cfg["api_key"] = _clean_api_key(os.environ.get(cfg["key_env"]))
     if not cfg["api_key"] and name == "grok":
-        cfg["api_key"] = os.environ.get("GROK_API_KEY")
+        cfg["api_key"] = _clean_api_key(os.environ.get("GROK_API_KEY"))
         if cfg["api_key"]:
             cfg["key_env"] = "GROK_API_KEY"
     return cfg
@@ -379,6 +406,11 @@ def _speed_check():
     )
     if not cfg["api_key"]:
         raise SystemExit(f"set {cfg['key_env']} (or GROK_API_KEY) before a speed check")
+    key = cfg["api_key"]
+    print(f"key_len={len(key)} key_prefix={key[:4]!r}")
+    hint = _key_mismatch_hint(cfg)
+    if hint:
+        raise SystemExit(hint)
     snapshot = {
         "timestamp": "2026-01-01T00:00:00+00:00",
         "metrics": {

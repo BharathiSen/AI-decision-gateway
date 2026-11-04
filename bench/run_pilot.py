@@ -739,6 +739,10 @@ def _self_check():
         grok = _provider()
         assert grok["provider"] == "grok" and grok["key_env"] == "XAI_API_KEY", grok
         assert grok["base_url"] == "https://api.x.ai/v1" and grok["reasoning_effort"] == "none", grok
+        from agent.decision_agent import _clean_api_key, _key_mismatch_hint
+
+        assert _clean_api_key("  'xai-abc'  ") == "xai-abc"
+        assert "OpenRouter" in (_key_mismatch_hint({"provider": "grok", "api_key": "sk-or-v1-abc"}) or "")
         os.environ["LLM_PROVIDER"] = "xai"
         assert _provider()["provider"] == "grok"
         os.environ["LLM_PROVIDER"] = "gemini"
