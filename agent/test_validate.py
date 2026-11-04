@@ -17,7 +17,7 @@ from agent.validate import (
     validate_proposal,
 )
 from agent.decision_agent import _canonical_target
-from bench.contracts import TEST_IDS, llm_proposal_schema
+from bench.contracts import TEST_IDS, expected_grade_ok, llm_proposal_schema
 
 
 def good_proposal():
@@ -132,6 +132,57 @@ def main():
     long_expected["causes"][0]["predicted_tests"][0]["expected"] = "x" * (MAX_EXPECTED_LEN + 1)
     ok, errs = validate_proposal(long_expected)
     check("overlong expected rejected", not ok, errs)
+
+    for tid, token in (
+        ("T1_e2e_ping", "ok"),
+        ("T1_e2e_ping", "down"),
+        ("T1_e2e_ping", "loss"),
+        ("T1_e2e_ping", "latency"),
+        ("T1_e2e_ping", "loss+latency"),
+        ("T4_mtu", "df_ok"),
+        ("T4_mtu", "mtu_fail"),
+        ("T7_route_check", "primary"),
+        ("T7_route_check", "blackhole"),
+        ("T8_tcp_vs_ping", "both_ok"),
+        ("T8_tcp_vs_ping", "ping_ok_tcp_fail"),
+        ("T9_oneway_loss", "symmetric"),
+        ("T9_oneway_loss", "a2b_loss"),
+        ("T10_speed", "ok"),
+        ("T10_speed", "slow"),
+        ("T5_if_errors", "clean"),
+        ("T5_if_errors", "errors:r4/r4-eth0"),
+        ("T6_queue_stats", "clear"),
+        ("T6_queue_stats", "drops:r2/r2-eth1"),
+        ("T2_hop_ping", "r2-r4=down"),
+        ("T2_hop_ping", "primary:hostA-r1=ok,r2-r4=down;backup:r3-r4=ok"),
+    ):
+        token_ok = copy.deepcopy(good)
+        token_ok["causes"][0]["predicted_tests"] = [{"test_id": tid, "expected": token}]
+        ok, errs = validate_proposal(token_ok)
+        check(f"grade token {tid} {token} accepted", ok, errs)
+        check(f"expected_grade_ok {tid} {token}", expected_grade_ok(tid, token))
+
+    for english in ("success", "timeout / no reply", "no errors", "all hops reachable", "packet loss 100%"):
+        prose = copy.deepcopy(good)
+        prose["causes"][0]["predicted_tests"][0]["expected"] = english
+        ok, errs = validate_proposal(prose)
+        check(f"english expected {english!r} rejected", not ok, errs)
+
+    t2_prose = copy.deepcopy(good)
+    t2_prose["causes"][0]["predicted_tests"] = [{"test_id": "T2_hop_ping", "expected": "fail at r2-r4"}]
+    ok, errs = validate_proposal(t2_prose)
+    check("T2 english hop narrative rejected", not ok, errs)
+    check("T2 atomic down rejected", not expected_grade_ok("T2_hop_ping", "down"))
+    hyphen = "r2\u2011r4=down"
+    check("T2 unicode hyphen normalized", expected_grade_ok("T2_hop_ping", hyphen))
+    nbsp = copy.deepcopy(good)
+    nbsp["causes"][0]["predicted_tests"][0]["expected"] = "ok"
+    ok, errs = validate_proposal(nbsp)
+    check("plain ok still accepted", ok, errs)
+    wrong_token = copy.deepcopy(good)
+    wrong_token["causes"][0]["predicted_tests"] = [{"test_id": "T1_e2e_ping", "expected": "primary"}]
+    ok, errs = validate_proposal(wrong_token)
+    check("T7 token rejected on T1", not ok, errs)
 
     huge = copy.deepcopy(good)
     huge["reason"] = "y" * (MAX_PROPOSAL_BYTES + 1)

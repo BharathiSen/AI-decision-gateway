@@ -5,6 +5,9 @@ rules stay in agent.validate. This module does not import the controller,
 the fault injector, or the action executor.
 """
 
+import re
+import unicodedata
+
 TEST_IDS = (
     "T1_e2e_ping",
     "T2_hop_ping",
@@ -17,13 +20,99 @@ TEST_IDS = (
     "T10_speed",
 )
 
+# Closed grade_result tokens. T2/T5/T6 also allow a structured suffix.
+T1_GRADES = frozenset({"ok", "down", "loss", "latency", "loss+latency"})
+T2_HOP_OUTCOMES = frozenset({"ok", "down", "loss", "delay"})
+T4_GRADES = frozenset({"df_ok", "mtu_fail"})
+T5_GRADES = frozenset({"clean"})
+T6_GRADES = frozenset({"clear"})
+T7_GRADES = frozenset({"primary", "backup", "blackhole", "return_mismatch", "none"})
+T8_GRADES = frozenset({"both_ok", "ping_ok_tcp_fail", "ping_fail_tcp_ok", "both_fail"})
+T9_GRADES = frozenset({"symmetric", "a2b_loss", "b2a_loss"})
+T10_GRADES = frozenset({"ok", "slow"})
+
+_DASHES = dict.fromkeys(map(ord, "\u2010\u2011\u2012\u2013\u2014\u2212\ufe58\ufe63\uff0d"), "-")
+_SPACES = dict.fromkeys(map(ord, "\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u202f\u205f"), " ")
+_HOP_LABEL = r"[a-z0-9_./?-]+"
+_HOP_PART = rf"{_HOP_LABEL}=(?:ok|down|loss|delay)"
+_PATH_CHUNK = rf"(?:primary|backup):{_HOP_PART}(?:,{_HOP_PART})*"
+_T2_COMPOSED = re.compile(rf"^(?:{_PATH_CHUNK}(?:;{_PATH_CHUNK})*|{_HOP_PART})$")
+_NAMED_GRADE = re.compile(rf"^(?:errors|drops|backlog):{_HOP_LABEL}(?:\|{_HOP_LABEL})*$")
+
+
+def normalize_prediction_text(text):
+    """NFKC plus ASCII hyphen/space folding. Not a synonym table."""
+    if not isinstance(text, str):
+        return ""
+    folded = unicodedata.normalize("NFKC", text).translate(_DASHES).translate(_SPACES)
+    return " ".join(folded.split())
+
+
+def expected_grade_ok(test_id, expected):
+    """True when expected is a grade_result token (or T2/T5/T6 structure)."""
+    text = normalize_prediction_text(expected).lower()
+    if not text:
+        return False
+    if test_id == "T1_e2e_ping":
+        return text in T1_GRADES
+    if test_id == "T2_hop_ping":
+        return _T2_COMPOSED.fullmatch(text) is not None
+    if test_id == "T4_mtu":
+        return text in T4_GRADES
+    if test_id == "T5_if_errors":
+        return text in T5_GRADES or (text.startswith("errors:") and _NAMED_GRADE.fullmatch(text))
+    if test_id == "T6_queue_stats":
+        return text in T6_GRADES or (
+            (text.startswith("drops:") or text.startswith("backlog:")) and _NAMED_GRADE.fullmatch(text)
+        )
+    if test_id == "T7_route_check":
+        return text in T7_GRADES
+    if test_id == "T8_tcp_vs_ping":
+        return text in T8_GRADES
+    if test_id == "T9_oneway_loss":
+        return text in T9_GRADES
+    if test_id == "T10_speed":
+        return text in T10_GRADES
+    return False
+
+
+def grade_vocabulary_for_prompt():
+    """Per-test tokens/formats the model may put in expected."""
+    return {
+        "T1_e2e_ping": sorted(T1_GRADES),
+        "T2_hop_ping": [
+            "hop=ok|down|loss|delay",
+            "primary:hop=outcome,...;backup:hop=outcome,...",
+        ],
+        "T4_mtu": sorted(T4_GRADES),
+        "T5_if_errors": ["clean", "errors:iface", "errors:iface|iface"],
+        "T6_queue_stats": ["clear", "drops:iface", "backlog:iface"],
+        "T7_route_check": sorted(T7_GRADES),
+        "T8_tcp_vs_ping": sorted(T8_GRADES),
+        "T9_oneway_loss": sorted(T9_GRADES),
+        "T10_speed": sorted(T10_GRADES),
+    }
+
+
 _PREDICTED_TEST = {
     "type": "object",
     "required": ["test_id", "expected"],
     "additionalProperties": False,
     "properties": {
         "test_id": {"type": "string", "enum": list(TEST_IDS)},
-        "expected": {"type": "string", "maxLength": 80},
+        "expected": {
+            "type": "string",
+            "maxLength": 80,
+            "description": (
+                "grade_result token for this test_id. T1: ok|down|loss|latency|"
+                "loss+latency. T2: hop=ok|down|loss|delay or primary:...;backup:...."
+                " T4: df_ok|mtu_fail. T5: clean or errors:iface. T6: clear or "
+                "drops:iface or backlog:iface. T7: primary|backup|blackhole|"
+                "return_mismatch|none. T8: both_ok|ping_ok_tcp_fail|"
+                "ping_fail_tcp_ok|both_fail. T9: symmetric|a2b_loss|b2a_loss. "
+                "T10: ok|slow. No English paraphrases."
+            ),
+        },
     },
 }
 

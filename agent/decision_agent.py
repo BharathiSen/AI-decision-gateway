@@ -26,7 +26,7 @@ from openai import OpenAI
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from bench.contracts import TEST_IDS, llm_proposal_schema
+from bench.contracts import TEST_IDS, grade_vocabulary_for_prompt, llm_proposal_schema
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
@@ -293,9 +293,17 @@ PREDICTION_SYSTEM_PROMPT = SYSTEM_PROMPT + """
 Also return up to five candidate causes. Each cause_id must be one of \
 the ids in fault_catalog (H0, F1–F12, U1–U5). Do not invent prose \
 labels, link names, or compound ids. For each cause, predict how named \
-OAM tests from oam_test_catalog would read if that cause were true \
-(use test_id and a short expected field). You still do not execute \
-anything or choose which tests the gate runs."""
+OAM tests from oam_test_catalog would read if that cause were true. \
+expected must be exactly a grade token from oam_grade_vocabulary for \
+that test_id (T1: ok, down, loss, latency, loss+latency; T4: df_ok or \
+mtu_fail; T5: clean or errors:iface; T6: clear, drops:iface, or \
+backlog:iface; T7: primary, backup, blackhole, return_mismatch, none; \
+T8: both_ok, ping_ok_tcp_fail, ping_fail_tcp_ok, both_fail; T9: \
+symmetric, a2b_loss, b2a_loss; T10: ok or slow). For T2_hop_ping use \
+hop=ok|down|loss|delay or primary:...;backup:... hop assignments. \
+Do not paraphrase (not success, fail, timeout, no errors, or \
+packet loss 100%). You still do not execute anything or choose which \
+tests the gate runs."""
 
 
 def propose_decision(
@@ -393,6 +401,7 @@ def propose_with_predictions(
         "allowed_action_types": allowed_actions,
         "policy_context": policy_context,
         "oam_test_catalog": oam_test_catalog,
+        "oam_grade_vocabulary": grade_vocabulary_for_prompt(),
         "supported_target": target,
         "target": target,
         "fault_catalog": catalog_entries(),

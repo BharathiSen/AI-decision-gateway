@@ -182,6 +182,12 @@ def _stub_proposal(snapshot, fault_id):
         action = "REROUTE"
     path = ["r1", "r3", "r4"] if action == "REROUTE" else ["r1", "r2", "r4"]
     cause_id = _catalog_cause_id(fault_id)
+    if loss is None or loss >= 100:
+        t1_expected = "down"
+    elif loss > 5:
+        t1_expected = "loss"
+    else:
+        t1_expected = "ok"
     return {
         "action": action,
         "target": "HostA_to_HostB",
@@ -191,7 +197,7 @@ def _stub_proposal(snapshot, fault_id):
             {
                 "cause_id": cause_id,
                 "predicted_tests": [
-                    {"test_id": "T1_e2e_ping", "expected": f"loss={loss}"},
+                    {"test_id": "T1_e2e_ping", "expected": t1_expected},
                     {"test_id": "T7_route_check", "expected": "primary"},
                 ],
             }

@@ -12,7 +12,7 @@ from pathlib import Path
 
 import yaml
 
-from bench.contracts import TEST_IDS
+from bench.contracts import TEST_IDS, expected_grade_ok
 
 CANONICAL_ACTIONS = {"REROUTE", "DO_NOTHING", "ESCALATE"}
 ALLOWED_ACTIONS = CANONICAL_ACTIONS
@@ -134,6 +134,11 @@ def validate_proposal(data, allowed_actions=None, max_causes=5, max_bytes=MAX_PR
                 elif len(expected) > MAX_EXPECTED_LEN:
                     errors.append(
                         f"causes[{i}].predicted_tests[{j}].expected exceeds {MAX_EXPECTED_LEN} characters"
+                    )
+                elif tid in ALLOWED_TESTS and not expected_grade_ok(tid, expected):
+                    errors.append(
+                        f"causes[{i}].predicted_tests[{j}].expected {expected!r} "
+                        f"is not a grade token for {tid}"
                     )
 
     return len(errors) == 0, errors

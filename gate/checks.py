@@ -58,10 +58,13 @@ def _prediction_matches(expected, observed):
     """True when the predicted grade matches the observed grade as whole tokens.
 
     Substring search is not used: 'ok' must not match 'both_ok', and a lone
-    '0' must not match '100'.
+    '0' must not match '100'. Unicode dashes/spaces are folded first; English
+    paraphrases are not mapped to grade tokens.
     """
-    exp = (expected or "").strip().lower()
-    obs = (observed or "").strip().lower()
+    from bench.contracts import normalize_prediction_text
+
+    exp = normalize_prediction_text(expected).lower()
+    obs = normalize_prediction_text(observed).lower()
     if not exp or not obs:
         return False
     if exp == obs:

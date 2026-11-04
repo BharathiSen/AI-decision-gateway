@@ -1285,12 +1285,102 @@ def _self_check():
     assert unsigned["binding"]["signed"] is False
     assert not binding_errors(unsigned, healthy, proposal)
 
-    from gate.checks import _prediction_matches
+    from gate.checks import _prediction_matches, check_consistency
+    from bench.contracts import expected_grade_ok
 
     assert _prediction_matches("loss", "loss=15.0")
     assert _prediction_matches("ok", "ok")
     assert not _prediction_matches("ok", "both_ok")
     assert not _prediction_matches("0", "100")
+    assert _prediction_matches("r2\u2011r4=down", "primary:hostA-r1=ok,r2-r4=down")
+    assert not _prediction_matches("success", "ok")
+    assert not _prediction_matches("timeout / no reply", "down")
+    assert expected_grade_ok("T1_e2e_ping", "down")
+    assert not expected_grade_ok("T1_e2e_ping", "timeout / no reply")
+
+    t1_down = [{"test_id": "T1_e2e_ping", "packet_loss_percent": 100.0, "latency_ms": None}]
+    t2_f1 = {
+        "test_id": "T2_hop_ping",
+        "hops_primary": [
+            {"dst_ip": "10.0.1.1", "packet_loss_percent": 0.0},
+            {"dst_ip": "10.0.12.2", "packet_loss_percent": 0.0},
+            {"dst_ip": "10.0.24.2", "packet_loss_percent": 100.0},
+            {"dst_ip": "10.0.4.2", "packet_loss_percent": 0.0},
+        ],
+        "hops_backup": [
+            {"dst_ip": "10.0.1.1", "packet_loss_percent": 0.0},
+            {"dst_ip": "10.0.13.2", "packet_loss_percent": 0.0},
+            {"dst_ip": "10.0.34.2", "packet_loss_percent": 0.0},
+            {"dst_ip": "10.0.4.2", "packet_loss_percent": 0.0},
+        ],
+    }
+    t7_primary = {
+        "test_id": "T7_route_check",
+        "r1_to_dest": "via 10.0.12.2",
+        "r2_to_dest": "via 10.0.24.2",
+        "r4_to_src": "via 10.0.24.1",
+        "active_path": "primary",
+    }
+    t9_equal_loss = {
+        "test_id": "T9_oneway_loss",
+        "hostA_to_hostB": {"packet_loss_percent": 100.0},
+        "hostB_to_hostA": {"packet_loss_percent": 100.0},
+    }
+    f1_vocab = {
+        "action": "REROUTE",
+        "target": "HostA_to_HostB",
+        "reason": "primary r2-r4 down",
+        "proposed_path": ["r1", "r3", "r4"],
+        "causes": [{
+            "cause_id": "F1",
+            "predicted_tests": [
+                {"test_id": "T1_e2e_ping", "expected": "down"},
+                {"test_id": "T2_hop_ping", "expected": "r2-r4=down"},
+            ],
+        }],
+    }
+    f1_obs = t1_down + [t2_f1, t7_primary, t9_equal_loss]
+    f1_ok = check_consistency(f1_vocab, f1_obs)
+    assert f1_ok["passed"], f1_ok
+    f1_gate = gate_decide(None, f1_vocab, healthy, f1_obs, mode="full", run_missing_tests=False)
+    assert f1_gate["reason"] != "consistency failed", f1_gate
+    assert (f1_gate.get("checks") or {}).get("consistency", {}).get("passed") is True, f1_gate
+    f1_wrong_t7 = dict(
+        f1_vocab,
+        causes=[{
+            "cause_id": "F1",
+            "predicted_tests": [
+                {"test_id": "T1_e2e_ping", "expected": "down"},
+                {"test_id": "T7_route_check", "expected": "blackhole"},
+            ],
+        }],
+    )
+    f1_t7 = check_consistency(f1_wrong_t7, f1_obs)
+    assert not f1_t7["passed"], f1_t7
+    assert any(row.get("test_id") == "T7_route_check" and row.get("observed") == "primary" for row in f1_t7["mismatches"]), f1_t7
+    f1_t7_gate = gate_decide(None, f1_wrong_t7, healthy, f1_obs, mode="full", run_missing_tests=False)
+    assert f1_t7_gate["decision"] == "block" and f1_t7_gate["reason"] == "consistency failed", f1_t7_gate
+    f1_t9 = check_consistency(
+        {
+            **f1_vocab,
+            "causes": [{
+                "cause_id": "F1",
+                "predicted_tests": [{"test_id": "T9_oneway_loss", "expected": "a2b_loss"}],
+            }],
+        },
+        f1_obs,
+    )
+    assert not f1_t9["passed"] and f1_t9["mismatches"][0]["observed"] == "symmetric", f1_t9
+    english_f1 = dict(
+        f1_vocab,
+        causes=[{"cause_id": "F1", "predicted_tests": [{"test_id": "T1_e2e_ping", "expected": "timeout / no reply"}]}],
+    )
+    english_gate = gate_decide(None, english_f1, healthy, f1_obs, mode="full", run_missing_tests=False)
+    assert english_gate["decision"] == "block" and "invalid proposal" in (english_gate.get("reason") or ""), english_gate
+
+    t4_fail = [{"test_id": "T4_mtu", "df_ping_ok": False}]
+    idle_mtu = gate_decide(None, idle, healthy, t4_fail, mode="full", run_missing_tests=False)
+    assert idle_mtu["decision"] != "allow", idle_mtu
 
     calls.clear()
     unbound_allow = apply_authorized_action(
