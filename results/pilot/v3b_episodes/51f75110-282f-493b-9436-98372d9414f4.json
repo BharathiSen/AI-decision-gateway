@@ -1,0 +1,1386 @@
+{
+  "episode_id": "51f75110-282f-493b-9436-98372d9414f4",
+  "started_at": "2026-11-04T09:16:47.989441+00:00",
+  "fault_id": "F3",
+  "noise_id": "N0",
+  "seed": 887254,
+  "correlation_ids": [
+    "F3-1e680545"
+  ],
+  "network_snapshot": {
+    "timestamp": "2026-11-04T09:16:49.763947+00:00",
+    "nodes": [
+      {
+        "name": "hostA",
+        "type": "host",
+        "ips": [
+          {
+            "intf": "hostA-eth0",
+            "ip": "10.0.1.2"
+          }
+        ]
+      },
+      {
+        "name": "hostB",
+        "type": "host",
+        "ips": [
+          {
+            "intf": "hostB-eth0",
+            "ip": "10.0.4.2"
+          }
+        ]
+      },
+      {
+        "name": "r1",
+        "type": "router",
+        "ips": [
+          {
+            "intf": "r1-eth0",
+            "ip": "10.0.1.1"
+          },
+          {
+            "intf": "r1-eth1",
+            "ip": "10.0.12.1"
+          },
+          {
+            "intf": "r1-eth2",
+            "ip": "10.0.13.1"
+          }
+        ]
+      },
+      {
+        "name": "r2",
+        "type": "router",
+        "ips": [
+          {
+            "intf": "r2-eth0",
+            "ip": "10.0.12.2"
+          },
+          {
+            "intf": "r2-eth1",
+            "ip": "10.0.24.1"
+          }
+        ]
+      },
+      {
+        "name": "r3",
+        "type": "router",
+        "ips": [
+          {
+            "intf": "r3-eth0",
+            "ip": "10.0.13.2"
+          },
+          {
+            "intf": "r3-eth1",
+            "ip": "10.0.34.1"
+          }
+        ]
+      },
+      {
+        "name": "r4",
+        "type": "router",
+        "ips": [
+          {
+            "intf": "r4-eth0",
+            "ip": "10.0.24.2"
+          },
+          {
+            "intf": "r4-eth1",
+            "ip": "10.0.34.2"
+          },
+          {
+            "intf": "r4-eth2",
+            "ip": "10.0.4.1"
+          }
+        ]
+      }
+    ],
+    "links": [
+      {
+        "name": "hostA-r1",
+        "up": true,
+        "endpoints": [
+          "hostA-eth0",
+          "r1-eth0"
+        ],
+        "packet_loss_percent": 0.0,
+        "latency_ms": 16.287
+      },
+      {
+        "name": "r1-r2",
+        "up": true,
+        "endpoints": [
+          "r1-eth1",
+          "r2-eth0"
+        ],
+        "packet_loss_percent": 0.0,
+        "latency_ms": 15.577,
+        "role": "primary"
+      },
+      {
+        "name": "r1-r3",
+        "up": true,
+        "endpoints": [
+          "r1-eth2",
+          "r3-eth0"
+        ],
+        "packet_loss_percent": 0.0,
+        "latency_ms": 11.597,
+        "role": "backup"
+      },
+      {
+        "name": "r2-r4",
+        "up": true,
+        "endpoints": [
+          "r2-eth1",
+          "r4-eth0"
+        ],
+        "packet_loss_percent": 0.0,
+        "latency_ms": 12.845
+      },
+      {
+        "name": "r3-r4",
+        "up": true,
+        "endpoints": [
+          "r3-eth1",
+          "r4-eth1"
+        ],
+        "packet_loss_percent": 0.0,
+        "latency_ms": 14.77
+      },
+      {
+        "name": "r4-hostB",
+        "up": true,
+        "endpoints": [
+          "r4-eth2",
+          "hostB-eth0"
+        ],
+        "packet_loss_percent": 0.0,
+        "latency_ms": 17.885
+      }
+    ],
+    "routes": [
+      {
+        "node": "r1",
+        "prefix": "10.0.4.0/24",
+        "route": "10.0.4.0/24 via 10.0.12.2 dev r1-eth1"
+      },
+      {
+        "node": "r1",
+        "prefix": "10.0.1.0/24",
+        "route": "10.0.1.0/24 dev r1-eth0 proto kernel scope link src 10.0.1.1"
+      },
+      {
+        "node": "r2",
+        "prefix": "10.0.4.0/24",
+        "route": "10.0.4.0/24 via 10.0.24.2 dev r2-eth1"
+      },
+      {
+        "node": "r2",
+        "prefix": "10.0.1.0/24",
+        "route": "10.0.1.0/24 via 10.0.12.1 dev r2-eth0"
+      },
+      {
+        "node": "r4",
+        "prefix": "10.0.4.0/24",
+        "route": "10.0.4.0/24 dev r4-eth2 proto kernel scope link src 10.0.4.1"
+      },
+      {
+        "node": "r4",
+        "prefix": "10.0.1.0/24",
+        "route": "10.0.1.0/24 via 10.0.24.1 dev r4-eth0"
+      }
+    ],
+    "interface_counters": {
+      "r1/r1-eth0": {
+        "rx_errors": 0,
+        "tx_errors": 0,
+        "rx_dropped": 0,
+        "tx_dropped": 0
+      },
+      "r1/r1-eth1": {
+        "rx_errors": 0,
+        "tx_errors": 0,
+        "rx_dropped": 0,
+        "tx_dropped": 0
+      },
+      "r1/r1-eth2": {
+        "rx_errors": 0,
+        "tx_errors": 0,
+        "rx_dropped": 0,
+        "tx_dropped": 0
+      },
+      "r2/r2-eth0": {
+        "rx_errors": 0,
+        "tx_errors": 0,
+        "rx_dropped": 0,
+        "tx_dropped": 0
+      },
+      "r2/r2-eth1": {
+        "rx_errors": 0,
+        "tx_errors": 0,
+        "rx_dropped": 0,
+        "tx_dropped": 0
+      },
+      "r3/r3-eth0": {
+        "rx_errors": 0,
+        "tx_errors": 0,
+        "rx_dropped": 0,
+        "tx_dropped": 0
+      },
+      "r3/r3-eth1": {
+        "rx_errors": 0,
+        "tx_errors": 0,
+        "rx_dropped": 0,
+        "tx_dropped": 0
+      },
+      "r4/r4-eth0": {
+        "rx_errors": 0,
+        "tx_errors": 0,
+        "rx_dropped": 0,
+        "tx_dropped": 0
+      },
+      "r4/r4-eth1": {
+        "rx_errors": 0,
+        "tx_errors": 0,
+        "rx_dropped": 0,
+        "tx_dropped": 0
+      },
+      "r4/r4-eth2": {
+        "rx_errors": 0,
+        "tx_errors": 0,
+        "rx_dropped": 0,
+        "tx_dropped": 0
+      }
+    },
+    "queues": {
+      "r1/r1-eth0": {
+        "drops": 0,
+        "backlog_bytes": 0,
+        "backlog_packets": 0,
+        "loss_rule": false,
+        "rate_rule": false,
+        "raw": "qdisc htb 5: root refcnt 3 r2q 10 default 0x1 direct_packets_stat 0 direct_qlen 1000\n Sent 1582 bytes 17 pkt (dropped 0, overlimits 0 requeues 0) \n backlog 0b 0p requeues 0\nqdisc netem 10: parent 5:1 limit 1000 delay 5ms\n Sent 1582 bytes 17 pkt (dropped 0, overlimits 0 requeues 0) \n backlog 0b 0p requeues 0"
+      },
+      "r1/r1-eth1": {
+        "drops": 0,
+        "backlog_bytes": 0,
+        "backlog_packets": 0,
+        "loss_rule": false,
+        "rate_rule": false,
+        "raw": "qdisc htb 5: root refcnt 3 r2q 10 default 0x1 direct_packets_stat 0 direct_qlen 1000\n Sent 1610 bytes 17 pkt (dropped 0, overlimits 0 requeues 0) \n backlog 0b 0p requeues 0\nqdisc netem 10: parent 5:1 limit 1000 delay 5ms\n Sent 1610 bytes 17 pkt (dropped 0, overlimits 0 requeues 0) \n backlog 0b 0p requeues 0"
+      },
+      "r1/r1-eth2": {
+        "drops": 0,
+        "backlog_bytes": 0,
+        "backlog_packets": 0,
+        "loss_rule": false,
+        "rate_rule": false,
+        "raw": "qdisc htb 5: root refcnt 3 r2q 10 default 0x1 direct_packets_stat 0 direct_qlen 1000\n Sent 280 bytes 4 pkt (dropped 0, overlimits 0 requeues 0) \n backlog 0b 0p requeues 0\nqdisc netem 10: parent 5:1 limit 1000 delay 5ms\n Sent 280 bytes 4 pkt (dropped 0, overlimits 0 requeues 0) \n backlog 0b 0p requeues 0"
+      },
+      "r2/r2-eth0": {
+        "drops": 0,
+        "backlog_bytes": 0,
+        "backlog_packets": 0,
+        "loss_rule": false,
+        "rate_rule": false,
+        "raw": "qdisc htb 5: root refcnt 3 r2q 10 default 0x1 direct_packets_stat 0 direct_qlen 1000\n Sent 1582 bytes 17 pkt (dropped 0, overlimits 0 requeues 0) \n backlog 0b 0p requeues 0\nqdisc netem 10: parent 5:1 limit 1000 delay 5ms\n Sent 1582 bytes 17 pkt (dropped 0, overlimits 0 requeues 0) \n backlog 0b 0p requeues 0"
+      },
+      "r2/r2-eth1": {
+        "drops": 2,
+        "backlog_bytes": 0,
+        "backlog_packets": 0,
+        "loss_rule": true,
+        "rate_rule": false,
+        "raw": "qdisc htb 5: root refcnt 3 r2q 10 default 0x1 direct_packets_stat 0 direct_qlen 1000\n Sent 672 bytes 8 pkt (dropped 1, overlimits 0 requeues 0) \n backlog 0b 0p requeues 0\nqdisc netem 10: parent 5:1 limit 1000 delay 5ms loss 18%\n Sent 672 bytes 8 pkt (dropped 1, overlimits 0 requeues 0) \n backlog 0b 0p requeues 0"
+      },
+      "r3/r3-eth0": {
+        "drops": 0,
+        "backlog_bytes": 0,
+        "backlog_packets": 0,
+        "loss_rule": false,
+        "rate_rule": false,
+        "raw": "qdisc htb 5: root refcnt 3 r2q 10 default 0x1 direct_packets_stat 0 direct_qlen 1000\n Sent 350 bytes 5 pkt (dropped 0, overlimits 0 requeues 0) \n backlog 0b 0p requeues 0\nqdisc netem 10: parent 5:1 limit 1000 delay 5ms\n Sent 350 bytes 5 pkt (dropped 0, overlimits 0 requeues 0) \n backlog 0b 0p requeues 0"
+      },
+      "r3/r3-eth1": {
+        "drops": 0,
+        "backlog_bytes": 0,
+        "backlog_packets": 0,
+        "loss_rule": false,
+        "rate_rule": false,
+        "raw": "qdisc htb 5: root refcnt 3 r2q 10 default 0x1 direct_packets_stat 0 direct_qlen 1000\n Sent 350 bytes 5 pkt (dropped 0, overlimits 0 requeues 0) \n backlog 0b 0p requeues 0\nqdisc netem 10: parent 5:1 limit 1000 delay 5ms\n Sent 350 bytes 5 pkt (dropped 0, overlimits 0 requeues 0) \n backlog 0b 0p requeues 0"
+      }
+    },
+    "metrics": {
+      "packet_loss_percent": 25.0,
+      "latency_ms": 73.596,
+      "connectivity": true,
+      "active_path": "primary"
+    }
+  },
+  "execution_baseline": {
+    "qdiscs": {
+      "r1/r1-eth1": "qdisc htb 5: root r2q 10 default 0x1 direct_qlen 1000|qdisc netem 10: parent 5:1 limit 1000 delay 5ms",
+      "r2/r2-eth0": "qdisc htb 5: root r2q 10 default 0x1 direct_qlen 1000|qdisc netem 10: parent 5:1 limit 1000 delay 5ms",
+      "r2/r2-eth1": "qdisc htb 5: root r2q 10 default 0x1 direct_qlen 1000|qdisc netem 10: parent 5:1 limit 1000 delay 5ms loss 18%",
+      "r4/r4-eth0": "qdisc htb 5: root r2q 10 default 0x1 direct_qlen 1000|qdisc netem 10: parent 5:1 limit 1000 delay 5ms",
+      "r1/r1-eth2": "qdisc htb 5: root r2q 10 default 0x1 direct_qlen 1000|qdisc netem 10: parent 5:1 limit 1000 delay 5ms",
+      "r3/r3-eth0": "qdisc htb 5: root r2q 10 default 0x1 direct_qlen 1000|qdisc netem 10: parent 5:1 limit 1000 delay 5ms",
+      "r3/r3-eth1": "qdisc htb 5: root r2q 10 default 0x1 direct_qlen 1000|qdisc netem 10: parent 5:1 limit 1000 delay 5ms",
+      "r4/r4-eth1": "qdisc htb 5: root r2q 10 default 0x1 direct_qlen 1000|qdisc netem 10: parent 5:1 limit 1000 delay 5ms"
+    },
+    "error": null
+  },
+  "oam": {
+    "started_at": "2026-11-04T09:17:04.259027+00:00",
+    "completed_at": "2026-11-04T09:17:37.688677+00:00",
+    "results": [
+      {
+        "test_id": "T1_e2e_ping",
+        "error": null,
+        "packet_loss_percent": 20.0,
+        "latency_ms": 91.4,
+        "latency_avg_ms": 89.788,
+        "rtt_ms": [
+          67.7,
+          107.0,
+          110.0,
+          105.0,
+          109.0,
+          67.6,
+          77.8,
+          73.6
+        ],
+        "raw": "PING 10.0.4.2 (10.0.4.2) 56(84) bytes of data.\n64 bytes from 10.0.4.2: icmp_seq=1 ttl=61 time=67.7 ms\n64 bytes from 10.0.4.2: icmp_seq=2 ttl=61 time=107 ms\n64 bytes from 10.0.4.2: icmp_seq=3 ttl=61 time=110 ms\n64 bytes from 10.0.4.2: icmp_seq=4 ttl=61 time=105 ms\n64 bytes from 10.0.4.2: icmp_seq=6 ttl=61 time=109 ms\n64 bytes from 10.0.4.2: icmp_seq=7 ttl=61 time=67.6 ms\n64 bytes from 10.0.4.2: icmp_seq=8 ttl=61 time=77.8 ms\n64 bytes from 10.0.4.2: icmp_seq=10 ttl=61 time=73.6 ms\n\n--- 10.0.4.2 ping statistics ---\n10 packets transmitted, 8 received, 20% packet loss, time 1857ms\nrtt min/avg/max/mdev = 67.615/89.788/109.845/18.408 ms\n",
+        "connectivity": true,
+        "duration_seconds": 2.1022446479983046,
+        "probes": [
+          {
+            "kind": "icmp_echo",
+            "packets": 10,
+            "bytes": 640
+          }
+        ]
+      },
+      {
+        "test_id": "T2_hop_ping",
+        "path": "primary",
+        "hops": [
+          {
+            "packet_loss_percent": 0.0,
+            "latency_ms": 21.6,
+            "latency_avg_ms": 23.109,
+            "rtt_ms": [
+              16.4,
+              30.0,
+              20.5,
+              26.5,
+              19.9,
+              22.7,
+              32.3,
+              24.2,
+              18.1,
+              20.5
+            ],
+            "raw": "PING 10.0.1.1 (10.0.1.1) 56(84) bytes of data.\n64 bytes from 10.0.1.1: icmp_seq=1 ttl=64 time=16.4 ms\n64 bytes from 10.0.1.1: icmp_seq=2 ttl=64 time=30.0 ms\n64 bytes from 10.0.1.1: icmp_seq=3 ttl=64 time=20.5 ms\n64 bytes from 10.0.1.1: icmp_seq=4 ttl=64 time=26.5 ms\n64 bytes from 10.0.1.1: icmp_seq=5 ttl=64 time=19.9 ms\n64 bytes from 10.0.1.1: icmp_seq=6 ttl=64 time=22.7 ms\n64 bytes from 10.0.1.1: icmp_seq=7 ttl=64 time=32.3 ms\n64 bytes from 10.0.1.1: icmp_seq=8 ttl=64 time=24.2 ms\n64 bytes from 10.0.1.1: icmp_seq=9 ttl=64 time=18.1 ms\n64 bytes from 10.0.1.1: icmp_seq=10 ttl=64 time=20.5 ms\n\n--- 10.0.1.1 ping statistics ---\n10 packets transmitted, 10 received, 0% packet loss, time 1967ms\nrtt min/avg/max/mdev = 16.378/23.109/32.329/4.896 ms\n",
+            "src": "hostA",
+            "dst_ip": "10.0.1.1"
+          },
+          {
+            "packet_loss_percent": 0.0,
+            "latency_ms": 13.85,
+            "latency_avg_ms": 18.451,
+            "rtt_ms": [
+              10.6,
+              10.7,
+              32.7,
+              10.6,
+              10.5,
+              30.3,
+              10.6,
+              17.0,
+              27.9,
+              23.6
+            ],
+            "raw": "PING 10.0.12.2 (10.0.12.2) 56(84) bytes of data.\n64 bytes from 10.0.12.2: icmp_seq=1 ttl=64 time=10.6 ms\n64 bytes from 10.0.12.2: icmp_seq=2 ttl=64 time=10.7 ms\n64 bytes from 10.0.12.2: icmp_seq=3 ttl=64 time=32.7 ms\n64 bytes from 10.0.12.2: icmp_seq=4 ttl=64 time=10.6 ms\n64 bytes from 10.0.12.2: icmp_seq=5 ttl=64 time=10.5 ms\n64 bytes from 10.0.12.2: icmp_seq=6 ttl=64 time=30.3 ms\n64 bytes from 10.0.12.2: icmp_seq=7 ttl=64 time=10.6 ms\n64 bytes from 10.0.12.2: icmp_seq=8 ttl=64 time=17.0 ms\n64 bytes from 10.0.12.2: icmp_seq=9 ttl=64 time=27.9 ms\n64 bytes from 10.0.12.2: icmp_seq=10 ttl=64 time=23.6 ms\n\n--- 10.0.12.2 ping statistics ---\n10 packets transmitted, 10 received, 0% packet loss, time 2569ms\nrtt min/avg/max/mdev = 10.531/18.451/32.691/8.767 ms\n",
+            "src": "r1",
+            "dst_ip": "10.0.12.2"
+          },
+          {
+            "packet_loss_percent": 0.0,
+            "latency_ms": 10.55,
+            "latency_avg_ms": 13.854,
+            "rtt_ms": [
+              10.4,
+              11.2,
+              11.2,
+              10.5,
+              10.5,
+              10.6,
+              10.5,
+              10.5,
+              35.3,
+              18.1
+            ],
+            "raw": "PING 10.0.24.2 (10.0.24.2) 56(84) bytes of data.\n64 bytes from 10.0.24.2: icmp_seq=1 ttl=64 time=10.4 ms\n64 bytes from 10.0.24.2: icmp_seq=2 ttl=64 time=11.2 ms\n64 bytes from 10.0.24.2: icmp_seq=3 ttl=64 time=11.2 ms\n64 bytes from 10.0.24.2: icmp_seq=4 ttl=64 time=10.5 ms\n64 bytes from 10.0.24.2: icmp_seq=5 ttl=64 time=10.5 ms\n64 bytes from 10.0.24.2: icmp_seq=6 ttl=64 time=10.6 ms\n64 bytes from 10.0.24.2: icmp_seq=7 ttl=64 time=10.5 ms\n64 bytes from 10.0.24.2: icmp_seq=8 ttl=64 time=10.5 ms\n64 bytes from 10.0.24.2: icmp_seq=9 ttl=64 time=35.3 ms\n64 bytes from 10.0.24.2: icmp_seq=10 ttl=64 time=18.1 ms\n\n--- 10.0.24.2 ping statistics ---\n10 packets transmitted, 10 received, 0% packet loss, time 2895ms\nrtt min/avg/max/mdev = 10.400/13.854/35.262/7.473 ms\n",
+            "src": "r2",
+            "dst_ip": "10.0.24.2"
+          },
+          {
+            "packet_loss_percent": 0.0,
+            "latency_ms": 18.7,
+            "latency_avg_ms": 18.068,
+            "rtt_ms": [
+              15.5,
+              13.6,
+              20.8,
+              12.4,
+              20.6,
+              19.0,
+              25.2,
+              20.5,
+              18.4,
+              14.8
+            ],
+            "raw": "PING 10.0.4.2 (10.0.4.2) 56(84) bytes of data.\n64 bytes from 10.0.4.2: icmp_seq=1 ttl=64 time=15.5 ms\n64 bytes from 10.0.4.2: icmp_seq=2 ttl=64 time=13.6 ms\n64 bytes from 10.0.4.2: icmp_seq=3 ttl=64 time=20.8 ms\n64 bytes from 10.0.4.2: icmp_seq=4 ttl=64 time=12.4 ms\n64 bytes from 10.0.4.2: icmp_seq=5 ttl=64 time=20.6 ms\n64 bytes from 10.0.4.2: icmp_seq=6 ttl=64 time=19.0 ms\n64 bytes from 10.0.4.2: icmp_seq=7 ttl=64 time=25.2 ms\n64 bytes from 10.0.4.2: icmp_seq=8 ttl=64 time=20.5 ms\n64 bytes from 10.0.4.2: icmp_seq=9 ttl=64 time=18.4 ms\n64 bytes from 10.0.4.2: icmp_seq=10 ttl=64 time=14.8 ms\n\n--- 10.0.4.2 ping statistics ---\n10 packets transmitted, 10 received, 0% packet loss, time 1871ms\nrtt min/avg/max/mdev = 12.422/18.068/25.210/3.754 ms\n",
+            "src": "r4",
+            "dst_ip": "10.0.4.2"
+          }
+        ],
+        "hops_primary": [
+          {
+            "packet_loss_percent": 0.0,
+            "latency_ms": 21.6,
+            "latency_avg_ms": 23.109,
+            "rtt_ms": [
+              16.4,
+              30.0,
+              20.5,
+              26.5,
+              19.9,
+              22.7,
+              32.3,
+              24.2,
+              18.1,
+              20.5
+            ],
+            "raw": "PING 10.0.1.1 (10.0.1.1) 56(84) bytes of data.\n64 bytes from 10.0.1.1: icmp_seq=1 ttl=64 time=16.4 ms\n64 bytes from 10.0.1.1: icmp_seq=2 ttl=64 time=30.0 ms\n64 bytes from 10.0.1.1: icmp_seq=3 ttl=64 time=20.5 ms\n64 bytes from 10.0.1.1: icmp_seq=4 ttl=64 time=26.5 ms\n64 bytes from 10.0.1.1: icmp_seq=5 ttl=64 time=19.9 ms\n64 bytes from 10.0.1.1: icmp_seq=6 ttl=64 time=22.7 ms\n64 bytes from 10.0.1.1: icmp_seq=7 ttl=64 time=32.3 ms\n64 bytes from 10.0.1.1: icmp_seq=8 ttl=64 time=24.2 ms\n64 bytes from 10.0.1.1: icmp_seq=9 ttl=64 time=18.1 ms\n64 bytes from 10.0.1.1: icmp_seq=10 ttl=64 time=20.5 ms\n\n--- 10.0.1.1 ping statistics ---\n10 packets transmitted, 10 received, 0% packet loss, time 1967ms\nrtt min/avg/max/mdev = 16.378/23.109/32.329/4.896 ms\n",
+            "src": "hostA",
+            "dst_ip": "10.0.1.1"
+          },
+          {
+            "packet_loss_percent": 0.0,
+            "latency_ms": 13.85,
+            "latency_avg_ms": 18.451,
+            "rtt_ms": [
+              10.6,
+              10.7,
+              32.7,
+              10.6,
+              10.5,
+              30.3,
+              10.6,
+              17.0,
+              27.9,
+              23.6
+            ],
+            "raw": "PING 10.0.12.2 (10.0.12.2) 56(84) bytes of data.\n64 bytes from 10.0.12.2: icmp_seq=1 ttl=64 time=10.6 ms\n64 bytes from 10.0.12.2: icmp_seq=2 ttl=64 time=10.7 ms\n64 bytes from 10.0.12.2: icmp_seq=3 ttl=64 time=32.7 ms\n64 bytes from 10.0.12.2: icmp_seq=4 ttl=64 time=10.6 ms\n64 bytes from 10.0.12.2: icmp_seq=5 ttl=64 time=10.5 ms\n64 bytes from 10.0.12.2: icmp_seq=6 ttl=64 time=30.3 ms\n64 bytes from 10.0.12.2: icmp_seq=7 ttl=64 time=10.6 ms\n64 bytes from 10.0.12.2: icmp_seq=8 ttl=64 time=17.0 ms\n64 bytes from 10.0.12.2: icmp_seq=9 ttl=64 time=27.9 ms\n64 bytes from 10.0.12.2: icmp_seq=10 ttl=64 time=23.6 ms\n\n--- 10.0.12.2 ping statistics ---\n10 packets transmitted, 10 received, 0% packet loss, time 2569ms\nrtt min/avg/max/mdev = 10.531/18.451/32.691/8.767 ms\n",
+            "src": "r1",
+            "dst_ip": "10.0.12.2"
+          },
+          {
+            "packet_loss_percent": 0.0,
+            "latency_ms": 10.55,
+            "latency_avg_ms": 13.854,
+            "rtt_ms": [
+              10.4,
+              11.2,
+              11.2,
+              10.5,
+              10.5,
+              10.6,
+              10.5,
+              10.5,
+              35.3,
+              18.1
+            ],
+            "raw": "PING 10.0.24.2 (10.0.24.2) 56(84) bytes of data.\n64 bytes from 10.0.24.2: icmp_seq=1 ttl=64 time=10.4 ms\n64 bytes from 10.0.24.2: icmp_seq=2 ttl=64 time=11.2 ms\n64 bytes from 10.0.24.2: icmp_seq=3 ttl=64 time=11.2 ms\n64 bytes from 10.0.24.2: icmp_seq=4 ttl=64 time=10.5 ms\n64 bytes from 10.0.24.2: icmp_seq=5 ttl=64 time=10.5 ms\n64 bytes from 10.0.24.2: icmp_seq=6 ttl=64 time=10.6 ms\n64 bytes from 10.0.24.2: icmp_seq=7 ttl=64 time=10.5 ms\n64 bytes from 10.0.24.2: icmp_seq=8 ttl=64 time=10.5 ms\n64 bytes from 10.0.24.2: icmp_seq=9 ttl=64 time=35.3 ms\n64 bytes from 10.0.24.2: icmp_seq=10 ttl=64 time=18.1 ms\n\n--- 10.0.24.2 ping statistics ---\n10 packets transmitted, 10 received, 0% packet loss, time 2895ms\nrtt min/avg/max/mdev = 10.400/13.854/35.262/7.473 ms\n",
+            "src": "r2",
+            "dst_ip": "10.0.24.2"
+          },
+          {
+            "packet_loss_percent": 0.0,
+            "latency_ms": 18.7,
+            "latency_avg_ms": 18.068,
+            "rtt_ms": [
+              15.5,
+              13.6,
+              20.8,
+              12.4,
+              20.6,
+              19.0,
+              25.2,
+              20.5,
+              18.4,
+              14.8
+            ],
+            "raw": "PING 10.0.4.2 (10.0.4.2) 56(84) bytes of data.\n64 bytes from 10.0.4.2: icmp_seq=1 ttl=64 time=15.5 ms\n64 bytes from 10.0.4.2: icmp_seq=2 ttl=64 time=13.6 ms\n64 bytes from 10.0.4.2: icmp_seq=3 ttl=64 time=20.8 ms\n64 bytes from 10.0.4.2: icmp_seq=4 ttl=64 time=12.4 ms\n64 bytes from 10.0.4.2: icmp_seq=5 ttl=64 time=20.6 ms\n64 bytes from 10.0.4.2: icmp_seq=6 ttl=64 time=19.0 ms\n64 bytes from 10.0.4.2: icmp_seq=7 ttl=64 time=25.2 ms\n64 bytes from 10.0.4.2: icmp_seq=8 ttl=64 time=20.5 ms\n64 bytes from 10.0.4.2: icmp_seq=9 ttl=64 time=18.4 ms\n64 bytes from 10.0.4.2: icmp_seq=10 ttl=64 time=14.8 ms\n\n--- 10.0.4.2 ping statistics ---\n10 packets transmitted, 10 received, 0% packet loss, time 1871ms\nrtt min/avg/max/mdev = 12.422/18.068/25.210/3.754 ms\n",
+            "src": "r4",
+            "dst_ip": "10.0.4.2"
+          }
+        ],
+        "hops_backup": [
+          {
+            "packet_loss_percent": 0.0,
+            "latency_ms": 12.850000000000001,
+            "latency_avg_ms": 16.816,
+            "rtt_ms": [
+              20.0,
+              34.5,
+              11.2,
+              11.7,
+              12.8,
+              10.5,
+              12.9,
+              24.5,
+              19.0,
+              11.2
+            ],
+            "raw": "PING 10.0.1.1 (10.0.1.1) 56(84) bytes of data.\n64 bytes from 10.0.1.1: icmp_seq=1 ttl=64 time=20.0 ms\n64 bytes from 10.0.1.1: icmp_seq=2 ttl=64 time=34.5 ms\n64 bytes from 10.0.1.1: icmp_seq=3 ttl=64 time=11.2 ms\n64 bytes from 10.0.1.1: icmp_seq=4 ttl=64 time=11.7 ms\n64 bytes from 10.0.1.1: icmp_seq=5 ttl=64 time=12.8 ms\n64 bytes from 10.0.1.1: icmp_seq=6 ttl=64 time=10.5 ms\n64 bytes from 10.0.1.1: icmp_seq=7 ttl=64 time=12.9 ms\n64 bytes from 10.0.1.1: icmp_seq=8 ttl=64 time=24.5 ms\n64 bytes from 10.0.1.1: icmp_seq=9 ttl=64 time=19.0 ms\n64 bytes from 10.0.1.1: icmp_seq=10 ttl=64 time=11.2 ms\n\n--- 10.0.1.1 ping statistics ---\n10 packets transmitted, 10 received, 0% packet loss, time 2906ms\nrtt min/avg/max/mdev = 10.492/16.816/34.456/7.381 ms\n",
+            "src": "hostA",
+            "dst_ip": "10.0.1.1"
+          },
+          {
+            "packet_loss_percent": 0.0,
+            "latency_ms": 20.25,
+            "latency_avg_ms": 21.751,
+            "rtt_ms": [
+              13.1,
+              12.2,
+              10.4,
+              10.6,
+              21.6,
+              36.0,
+              19.5,
+              21.0,
+              48.9,
+              24.3
+            ],
+            "raw": "PING 10.0.13.2 (10.0.13.2) 56(84) bytes of data.\n64 bytes from 10.0.13.2: icmp_seq=1 ttl=64 time=13.1 ms\n64 bytes from 10.0.13.2: icmp_seq=2 ttl=64 time=12.2 ms\n64 bytes from 10.0.13.2: icmp_seq=3 ttl=64 time=10.4 ms\n64 bytes from 10.0.13.2: icmp_seq=4 ttl=64 time=10.6 ms\n64 bytes from 10.0.13.2: icmp_seq=5 ttl=64 time=21.6 ms\n64 bytes from 10.0.13.2: icmp_seq=6 ttl=64 time=36.0 ms\n64 bytes from 10.0.13.2: icmp_seq=7 ttl=64 time=19.5 ms\n64 bytes from 10.0.13.2: icmp_seq=8 ttl=64 time=21.0 ms\n64 bytes from 10.0.13.2: icmp_seq=9 ttl=64 time=48.9 ms\n64 bytes from 10.0.13.2: icmp_seq=10 ttl=64 time=24.3 ms\n\n--- 10.0.13.2 ping statistics ---\n10 packets transmitted, 10 received, 0% packet loss, time 2101ms\nrtt min/avg/max/mdev = 10.412/21.751/48.929/11.715 ms\n",
+            "src": "r1",
+            "dst_ip": "10.0.13.2"
+          },
+          {
+            "packet_loss_percent": 0.0,
+            "latency_ms": 17.05,
+            "latency_avg_ms": 18.702,
+            "rtt_ms": [
+              12.7,
+              24.3,
+              24.1,
+              16.1,
+              18.5,
+              11.9,
+              10.6,
+              14.3,
+              18.0,
+              36.5
+            ],
+            "raw": "PING 10.0.34.2 (10.0.34.2) 56(84) bytes of data.\n64 bytes from 10.0.34.2: icmp_seq=1 ttl=64 time=12.7 ms\n64 bytes from 10.0.34.2: icmp_seq=2 ttl=64 time=24.3 ms\n64 bytes from 10.0.34.2: icmp_seq=3 ttl=64 time=24.1 ms\n64 bytes from 10.0.34.2: icmp_seq=4 ttl=64 time=16.1 ms\n64 bytes from 10.0.34.2: icmp_seq=5 ttl=64 time=18.5 ms\n64 bytes from 10.0.34.2: icmp_seq=6 ttl=64 time=11.9 ms\n64 bytes from 10.0.34.2: icmp_seq=7 ttl=64 time=10.6 ms\n64 bytes from 10.0.34.2: icmp_seq=8 ttl=64 time=14.3 ms\n64 bytes from 10.0.34.2: icmp_seq=9 ttl=64 time=18.0 ms\n64 bytes from 10.0.34.2: icmp_seq=10 ttl=64 time=36.5 ms\n\n--- 10.0.34.2 ping statistics ---\n10 packets transmitted, 10 received, 0% packet loss, time 2026ms\nrtt min/avg/max/mdev = 10.607/18.702/36.464/7.414 ms\n",
+            "src": "r3",
+            "dst_ip": "10.0.34.2"
+          },
+          {
+            "packet_loss_percent": 0.0,
+            "latency_ms": 19.7,
+            "latency_avg_ms": 19.346,
+            "rtt_ms": [
+              10.7,
+              12.4,
+              20.3,
+              14.6,
+              19.5,
+              21.7,
+              21.9,
+              39.2,
+              19.9,
+              13.4
+            ],
+            "raw": "PING 10.0.4.2 (10.0.4.2) 56(84) bytes of data.\n64 bytes from 10.0.4.2: icmp_seq=1 ttl=64 time=10.7 ms\n64 bytes from 10.0.4.2: icmp_seq=2 ttl=64 time=12.4 ms\n64 bytes from 10.0.4.2: icmp_seq=3 ttl=64 time=20.3 ms\n64 bytes from 10.0.4.2: icmp_seq=4 ttl=64 time=14.6 ms\n64 bytes from 10.0.4.2: icmp_seq=5 ttl=64 time=19.5 ms\n64 bytes from 10.0.4.2: icmp_seq=6 ttl=64 time=21.7 ms\n64 bytes from 10.0.4.2: icmp_seq=7 ttl=64 time=21.9 ms\n64 bytes from 10.0.4.2: icmp_seq=8 ttl=64 time=39.2 ms\n64 bytes from 10.0.4.2: icmp_seq=9 ttl=64 time=19.9 ms\n64 bytes from 10.0.4.2: icmp_seq=10 ttl=64 time=13.4 ms\n\n--- 10.0.4.2 ping statistics ---\n10 packets transmitted, 10 received, 0% packet loss, time 1847ms\nrtt min/avg/max/mdev = 10.654/19.346/39.189/7.674 ms\n",
+            "src": "r4",
+            "dst_ip": "10.0.4.2"
+          }
+        ],
+        "duration_seconds": 18.475893947997974,
+        "probes": [
+          {
+            "kind": "icmp_echo",
+            "packets": 80,
+            "bytes": 5120
+          }
+        ],
+        "error": null
+      },
+      {
+        "test_id": "T4_mtu",
+        "df_ping_ok": false,
+        "raw": "PING 10.0.4.2 (10.0.4.2) 1400(1428) bytes of data.\n1408 bytes from 10.0.4.2: icmp_seq=2 ttl=61 time=83.1 ms\n1408 bytes from 10.0.4.2: icmp_seq=3 ttl=61 time=89.2 ms\n1408 bytes from 10.0.4.2: icmp_seq=4 ttl=61 time=44.9 ms\n\n--- 10.0.4.2 ping statistics ---\n5 packets transmitted, 3 received, 40% packet loss, time 852ms\nrtt min/avg/max/mdev = 44.940/72.396/89.186/19.575 ms\n",
+        "duration_seconds": 1.1422083950019442,
+        "probes": [
+          {
+            "kind": "icmp_echo",
+            "packets": 5,
+            "bytes": 7040
+          }
+        ],
+        "error": null
+      },
+      {
+        "test_id": "T5_if_errors",
+        "interfaces": {
+          "r1/r1-eth0": {
+            "rx_errors": 0,
+            "tx_errors": 0
+          },
+          "r1/r1-eth1": {
+            "rx_errors": 0,
+            "tx_errors": 0
+          },
+          "r1/r1-eth2": {
+            "rx_errors": 0,
+            "tx_errors": 0
+          },
+          "r2/r2-eth0": {
+            "rx_errors": 0,
+            "tx_errors": 0
+          },
+          "r2/r2-eth1": {
+            "rx_errors": 0,
+            "tx_errors": 0
+          },
+          "r3/r3-eth0": {
+            "rx_errors": 0,
+            "tx_errors": 0
+          },
+          "r3/r3-eth1": {
+            "rx_errors": 0,
+            "tx_errors": 0
+          },
+          "r4/r4-eth0": {
+            "rx_errors": 0,
+            "tx_errors": 0
+          },
+          "r4/r4-eth1": {
+            "rx_errors": 0,
+            "tx_errors": 0
+          },
+          "r4/r4-eth2": {
+            "rx_errors": 0,
+            "tx_errors": 0
+          }
+        },
+        "duration_seconds": 0.29099988500092877,
+        "probes": [],
+        "error": null
+      },
+      {
+        "test_id": "T6_queue_stats",
+        "queues": {
+          "r1/r1-eth0": {
+            "drops": 0,
+            "backlog_bytes": 0,
+            "backlog_packets": 0,
+            "loss_rule": false,
+            "rate_rule": false,
+            "raw": "qdisc htb 5: root refcnt 3 r2q 10 default 0x1 direct_packets_stat 0 direct_qlen 1000\n Sent 8694 bytes 49 pkt (dropped 0, overlimits 0 requeues 0) \n backlog 0b 0p requeues 0\nqdisc netem 10: parent 5:1 limit 1000 delay 5ms\n Sent 8694 bytes 49 pkt (dropped 0, overlimits 0 requeues 0) \n backlog 0b 0p requeues 0"
+          },
+          "r1/r1-eth1": {
+            "drops": 0,
+            "backlog_bytes": 0,
+            "backlog_packets": 0,
+            "loss_rule": false,
+            "rate_rule": false,
+            "raw": "qdisc htb 5: root refcnt 3 r2q 10 default 0x1 direct_packets_stat 0 direct_qlen 1000\n Sent 10850 bytes 43 pkt (dropped 0, overlimits 0 requeues 0) \n backlog 0b 0p requeues 0\nqdisc netem 10: parent 5:1 limit 1000 delay 5ms\n Sent 10850 bytes 43 pkt (dropped 0, overlimits 0 requeues 0) \n backlog 0b 0p requeues 0"
+          },
+          "r1/r1-eth2": {
+            "drops": 0,
+            "backlog_bytes": 0,
+            "backlog_packets": 0,
+            "loss_rule": false,
+            "rate_rule": false,
+            "raw": "qdisc htb 5: root refcnt 3 r2q 10 default 0x1 direct_packets_stat 0 direct_qlen 1000\n Sent 1330 bytes 15 pkt (dropped 0, overlimits 0 requeues 0) \n backlog 0b 0p requeues 0\nqdisc netem 10: parent 5:1 limit 1000 delay 5ms\n Sent 1330 bytes 15 pkt (dropped 0, overlimits 0 requeues 0) \n backlog 0b 0p requeues 0"
+          },
+          "r2/r2-eth0": {
+            "drops": 0,
+            "backlog_bytes": 0,
+            "backlog_packets": 0,
+            "loss_rule": false,
+            "rate_rule": false,
+            "raw": "qdisc htb 5: root refcnt 3 r2q 10 default 0x1 direct_packets_stat 0 direct_qlen 1000\n Sent 7672 bytes 38 pkt (dropped 0, overlimits 0 requeues 0) \n backlog 0b 0p requeues 0\nqdisc netem 10: parent 5:1 limit 1000 delay 5ms\n Sent 7672 bytes 38 pkt (dropped 0, overlimits 0 requeues 0) \n backlog 0b 0p requeues 0"
+          },
+          "r2/r2-eth1": {
+            "drops": 10,
+            "backlog_bytes": 0,
+            "backlog_packets": 0,
+            "loss_rule": true,
+            "rate_rule": false,
+            "raw": "qdisc htb 5: root refcnt 3 r2q 10 default 0x1 direct_packets_stat 0 direct_qlen 1000\n Sent 6874 bytes 31 pkt (dropped 5, overlimits 0 requeues 0) \n backlog 0b 0p requeues 0\nqdisc netem 10: parent 5:1 limit 1000 delay 5ms loss 18%\n Sent 6874 bytes 31 pkt (dropped 5, overlimits 0 requeues 0) \n backlog 0b 0p requeues 0"
+          },
+          "r3/r3-eth0": {
+            "drops": 0,
+            "backlog_bytes": 0,
+            "backlog_packets": 0,
+            "loss_rule": false,
+            "rate_rule": false,
+            "raw": "qdisc htb 5: root refcnt 3 r2q 10 default 0x1 direct_packets_stat 0 direct_qlen 1000\n Sent 1330 bytes 15 pkt (dropped 0, overlimits 0 requeues 0) \n backlog 0b 0p requeues 0\nqdisc netem 10: parent 5:1 limit 1000 delay 5ms\n Sent 1330 bytes 15 pkt (dropped 0, overlimits 0 requeues 0) \n backlog 0b 0p requeues 0"
+          },
+          "r3/r3-eth1": {
+            "drops": 0,
+            "backlog_bytes": 0,
+            "backlog_packets": 0,
+            "loss_rule": false,
+            "rate_rule": false,
+            "raw": "qdisc htb 5: root refcnt 3 r2q 10 default 0x1 direct_packets_stat 0 direct_qlen 1000\n Sent 1372 bytes 16 pkt (dropped 0, overlimits 0 requeues 0) \n backlog 0b 0p requeues 0\nqdisc netem 10: parent 5:1 limit 1000 delay 5ms\n Sent 1372 bytes 16 pkt (dropped 0, overlimits 0 requeues 0) \n backlog 0b 0p requeues 0"
+          }
+        },
+        "duration_seconds": 0.07032464600342792,
+        "probes": [],
+        "error": null
+      },
+      {
+        "test_id": "T7_route_check",
+        "r1_to_dest": "10.0.4.0/24 via 10.0.12.2 dev r1-eth1",
+        "r2_to_dest": "10.0.4.0/24 via 10.0.24.2 dev r2-eth1",
+        "r4_to_src": "10.0.1.0/24 via 10.0.24.1 dev r4-eth0",
+        "active_path": "primary",
+        "duration_seconds": 0.045455690000380855,
+        "probes": [],
+        "error": null
+      },
+      {
+        "test_id": "T8_tcp_vs_ping",
+        "ping_ok": true,
+        "tcp_ok": true,
+        "tcp_raw": "exit:0\n",
+        "duration_seconds": 2.501208878002217,
+        "probes": [
+          {
+            "kind": "icmp_echo",
+            "packets": 5,
+            "bytes": 320
+          },
+          {
+            "kind": "tcp_connect",
+            "packets": 1
+          }
+        ],
+        "error": null
+      },
+      {
+        "test_id": "T9_oneway_loss",
+        "hostA_to_hostB": {
+          "packet_loss_percent": 30.0,
+          "latency_ms": 80.1,
+          "latency_avg_ms": 82.472,
+          "rtt_ms": [
+            83.9,
+            70.9,
+            114.0,
+            80.1,
+            93.2,
+            78.0,
+            57.4
+          ],
+          "raw": "PING 10.0.4.2 (10.0.4.2) 56(84) bytes of data.\n64 bytes from 10.0.4.2: icmp_seq=1 ttl=61 time=83.9 ms\n64 bytes from 10.0.4.2: icmp_seq=2 ttl=61 time=70.9 ms\n64 bytes from 10.0.4.2: icmp_seq=3 ttl=61 time=114 ms\n64 bytes from 10.0.4.2: icmp_seq=4 ttl=61 time=80.1 ms\n64 bytes from 10.0.4.2: icmp_seq=6 ttl=61 time=93.2 ms\n64 bytes from 10.0.4.2: icmp_seq=7 ttl=61 time=78.0 ms\n64 bytes from 10.0.4.2: icmp_seq=8 ttl=61 time=57.4 ms\n\n--- 10.0.4.2 ping statistics ---\n10 packets transmitted, 7 received, 30% packet loss, time 1846ms\nrtt min/avg/max/mdev = 57.417/82.472/113.771/16.402 ms\n",
+          "src": "hostA",
+          "dst_ip": "10.0.4.2",
+          "round_trip_loss_percent": 30.0,
+          "one_way": true,
+          "requests_arrived": 7
+        },
+        "hostB_to_hostA": {
+          "packet_loss_percent": 0.0,
+          "latency_ms": 58.5,
+          "latency_avg_ms": 61.85,
+          "rtt_ms": [
+            48.7,
+            79.3,
+            86.2,
+            46.1,
+            44.2,
+            42.1,
+            58.5,
+            69.6,
+            82.0
+          ],
+          "raw": "PING 10.0.1.2 (10.0.1.2) 56(84) bytes of data.\n64 bytes from 10.0.1.2: icmp_seq=1 ttl=61 time=48.7 ms\n64 bytes from 10.0.1.2: icmp_seq=2 ttl=61 time=79.3 ms\n64 bytes from 10.0.1.2: icmp_seq=3 ttl=61 time=86.2 ms\n64 bytes from 10.0.1.2: icmp_seq=4 ttl=61 time=46.1 ms\n64 bytes from 10.0.1.2: icmp_seq=5 ttl=61 time=44.2 ms\n64 bytes from 10.0.1.2: icmp_seq=6 ttl=61 time=42.1 ms\n64 bytes from 10.0.1.2: icmp_seq=7 ttl=61 time=58.5 ms\n64 bytes from 10.0.1.2: icmp_seq=8 ttl=61 time=69.6 ms\n64 bytes from 10.0.1.2: icmp_seq=9 ttl=61 time=82.0 ms\n\n--- 10.0.1.2 ping statistics ---\n10 packets transmitted, 9 received, 10% packet loss, time 2136ms\nrtt min/avg/max/mdev = 42.062/61.850/86.187/16.655 ms\n",
+          "src": "hostB",
+          "dst_ip": "10.0.1.2",
+          "round_trip_loss_percent": 10.0,
+          "one_way": true,
+          "requests_arrived": 10
+        },
+        "duration_seconds": 4.526081003001309,
+        "probes": [
+          {
+            "kind": "icmp_echo",
+            "packets": 20,
+            "bytes": 1280
+          }
+        ],
+        "error": null
+      },
+      {
+        "test_id": "T10_speed",
+        "mbit_per_sec": 0.343,
+        "intervals": [],
+        "raw": "Connecting to host 10.0.4.2, port 5201\n[  5] local 10.0.1.2 port 36146 connected to 10.0.4.2 port 5201\n[ ID] Interval           Transfer     Bitrate         Retr  Cwnd\n[  5]   0.00-1.00   sec   256 KBytes  2.10 Mbits/sec   30   2.83 KBytes       \n[  5]   1.00-2.02   sec  0.00 Bytes  0.00 bits/sec    8   2.83 KBytes       \n[  5]   2.02-3.01   sec   128 KBytes  1.06 Mbits/sec    7   2.83 KBytes       \n- - - - - - - - - - - - - - - - - - - - - - - - -\n[ ID] Interval           Transfer     Bitrate         Retr\n[  5]   0.00-3.01   sec   384 KBytes  1.05 Mbits/sec   45            sender\n[  5]   0.00-3.05   sec   128 KBytes   343 Kbits/sec                  receiver\n\niperf Done.\n",
+        "duration_seconds": 3.758792134001851,
+        "probes": [
+          {
+            "kind": "iperf3",
+            "bytes": 131072
+          }
+        ],
+        "error": null,
+        "server_listening": true
+      }
+    ],
+    "cost": {
+      "tests": [
+        {
+          "test_id": "T1_e2e_ping",
+          "duration_seconds": 2.1022446479983046,
+          "additional_packets": 10,
+          "additional_bytes": 640
+        },
+        {
+          "test_id": "T2_hop_ping",
+          "duration_seconds": 18.475893947997974,
+          "additional_packets": 80,
+          "additional_bytes": 5120
+        },
+        {
+          "test_id": "T4_mtu",
+          "duration_seconds": 1.1422083950019442,
+          "additional_packets": 5,
+          "additional_bytes": 7040
+        },
+        {
+          "test_id": "T5_if_errors",
+          "duration_seconds": 0.29099988500092877,
+          "additional_packets": 0,
+          "additional_bytes": 0
+        },
+        {
+          "test_id": "T6_queue_stats",
+          "duration_seconds": 0.07032464600342792,
+          "additional_packets": 0,
+          "additional_bytes": 0
+        },
+        {
+          "test_id": "T7_route_check",
+          "duration_seconds": 0.045455690000380855,
+          "additional_packets": 0,
+          "additional_bytes": 0
+        },
+        {
+          "test_id": "T8_tcp_vs_ping",
+          "duration_seconds": 2.501208878002217,
+          "additional_packets": 6,
+          "additional_bytes": 320
+        },
+        {
+          "test_id": "T9_oneway_loss",
+          "duration_seconds": 4.526081003001309,
+          "additional_packets": 20,
+          "additional_bytes": 1280
+        },
+        {
+          "test_id": "T10_speed",
+          "duration_seconds": 3.758792134001851,
+          "additional_packets": 0,
+          "additional_bytes": 131072
+        }
+      ],
+      "test_count": 9,
+      "total_duration_seconds": 32.91320922700834,
+      "total_additional_packets": 121,
+      "total_additional_bytes": 145472
+    }
+  },
+  "oam_cost": {
+    "tests": [
+      {
+        "test_id": "T1_e2e_ping",
+        "duration_seconds": 2.1022446479983046,
+        "additional_packets": 10,
+        "additional_bytes": 640
+      },
+      {
+        "test_id": "T2_hop_ping",
+        "duration_seconds": 18.475893947997974,
+        "additional_packets": 80,
+        "additional_bytes": 5120
+      },
+      {
+        "test_id": "T4_mtu",
+        "duration_seconds": 1.1422083950019442,
+        "additional_packets": 5,
+        "additional_bytes": 7040
+      },
+      {
+        "test_id": "T5_if_errors",
+        "duration_seconds": 0.29099988500092877,
+        "additional_packets": 0,
+        "additional_bytes": 0
+      },
+      {
+        "test_id": "T6_queue_stats",
+        "duration_seconds": 0.07032464600342792,
+        "additional_packets": 0,
+        "additional_bytes": 0
+      },
+      {
+        "test_id": "T7_route_check",
+        "duration_seconds": 0.045455690000380855,
+        "additional_packets": 0,
+        "additional_bytes": 0
+      },
+      {
+        "test_id": "T8_tcp_vs_ping",
+        "duration_seconds": 2.501208878002217,
+        "additional_packets": 6,
+        "additional_bytes": 320
+      },
+      {
+        "test_id": "T9_oneway_loss",
+        "duration_seconds": 4.526081003001309,
+        "additional_packets": 20,
+        "additional_bytes": 1280
+      },
+      {
+        "test_id": "T10_speed",
+        "duration_seconds": 3.758792134001851,
+        "additional_packets": 0,
+        "additional_bytes": 131072
+      }
+    ],
+    "test_count": 9,
+    "total_duration_seconds": 32.91320922700834,
+    "total_additional_packets": 121,
+    "total_additional_bytes": 145472
+  },
+  "agent_proposal": {
+    "action": "REROUTE",
+    "target": "HostA_to_HostB",
+    "proposed_path": [
+      "r1",
+      "r3",
+      "r4"
+    ],
+    "reason": "Active primary path (r1\u2011r2\u2011r4) shows 25\u202f% packet loss and high latency; the r2\u2011r4 link has a loss rule (18\u202f% loss) indicating degradation, while the backup path (r1\u2011r3\u2011r4) is up with no loss. Policy permits rerouting to a healthy backup when the primary is degraded.",
+    "causes": [
+      {
+        "cause_id": "F3",
+        "predicted_tests": [
+          {
+            "test_id": "T1_e2e_ping",
+            "expected": "high loss (>20%) on primary path"
+          },
+          {
+            "test_id": "T9_oneway_loss",
+            "expected": "loss detected on r2\u2011r4 direction"
+          },
+          {
+            "test_id": "T6_queue_stats",
+            "expected": "no queue drops reported"
+          }
+        ]
+      },
+      {
+        "cause_id": "F5",
+        "predicted_tests": [
+          {
+            "test_id": "T10_speed",
+            "expected": "reduced throughput on primary path"
+          },
+          {
+            "test_id": "T2_hop_ping",
+            "expected": "increased latency on hop r2\u2011r4"
+          },
+          {
+            "test_id": "T8_tcp_vs_ping",
+            "expected": "TCP performance worse than ping"
+          }
+        ]
+      },
+      {
+        "cause_id": "F6",
+        "predicted_tests": [
+          {
+            "test_id": "T6_queue_stats",
+            "expected": "queue drops or backlog on r2\u2011r4"
+          },
+          {
+            "test_id": "T5_if_errors",
+            "expected": "interface error counters normal"
+          },
+          {
+            "test_id": "T4_mtu",
+            "expected": "MTU OK"
+          }
+        ]
+      },
+      {
+        "cause_id": "U2",
+        "predicted_tests": [
+          {
+            "test_id": "T9_oneway_loss",
+            "expected": "loss observed only from r4 to r2"
+          },
+          {
+            "test_id": "T2_hop_ping",
+            "expected": "asymmetric loss on hop"
+          },
+          {
+            "test_id": "T1_e2e_ping",
+            "expected": "overall loss around 25\u202f%"
+          }
+        ]
+      },
+      {
+        "cause_id": "H0",
+        "predicted_tests": [
+          {
+            "test_id": "T1_e2e_ping",
+            "expected": "no loss, low latency"
+          },
+          {
+            "test_id": "T2_hop_ping",
+            "expected": "healthy hop metrics"
+          },
+          {
+            "test_id": "T6_queue_stats",
+            "expected": "no drops or backlog"
+          }
+        ]
+      }
+    ],
+    "observed_at": "2026-11-04T09:16:49.763947+00:00"
+  },
+  "agent_error": null,
+  "gate_decision": {
+    "decision": "block",
+    "reason": "consistency failed",
+    "proposal_action": "REROUTE",
+    "tests_run": [
+      "T1_e2e_ping",
+      "T2_hop_ping",
+      "T4_mtu",
+      "T5_if_errors",
+      "T6_queue_stats",
+      "T7_route_check",
+      "T8_tcp_vs_ping",
+      "T9_oneway_loss",
+      "T10_speed"
+    ],
+    "checks": {
+      "consistency": {
+        "passed": false,
+        "mismatches": [
+          {
+            "test_id": "T1_e2e_ping",
+            "expected": "high loss (>20%) on primary path",
+            "observed": "loss"
+          },
+          {
+            "test_id": "T9_oneway_loss",
+            "expected": "loss detected on r2\u2011r4 direction",
+            "observed": "a2b_loss"
+          },
+          {
+            "test_id": "T6_queue_stats",
+            "expected": "no queue drops reported",
+            "observed": "clear"
+          }
+        ],
+        "checked_cause": "F3"
+      },
+      "discrimination": {
+        "passed": false,
+        "ruled_out": [],
+        "relevant": [
+          "H0",
+          "F11"
+        ],
+        "remaining": [
+          "H0",
+          "F11"
+        ]
+      },
+      "safety": {
+        "passed": true,
+        "path": "backup"
+      },
+      "candidates": [
+        "F3",
+        "F5",
+        "F6",
+        "H0",
+        "F11"
+      ]
+    },
+    "cost": {
+      "full_battery": {
+        "tests": [
+          {
+            "test_id": "T1_e2e_ping",
+            "duration_seconds": 2.1022446479983046,
+            "additional_packets": 10,
+            "additional_bytes": 640
+          },
+          {
+            "test_id": "T2_hop_ping",
+            "duration_seconds": 18.475893947997974,
+            "additional_packets": 80,
+            "additional_bytes": 5120
+          },
+          {
+            "test_id": "T4_mtu",
+            "duration_seconds": 1.1422083950019442,
+            "additional_packets": 5,
+            "additional_bytes": 7040
+          },
+          {
+            "test_id": "T5_if_errors",
+            "duration_seconds": 0.29099988500092877,
+            "additional_packets": 0,
+            "additional_bytes": 0
+          },
+          {
+            "test_id": "T6_queue_stats",
+            "duration_seconds": 0.07032464600342792,
+            "additional_packets": 0,
+            "additional_bytes": 0
+          },
+          {
+            "test_id": "T7_route_check",
+            "duration_seconds": 0.045455690000380855,
+            "additional_packets": 0,
+            "additional_bytes": 0
+          },
+          {
+            "test_id": "T8_tcp_vs_ping",
+            "duration_seconds": 2.501208878002217,
+            "additional_packets": 6,
+            "additional_bytes": 320
+          },
+          {
+            "test_id": "T9_oneway_loss",
+            "duration_seconds": 4.526081003001309,
+            "additional_packets": 20,
+            "additional_bytes": 1280
+          },
+          {
+            "test_id": "T10_speed",
+            "duration_seconds": 3.758792134001851,
+            "additional_packets": 0,
+            "additional_bytes": 131072
+          }
+        ],
+        "test_count": 9,
+        "total_duration_seconds": 32.91320922700834,
+        "total_additional_packets": 121,
+        "total_additional_bytes": 145472
+      },
+      "selected_tests": {
+        "tests": [
+          {
+            "test_id": "T4_mtu",
+            "duration_seconds": 1.1422083950019442,
+            "additional_packets": 5,
+            "additional_bytes": 7040
+          },
+          {
+            "test_id": "T2_hop_ping",
+            "duration_seconds": 18.475893947997974,
+            "additional_packets": 80,
+            "additional_bytes": 5120
+          }
+        ],
+        "test_count": 2,
+        "total_duration_seconds": 19.61810234299992,
+        "total_additional_packets": 85,
+        "total_additional_bytes": 12160
+      },
+      "tests_executed": {
+        "tests": [
+          {
+            "test_id": "T1_e2e_ping",
+            "duration_seconds": 2.1022446479983046,
+            "additional_packets": 10,
+            "additional_bytes": 640
+          },
+          {
+            "test_id": "T2_hop_ping",
+            "duration_seconds": 18.475893947997974,
+            "additional_packets": 80,
+            "additional_bytes": 5120
+          },
+          {
+            "test_id": "T4_mtu",
+            "duration_seconds": 1.1422083950019442,
+            "additional_packets": 5,
+            "additional_bytes": 7040
+          },
+          {
+            "test_id": "T5_if_errors",
+            "duration_seconds": 0.29099988500092877,
+            "additional_packets": 0,
+            "additional_bytes": 0
+          },
+          {
+            "test_id": "T6_queue_stats",
+            "duration_seconds": 0.07032464600342792,
+            "additional_packets": 0,
+            "additional_bytes": 0
+          },
+          {
+            "test_id": "T7_route_check",
+            "duration_seconds": 0.045455690000380855,
+            "additional_packets": 0,
+            "additional_bytes": 0
+          },
+          {
+            "test_id": "T8_tcp_vs_ping",
+            "duration_seconds": 2.501208878002217,
+            "additional_packets": 6,
+            "additional_bytes": 320
+          },
+          {
+            "test_id": "T9_oneway_loss",
+            "duration_seconds": 4.526081003001309,
+            "additional_packets": 20,
+            "additional_bytes": 1280
+          },
+          {
+            "test_id": "T10_speed",
+            "duration_seconds": 3.758792134001851,
+            "additional_packets": 0,
+            "additional_bytes": 131072
+          }
+        ],
+        "test_count": 9,
+        "total_duration_seconds": 32.91320922700834,
+        "total_additional_packets": 121,
+        "total_additional_bytes": 145472
+      }
+    },
+    "log": {
+      "candidates": [
+        "F3",
+        "F5",
+        "F6",
+        "H0",
+        "F11"
+      ],
+      "relevant_alternatives": [
+        "H0",
+        "F11"
+      ],
+      "selected_tests": [
+        "T4_mtu",
+        "T2_hop_ping"
+      ],
+      "reused_tests": [
+        "T4_mtu",
+        "T2_hop_ping"
+      ],
+      "ran_tests": [],
+      "eliminated": [],
+      "comparisons": [
+        {
+          "test_id": "T4_mtu",
+          "alternative": "H0",
+          "observed": "mtu_fail",
+          "expected_alternative": "df_ok",
+          "expected_primary": null
+        },
+        {
+          "test_id": "T2_hop_ping",
+          "alternative": "F11",
+          "observed": "primary:hostA-r1=ok,r1-r2=ok,r2-r4=ok,r4-hostB=ok;backup:hostA-r1=ok,r1-r3=ok,r3-r4=ok,r4-hostB=ok",
+          "expected_alternative": "primary:hostA-r1=ok,r1-r2=ok,r2-r4=ok,r4-hostB=loss;backup:hostA-r1=ok,r1-r3=ok,r3-r4=ok,r4-hostB=loss",
+          "expected_primary": null
+        }
+      ],
+      "rules": [
+        "consistency"
+      ],
+      "budget": {
+        "budget_seconds": 8.0,
+        "tests_used_seconds": 0.0,
+        "within_budget": true
+      },
+      "learned_grader": false,
+      "frozen": true,
+      "state_fingerprint": "{\"links\": [{\"name\": \"hostA-r1\", \"up\": true}, {\"name\": \"r1-r2\", \"up\": true}, {\"name\": \"r1-r3\", \"up\": true}, {\"name\": \"r2-r4\", \"up\": true}, {\"name\": \"r3-r4\", \"up\": true}, {\"name\": \"r4-hostB\", \"up\": true}], \"qdiscs\": {}, \"routes\": [{\"node\": \"r1\", \"prefix\": \"10.0.1.0/24\", \"route\": \"10.0.1.0/24 dev r1-eth0 proto kernel scope link src 10.0.1.1\"}, {\"node\": \"r1\", \"prefix\": \"10.0.4.0/24\", \"route\": \"10.0.4.0/24 via 10.0.12.2 dev r1-eth1\"}, {\"node\": \"r2\", \"prefix\": \"10.0.1.0/24\", \"route\": \"10.0.1.0/24 via 10.0.12.1 dev r2-eth0\"}, {\"node\": \"r2\", \"prefix\": \"10.0.4.0/24\", \"route\": \"10.0.4.0/24 via 10.0.24.2 dev r2-eth1\"}, {\"node\": \"r4\", \"prefix\": \"10.0.1.0/24\", \"route\": \"10.0.1.0/24 via 10.0.24.1 dev r4-eth0\"}, {\"node\": \"r4\", \"prefix\": \"10.0.4.0/24\", \"route\": \"10.0.4.0/24 dev r4-eth2 proto kernel scope link src 10.0.4.1\"}]}"
+    },
+    "snapshot_fingerprint": "{\"links\": [{\"name\": \"hostA-r1\", \"up\": true}, {\"name\": \"r1-r2\", \"up\": true}, {\"name\": \"r1-r3\", \"up\": true}, {\"name\": \"r2-r4\", \"up\": true}, {\"name\": \"r3-r4\", \"up\": true}, {\"name\": \"r4-hostB\", \"up\": true}], \"qdiscs\": {}, \"routes\": [{\"node\": \"r1\", \"prefix\": \"10.0.1.0/24\", \"route\": \"10.0.1.0/24 dev r1-eth0 proto kernel scope link src 10.0.1.1\"}, {\"node\": \"r1\", \"prefix\": \"10.0.4.0/24\", \"route\": \"10.0.4.0/24 via 10.0.12.2 dev r1-eth1\"}, {\"node\": \"r2\", \"prefix\": \"10.0.1.0/24\", \"route\": \"10.0.1.0/24 via 10.0.12.1 dev r2-eth0\"}, {\"node\": \"r2\", \"prefix\": \"10.0.4.0/24\", \"route\": \"10.0.4.0/24 via 10.0.24.2 dev r2-eth1\"}, {\"node\": \"r4\", \"prefix\": \"10.0.1.0/24\", \"route\": \"10.0.1.0/24 via 10.0.24.1 dev r4-eth0\"}, {\"node\": \"r4\", \"prefix\": \"10.0.4.0/24\", \"route\": \"10.0.4.0/24 dev r4-eth2 proto kernel scope link src 10.0.4.1\"}]}",
+    "binding": {
+      "decision_id": "7a0057fd15f146cfb57bb1126a581c4d",
+      "snapshot_fingerprint": "{\"links\": [{\"name\": \"hostA-r1\", \"up\": true}, {\"name\": \"r1-r2\", \"up\": true}, {\"name\": \"r1-r3\", \"up\": true}, {\"name\": \"r2-r4\", \"up\": true}, {\"name\": \"r3-r4\", \"up\": true}, {\"name\": \"r4-hostB\", \"up\": true}], \"qdiscs\": {\"r1/r1-eth1\": \"qdisc htb 5: root r2q 10 default 0x1 direct_qlen 1000|qdisc netem 10: parent 5:1 limit 1000 delay 5ms\", \"r1/r1-eth2\": \"qdisc htb 5: root r2q 10 default 0x1 direct_qlen 1000|qdisc netem 10: parent 5:1 limit 1000 delay 5ms\", \"r2/r2-eth0\": \"qdisc htb 5: root r2q 10 default 0x1 direct_qlen 1000|qdisc netem 10: parent 5:1 limit 1000 delay 5ms\", \"r2/r2-eth1\": \"qdisc htb 5: root r2q 10 default 0x1 direct_qlen 1000|qdisc netem 10: parent 5:1 limit 1000 delay 5ms loss 18%\", \"r3/r3-eth0\": \"qdisc htb 5: root r2q 10 default 0x1 direct_qlen 1000|qdisc netem 10: parent 5:1 limit 1000 delay 5ms\", \"r3/r3-eth1\": \"qdisc htb 5: root r2q 10 default 0x1 direct_qlen 1000|qdisc netem 10: parent 5:1 limit 1000 delay 5ms\", \"r4/r4-eth0\": \"qdisc htb 5: root r2q 10 default 0x1 direct_qlen 1000|qdisc netem 10: parent 5:1 limit 1000 delay 5ms\", \"r4/r4-eth1\": \"qdisc htb 5: root r2q 10 default 0x1 direct_qlen 1000|qdisc netem 10: parent 5:1 limit 1000 delay 5ms\"}, \"routes\": [{\"node\": \"r1\", \"prefix\": \"10.0.1.0/24\", \"route\": \"10.0.1.0/24 dev r1-eth0 proto kernel scope link src 10.0.1.1\"}, {\"node\": \"r1\", \"prefix\": \"10.0.4.0/24\", \"route\": \"10.0.4.0/24 via 10.0.12.2 dev r1-eth1\"}, {\"node\": \"r2\", \"prefix\": \"10.0.1.0/24\", \"route\": \"10.0.1.0/24 via 10.0.12.1 dev r2-eth0\"}, {\"node\": \"r2\", \"prefix\": \"10.0.4.0/24\", \"route\": \"10.0.4.0/24 via 10.0.24.2 dev r2-eth1\"}, {\"node\": \"r4\", \"prefix\": \"10.0.1.0/24\", \"route\": \"10.0.1.0/24 via 10.0.24.1 dev r4-eth0\"}, {\"node\": \"r4\", \"prefix\": \"10.0.4.0/24\", \"route\": \"10.0.4.0/24 dev r4-eth2 proto kernel scope link src 10.0.4.1\"}]}",
+      "proposal_digest": "0c112d2101521c56232bb1bab963aa6c6815b63068df4db7d98840f63927e31c",
+      "evidence_digest": "20d2bdd90d25b9999f179c92a3fad30cd1f41cdc46fb2b15ca1777f3e12e69d0",
+      "snapshot_timestamp": "2026-11-04T09:16:49.763947+00:00",
+      "signed": false,
+      "signature": null
+    }
+  },
+  "gate_error": null,
+  "execution_attempted": false,
+  "execution_result": null,
+  "execution_error": null,
+  "remediation_succeeded": false,
+  "safeguard_missing": null,
+  "state_verified": false,
+  "agent_cost": {
+    "latency_seconds": 2.8263804790003633,
+    "model_latency_seconds": 2.8225782349982182,
+    "prompt_tokens": 4623,
+    "completion_tokens": 859
+  },
+  "gate_cost": {
+    "latency_seconds": 0.5232376550011395
+  },
+  "completed_at": "2026-11-04T09:17:41.039611+00:00",
+  "pilot_scenario": "normal",
+  "b5_decision": {
+    "method": "B5",
+    "action": "REROUTE",
+    "tests_run": [
+      "T2_hop_ping",
+      "T4_mtu",
+      "T8_tcp_vs_ping",
+      "T9_oneway_loss",
+      "T10_speed",
+      "T6_queue_stats",
+      "T7_route_check",
+      "T1_e2e_ping",
+      "T5_if_errors"
+    ],
+    "decision": "escalate",
+    "reason": "inseparable",
+    "permitted_actions": [
+      "REROUTE",
+      "DO_NOTHING",
+      "ESCALATE"
+    ],
+    "budget": {
+      "budget_seconds": 8.0,
+      "tests_used_seconds": 22.46,
+      "within_budget": false
+    }
+  }
+}
