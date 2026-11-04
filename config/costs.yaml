@@ -27,5 +27,5 @@ tests:
     time_seconds: 5.0
     traffic_weight: 0.2
   T10_speed:
-    time_seconds: 8.0
+    time_seconds: 3.96
     traffic_weight: 1.0

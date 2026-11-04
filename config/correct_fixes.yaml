@@ -34,11 +34,11 @@ faults:
     correct: [REROUTE]
     reroute_path: backup
   F10:
-    correct: [DO_NOTHING, ESCALATE]
-    notes: "ACL on iperf port; reroute does not help"
+    correct: [ESCALATE]
+    notes: "ACL on iperf port; measured recovery: REROUTE did not restore T8/T10. GT valid_fixes=[ESCALATE]"
   F11:
-    correct: [DO_NOTHING, ESCALATE]
-    notes: "Last-mile loss; reroute harmful or useless"
+    correct: [ESCALATE]
+    notes: "Last-mile loss; measured recovery: reroute does not restore. GT valid_fixes=[ESCALATE]"
   F12:
     correct: [DO_NOTHING]
     notes: "Backup down; reroute breaks traffic"
@@ -64,8 +64,8 @@ compounds:
   C3:
     correct: [REROUTE]
   C4:
-    correct: [DO_NOTHING, ESCALATE]
-    notes: "Access-link loss remains on either path, as in C1"
+    correct: [ESCALATE]
+    notes: "Held-out F5+F11; measured valid_fixes=[ESCALATE]"
   C5:
     correct: [ESCALATE]
-    notes: "Primary blackholed and backup down; no path carries traffic"
+    notes: "Held-out F9+F12; primary blackholed and backup down; GT valid_fixes=[ESCALATE]"

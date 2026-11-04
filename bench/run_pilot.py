@@ -138,6 +138,41 @@ def pick_scenario(seed, index):
     }
 
 
+def scenarios_from_faults(text):
+    """Curated N0 list. C* are compounds. Held-out ids are allowed for inspect runs."""
+    ids = [part.strip() for part in (text or "").split(",") if part.strip()]
+    if not ids:
+        raise ValueError("--faults needs at least one id")
+    out = []
+    for fid in ids:
+        if fid in inj._COMPOUNDS:
+            out.append(
+                {
+                    "kind": "stress",
+                    "fault_id": "H0",
+                    "compound_id": fid,
+                    "noise_id": "N0",
+                    "stress_mode": None,
+                    "ticket_text": None,
+                }
+            )
+            continue
+        if fid not in inj._FAULTS and fid != "H0":
+            raise ValueError(f"unknown fault id {fid!r}")
+        kind = "healthy" if fid == "H0" else "normal"
+        out.append(
+            {
+                "kind": kind,
+                "fault_id": fid,
+                "compound_id": None,
+                "noise_id": "N0",
+                "stress_mode": None,
+                "ticket_text": None,
+            }
+        )
+    return out
+
+
 def _stub_proposal(snapshot, fault_id):
     """Deterministic stub when no API key."""
     metrics = snapshot.get("metrics", {})
@@ -478,6 +513,11 @@ def _parser():
         help="Fail closed unless the API key for LLM_PROVIDER is set (main pilot)",
     )
     parser.add_argument("--out", default=str(DEFAULT_OUT))
+    parser.add_argument(
+        "--faults",
+        default="",
+        help="Comma-separated catalog ids (H0,F1,C1,...) instead of the random 500 picker",
+    )
     return parser
 
 
@@ -521,8 +561,14 @@ def run_loop(args, net, links):
     stats["agent"] = agent
     stats["seed"] = args.seed
 
+    planned = None
+    if args.faults:
+        planned = scenarios_from_faults(args.faults)
+        stats["target_episodes"] = len(planned)
+        args.episodes = len(planned)
+
     for index in range(start, args.episodes):
-        scenario = pick_scenario(args.seed, index)
+        scenario = planned[index] if planned is not None else pick_scenario(args.seed, index)
         fault_id = scenario["fault_id"]
         compound_id = scenario["compound_id"]
         label = compound_id or fault_id
@@ -582,6 +628,7 @@ def run_loop(args, net, links):
             g = record.get("gate_decision") or {}
             oam_results = (record.get("oam") or {}).get("results") or []
             b = run_method("B5", proposal, record.get("network_snapshot") or {}, oam_results, net=net)
+            record["b5_decision"] = b
             if (g.get("decision") == "allow") and not record.get("execution_attempted"):
                 print(f"  execution withheld: {record.get('execution_error')}", flush=True)
             record_episode(stats, scenario, proposal, true_id, g, b, record)
@@ -922,6 +969,27 @@ def _self_check():
     tmp.unlink()
     _state_path(tmp).unlink()
     tmp.parent.rmdir()
+
+    listed = scenarios_from_faults("H0,F1,F3,F10,F11,F12,C1,U1")
+    assert [s["compound_id"] or s["fault_id"] for s in listed] == [
+        "H0",
+        "F1",
+        "F3",
+        "F10",
+        "F11",
+        "F12",
+        "C1",
+        "U1",
+    ]
+    assert listed[0]["kind"] == "healthy" and listed[0]["noise_id"] == "N0"
+    assert listed[6]["compound_id"] == "C1" and listed[6]["kind"] == "stress"
+    assert listed[7]["fault_id"] == "U1" and listed[7]["kind"] == "normal"
+    assert listed[7]["fault_id"] in inj.held_out_ids()
+    try:
+        scenarios_from_faults("NOPE")
+        raise AssertionError("unknown fault accepted")
+    except ValueError:
+        pass
 
     after = summary.read_bytes() if summary.exists() else None
     assert before == after, "self-check must not write results/pilot/summary.json"

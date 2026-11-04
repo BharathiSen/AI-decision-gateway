@@ -1115,6 +1115,17 @@ def _self_check():
     )
     assert tight["decision"] == "escalate", tight
     assert tight["reason"] in {"no affordable discriminating test", "inseparable", "no discrimination"}, tight
+    v0_same = gate_decide(
+        None,
+        predicted_ok,
+        lossy_snap,
+        [],
+        mode="pilot_v0",
+        run_missing_tests=False,
+        budget_seconds=0.1,
+    )
+    assert v0_same["decision"] == "allow", v0_same
+    assert tight["decision"] != "allow"
 
     oam._check_costs()
     priced = {
