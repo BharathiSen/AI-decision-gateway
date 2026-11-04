@@ -17,11 +17,14 @@ network.fault_injector).
 import json
 import logging
 import os
+import sys
 import time
 from pathlib import Path
 
 import yaml
 from openai import OpenAI
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from bench.contracts import TEST_IDS, llm_proposal_schema
 
