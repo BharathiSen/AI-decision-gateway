@@ -1,9 +1,9 @@
 version: 1
 
 agents:
-  - id: openrouter_gpt4o_mini
-    provider: openrouter
-    model: openai/gpt-4o-mini
+  - id: grok_4_3
+    provider: grok
+    model: grok-4.3
     temperature: 0.2
   - id: openrouter_llama
     provider: openrouter

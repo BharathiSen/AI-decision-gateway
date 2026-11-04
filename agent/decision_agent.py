@@ -1,7 +1,7 @@
 """
 AI decision agent.
 
-propose_decision() sends an LLM (via OpenRouter) the current network
+propose_decision() sends an LLM (Grok by default; see PROVIDERS) the current network
 state (telemetry + topology, as returned by
 telemetry.collector.collect_current_state()), the action types the
 agent is allowed to choose from, and policy context, and returns the
@@ -276,9 +276,8 @@ def propose_decision(
     policy_context: dict describing operator policy/constraints
         (defaults to DEFAULT_POLICY_CONTEXT).
     target: identifier for the traffic flow this decision concerns.
-    client: an openai.OpenAI() instance pointed at OpenRouter to reuse;
-        created fresh if omitted, reading the API key from the
-        OPENROUTER_API_KEY env var.
+    client: an openai.OpenAI() instance to reuse; created fresh if
+        omitted from provider_config() (Grok: XAI_API_KEY / GROK_API_KEY).
 
     Returns a plain dict: {"action", "target", "proposed_path", "reason"}.
     Raises ValueError if the model's chosen action somehow isn't one of
@@ -411,6 +410,11 @@ def _speed_check():
     hint = _key_mismatch_hint(cfg)
     if hint:
         raise SystemExit(hint)
+    if len(key) < 20 or key in {"xai-...", "xai-xxx", "your-key"}:
+        raise SystemExit(
+            "that is a placeholder, not a real key. Create one at https://console.x.ai "
+            "and export the full secret: export XAI_API_KEY=xai-<the-rest-of-the-key>"
+        )
     snapshot = {
         "timestamp": "2026-01-01T00:00:00+00:00",
         "metrics": {

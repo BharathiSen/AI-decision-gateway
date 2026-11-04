@@ -743,6 +743,7 @@ def _self_check():
 
         assert _clean_api_key("  'xai-abc'  ") == "xai-abc"
         assert "OpenRouter" in (_key_mismatch_hint({"provider": "grok", "api_key": "sk-or-v1-abc"}) or "")
+        assert _clean_api_key("xai-...") == "xai-..."
         os.environ["LLM_PROVIDER"] = "xai"
         assert _provider()["provider"] == "grok"
         os.environ["LLM_PROVIDER"] = "gemini"
