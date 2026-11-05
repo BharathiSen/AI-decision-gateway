@@ -635,28 +635,188 @@ def run_identity(out_path, faults, seed, agent, git=None):
         "agent": agent,
         "prompt_sha256": PROMPT_SHA256,
         "git_commit": rev.get("commit"),
-        "git_dirty": rev.get("dirty"),
+        "git_tree_sha256": rev.get("tree_sha256"),
     }
+
+
+def _valid_git_commit(value):
+    """Full SHA-1 or SHA-256 commit id, as printed by git rev-parse."""
+    return (
+        isinstance(value, str)
+        and len(value) in (40, 64)
+        and all(char in "0123456789abcdef" for char in value)
+    )
+
+
+def _valid_git_tree(value):
+    """SHA-256 hex digest of the tracked diff."""
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(char in "0123456789abcdef" for char in value)
+    )
 
 
 def identity_mismatch(state, identity):
     found = (state or {}).get("identity") or {}
-    return sorted(key for key in identity if found.get(key) != identity[key])
+    bad = []
+    for key in identity:
+        left, right = found.get(key), identity[key]
+        if key == "git_commit":
+            if not _valid_git_commit(left) or not _valid_git_commit(right) or left != right:
+                bad.append(key)
+        elif key == "git_tree_sha256":
+            if not _valid_git_tree(left) or not _valid_git_tree(right) or left != right:
+                bad.append(key)
+        elif left != right:
+            bad.append(key)
+    return sorted(set(bad))
 
 
-def _git_revision():
+def provenance_error(identity, stored=None):
+    """Invalid commit or tree fingerprint. None must not match None."""
+    gaps = []
+    for label, rev in (("current", identity), ("stored", stored)):
+        if rev is None:
+            continue
+        if not _valid_git_commit(rev.get("git_commit")):
+            gaps.append(f"{label} git_commit")
+        if not _valid_git_tree(rev.get("git_tree_sha256")):
+            gaps.append(f"{label} git_tree_sha256")
+    if not gaps:
+        return None
+    return (
+        "refusing to run: Git provenance is invalid (" + ", ".join(gaps) + "). "
+        "A run requires a valid Git repository and available provenance: "
+        "a full commit SHA and a 64-character hexadecimal tree fingerprint. "
+        "There is no unversioned-run mode."
+    )
+
+
+def untracked_source_paths(paths):
+    """Untracked Python or YAML outside results/. Run outputs are not source."""
+    found = []
+    for raw in paths or []:
+        rel = str(raw).replace("\\", "/").lstrip("./")
+        if rel.lower().startswith("results/"):
+            continue
+        if rel.lower().endswith((".py", ".yaml", ".yml")):
+            found.append(rel)
+    return sorted(set(found))
+
+
+def untracked_source_error(paths):
+    found = untracked_source_paths(paths)
+    if not found:
+        return None
+    shown = ", ".join(found[:8])
+    extra = "" if len(found) <= 8 else f" (+{len(found) - 8} more)"
+    return (
+        "refusing to run: untracked source files are not part of the Git fingerprint ("
+        + shown + extra + "). "
+        "Stage and commit them, or remove them, before starting. "
+        "Generated results and ignored files are not included. "
+        "There is no unversioned-run mode."
+    )
+
+
+def _git_revision(cwd=None):
+    """Commit SHA plus a SHA-256 of tracked changes against HEAD.
+
+    `git diff HEAD` includes staged and unstaged edits to tracked files.
+    `--no-ext-diff`, `--no-textconv`, and the `-c` options below keep the
+    bytes independent of external diff drivers, text conversion, and the
+    caller's Git configuration. The caller's config is not modified.
+
+    Untracked files are not part of the fingerprint. `git ls-files --others
+    --exclude-standard` is used only to refuse untracked `.py`, `.yaml`, and
+    `.yml` outside `results/`. That list is not hashed. Ignored files,
+    episode JSON, and other generated results stay out of both the hash and
+    the refusal. A gitignored source file, or an untracked file that is not
+    Python or YAML, can still change behavior without changing this
+    fingerprint; covering those would need a declared source manifest.
+    """
+    import hashlib
     import subprocess
 
+    root = str(cwd or ROOT)
+    env = os.environ.copy()
+    env.pop("GIT_EXTERNAL_DIFF", None)
+    env.pop("GIT_DIFF_OPTS", None)
+    base = [
+        "git",
+        "-c", "core.autocrlf=false",
+        "-c", "core.safecrlf=false",
+        "-c", "core.quotepath=false",
+        "-c", "diff.context=3",
+        "-c", "diff.noprefix=false",
+        "-c", "diff.renames=false",
+        "-c", "diff.mnemonicPrefix=false",
+        "-c", "diff.algorithm=myers",
+        "-c", "diff.external=",
+    ]
+    empty = {"commit": None, "tree_sha256": None, "untracked_source": []}
     try:
         commit = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True, check=True
-        ).stdout.strip()
-        dirty = bool(subprocess.run(
-            ["git", "status", "--porcelain"], cwd=ROOT, capture_output=True, text=True, check=True
-        ).stdout.strip())
+            base + ["rev-parse", "HEAD"],
+            cwd=root, capture_output=True, env=env, check=True,
+        ).stdout.decode("utf-8", "replace").strip()
+        if not _valid_git_commit(commit):
+            return empty
+        diff = subprocess.run(
+            base + ["diff", "--binary", "--no-ext-diff", "--no-textconv", "HEAD"],
+            cwd=root, capture_output=True, env=env, check=True,
+        ).stdout
+        listed = subprocess.run(
+            base + ["ls-files", "--others", "--exclude-standard", "-z"],
+            cwd=root, capture_output=True, env=env, check=True,
+        ).stdout
     except (OSError, subprocess.CalledProcessError):
-        return {"commit": None, "dirty": None}
-    return {"commit": commit, "dirty": dirty}
+        return empty
+    names = [part.decode("utf-8", "replace") for part in listed.split(b"\0") if part]
+    return {
+        "commit": commit,
+        "tree_sha256": hashlib.sha256(diff).hexdigest(),
+        "untracked_source": untracked_source_paths(names),
+    }
+
+
+def _temporary_git_repo():
+    """Throwaway repository. Local config only; removed on every exit."""
+    import shutil
+    import stat
+    import subprocess
+    import tempfile
+    from contextlib import contextmanager
+
+    def _remove(path):
+        def _writable(func, name, _exc):
+            os.chmod(name, stat.S_IWRITE)
+            func(name)
+
+        shutil.rmtree(path, onerror=_writable)
+
+    @contextmanager
+    def _open():
+        repo = Path(tempfile.mkdtemp())
+        try:
+            def git(args):
+                if "--global" in args:
+                    raise AssertionError("temporary Git setup must not touch global config")
+                subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+
+            git(["init"])
+            git(["config", "user.email", "verifix-test@example.com"])
+            git(["config", "user.name", "verifix-test"])
+            git(["config", "commit.gpgsign", "false"])
+            git(["config", "tag.gpgsign", "false"])
+            git(["config", "core.autocrlf", "false"])
+            git(["config", "core.safecrlf", "false"])
+            yield repo, git
+        finally:
+            _remove(repo)
+
+    return _open()
 
 
 def build_manifest(out_path, identity, stats, episode_ids, provider, episodes_dir):
@@ -677,7 +837,7 @@ def build_manifest(out_path, identity, stats, episode_ids, provider, episodes_di
         "episodes_attempted": stats.get("episodes_attempted"),
         "git": {
             "commit": identity.get("git_commit"),
-            "dirty": identity.get("git_dirty"),
+            "tree_sha256": identity.get("git_tree_sha256"),
         },
         "episode_ids": list(episode_ids),
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -752,8 +912,18 @@ def run_loop(args, net, links):
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    identity = run_identity(out_path, args.faults, args.seed, agent, git=_git_revision())
+    rev = _git_revision()
+    identity = run_identity(out_path, args.faults, args.seed, agent, git=rev)
     state = load_state(out_path) if args.resume else None
+    stored_identity = (state.get("identity") or {}) if state else None
+    gap = provenance_error(identity, stored_identity)
+    if gap:
+        print(gap, file=sys.stderr)
+        return 2
+    source_gap = untracked_source_error(rev.get("untracked_source"))
+    if source_gap:
+        print(source_gap, file=sys.stderr)
+        return 2
     if state:
         mismatch = identity_mismatch(state, identity)
         if mismatch:
@@ -763,8 +933,7 @@ def run_loop(args, net, links):
                 file=sys.stderr,
             )
             return 2
-        stored = state.get("identity") or {}
-        identity = dict(stored)
+        identity = dict(stored_identity)
         start = int(state.get("completed") or 0)
         stats = state.get("stats") or empty_stats(args.episodes, args.seed, agent)
         episode_ids = list(state.get("episode_ids") or [])
@@ -1393,8 +1562,32 @@ def _self_check():
     assert identity_mismatch({"identity": base}, run_identity(Path("b.json"), "H0,F1", 1, "stub")) == ["out"]
     assert "prompt_sha256" in identity_mismatch({"identity": dict(base, prompt_sha256="old")}, base)
     assert "git_commit" in identity_mismatch({"identity": dict(base, git_commit="0" * 40)}, base)
-    assert "git_dirty" in identity_mismatch({"identity": dict(base, git_dirty=not base["git_dirty"])}, base)
-    assert base["git_commit"] and isinstance(base["git_dirty"], bool)
+    assert "git_tree_sha256" in identity_mismatch({"identity": dict(base, git_tree_sha256="0" * 64)}, base)
+    blank = {"git_commit": None, "git_tree_sha256": None}
+    same_malformed = {"git_commit": "abc", "git_tree_sha256": "xyz"}
+    assert identity_mismatch({"identity": dict(blank)}, dict(blank)) == ["git_commit", "git_tree_sha256"]
+    assert identity_mismatch({"identity": dict(same_malformed)}, dict(same_malformed)) == [
+        "git_commit",
+        "git_tree_sha256",
+    ]
+    valid_pair = {"git_commit": "a" * 40, "git_tree_sha256": "b" * 64}
+    assert identity_mismatch({"identity": dict(valid_pair)}, dict(valid_pair)) == []
+    assert provenance_error(blank) and "valid Git repository" in provenance_error(blank)
+    assert "no unversioned-run mode" in provenance_error(blank)
+    assert provenance_error({"git_commit": "a", "git_tree_sha256": None})
+    assert provenance_error({"git_commit": None, "git_tree_sha256": "b" * 64})
+    assert provenance_error({"git_commit": "abc", "git_tree_sha256": "b" * 64})
+    assert provenance_error({"git_commit": "", "git_tree_sha256": "b" * 64})
+    assert provenance_error({"git_commit": "g" * 40, "git_tree_sha256": "b" * 64})
+    assert provenance_error({"git_commit": "a" * 39, "git_tree_sha256": "b" * 64})
+    assert provenance_error({"git_commit": "a" * 40, "git_tree_sha256": "b" * 63})
+    assert provenance_error({"git_commit": "a" * 40, "git_tree_sha256": "g" * 64})
+    assert provenance_error(valid_pair) is None
+    assert untracked_source_paths(
+        ["extra.py", "note.json", "results/helper.py", "config/a.yaml", "RESULTS/b.yml"]
+    ) == ["config/a.yaml", "extra.py"]
+    assert base["git_commit"] and _valid_git_commit(base["git_commit"])
+    assert _valid_git_tree(base["git_tree_sha256"])
     assert identity_mismatch({"seed": 1, "agent": "stub"}, base)
     try:
         save_episode({"episode_id": "x"}, ROOT / "results" / "episodes")
@@ -1440,7 +1633,7 @@ def _self_check():
 
         assert manifest["prompt_sha256"] == loop_summary["prompt_sha256"] == PROMPT_SHA256
         assert manifest["git"]["commit"] == load_state(run_out)["identity"]["git_commit"]
-        assert manifest["git"]["dirty"] == load_state(run_out)["identity"]["git_dirty"]
+        assert manifest["git"]["tree_sha256"] == load_state(run_out)["identity"]["git_tree_sha256"]
         original_git = dict(manifest["git"])
         fresh = ["--stub", "--faults", "H0,F11,F3", "--out", str(run_out), "--save-episodes"]
         assert run_loop(_parser().parse_args(fresh), None, None) == 2
@@ -1451,6 +1644,209 @@ def _self_check():
         resumed = json.loads(manifest_path(run_out).read_text(encoding="utf-8"))
         assert resumed["git"] == original_git
         assert json.loads(run_out.read_text(encoding="utf-8"))["episodes_attempted"] == 3
+
+        import io
+        import sys
+        from contextlib import redirect_stderr
+
+        failed = {}
+        try:
+            with _temporary_git_repo() as (repo, _git):
+                failed["repo"] = repo
+                raise RuntimeError("cleanup path")
+        except RuntimeError:
+            pass
+        assert failed["repo"] and not failed["repo"].exists()
+
+        with _temporary_git_repo() as (repo, git):
+            tracked = repo / "tracked.txt"
+            tracked.write_text("v1\n", encoding="utf-8")
+            git(["add", "tracked.txt"])
+            git(["commit", "-m", "init"])
+            clean = _git_revision(repo)
+            assert clean["commit"] and clean["tree_sha256"]
+            (repo / "untracked.json").write_text("{}\n", encoding="utf-8")
+            assert _git_revision(repo) == clean, "untracked output must not change the source fingerprint"
+            tracked.write_text("v2\n", encoding="utf-8")
+            unstaged = _git_revision(repo)
+            assert unstaged["commit"] == clean["commit"] and unstaged["tree_sha256"] != clean["tree_sha256"]
+            git(["add", "tracked.txt"])
+            staged = _git_revision(repo)
+            assert staged["tree_sha256"] == unstaged["tree_sha256"]
+            tracked.write_text("v3\n", encoding="utf-8")
+            both = _git_revision(repo)
+            assert both["tree_sha256"] not in {clean["tree_sha256"], staged["tree_sha256"]}
+            git(["checkout", "--", "tracked.txt"])
+            assert _git_revision(repo)["tree_sha256"] == staged["tree_sha256"]
+            git(["checkout", "HEAD", "--", "tracked.txt"])
+            assert _git_revision(repo) == clean
+            git(["config", "diff.external", "verifix-missing-external-diff"])
+            git(["config", "diff.txt.textconv", "verifix-missing-textconv"])
+            (repo / ".git" / "info" / "attributes").write_text("*.txt diff=txt\n", encoding="utf-8")
+            os.environ["GIT_EXTERNAL_DIFF"] = "verifix-missing-external-diff"
+            try:
+                assert _git_revision(repo) == clean
+            finally:
+                os.environ.pop("GIT_EXTERNAL_DIFF", None)
+            this = sys.modules[__name__]
+            real_rev = this._git_revision
+            this._git_revision = lambda cwd=None: real_rev(repo)
+            git_out = repo / "run.json"
+            try:
+                git_args = ["--stub", "--faults", "H0", "--out", str(git_out), "--save-episodes"]
+                assert run_loop(_parser().parse_args(git_args), None, None) == 0
+                assert real_rev(repo)["tree_sha256"] == clean["tree_sha256"]
+                assert run_loop(_parser().parse_args(git_args + ["--resume"]), None, None) == 0
+                kept = json.loads(manifest_path(git_out).read_text(encoding="utf-8"))["git"]
+                assert kept["tree_sha256"] == clean["tree_sha256"] and kept["commit"] == clean["commit"]
+                kept_bytes = git_out.read_bytes()
+                other = dict(real_rev(repo), commit="b" * 40)
+                this._git_revision = lambda cwd=None, _other=other: _other
+                buf = io.StringIO()
+                try:
+                    with redirect_stderr(buf):
+                        rc = run_loop(_parser().parse_args(git_args + ["--resume"]), None, None)
+                finally:
+                    this._git_revision = lambda cwd=None: real_rev(repo)
+                assert rc == 2 and "git_commit differ" in buf.getvalue()
+                assert git_out.read_bytes() == kept_bytes
+                (repo / "extra.py").write_text("x = 1\n", encoding="utf-8")
+                (repo / "note.json").write_text("{}\n", encoding="utf-8")
+                (repo / "results").mkdir()
+                (repo / "results" / "helper.py").write_text("x = 1\n", encoding="utf-8")
+                seen = real_rev(repo)
+                assert seen["tree_sha256"] == clean["tree_sha256"]
+                assert seen["untracked_source"] == ["extra.py"]
+                buf = io.StringIO()
+                with redirect_stderr(buf):
+                    rc = run_loop(_parser().parse_args(git_args + ["--resume"]), None, None)
+                assert rc == 2 and "untracked source" in buf.getvalue() and "extra.py" in buf.getvalue()
+                assert git_out.read_bytes() == kept_bytes
+                (repo / "extra.py").unlink()
+                tracked.write_text("changed\n", encoding="utf-8")
+                buf = io.StringIO()
+                with redirect_stderr(buf):
+                    rc = run_loop(_parser().parse_args(git_args + ["--resume"]), None, None)
+                assert rc == 2 and "git_tree_sha256 differ" in buf.getvalue()
+                assert git_out.read_bytes() == kept_bytes
+            finally:
+                this._git_revision = real_rev
+        assert not repo.exists()
+
+        def _refuse(git_rev, args, label, needle):
+            this = sys.modules[__name__]
+            real = this._git_revision
+            this._git_revision = lambda cwd=None: git_rev
+            buf = io.StringIO()
+            try:
+                with redirect_stderr(buf):
+                    rc = run_loop(_parser().parse_args(args), None, None)
+            finally:
+                this._git_revision = real
+            text = buf.getvalue()
+            assert rc == 2, label
+            assert "Git provenance is invalid" in text and "valid Git repository" in text, (label, text)
+            assert "no unversioned-run mode" in text, (label, text)
+            assert needle in text, (label, text)
+
+        fresh_root = Path(tempfile.mkdtemp())
+        fresh_out = fresh_root / "not-created" / "fresh.json"
+        fresh_args = ["--stub", "--faults", "H0", "--out", str(fresh_out), "--save-episodes"]
+        none_rev = {"commit": None, "tree_sha256": None}
+        valid_rev = {"commit": "a" * 40, "tree_sha256": "d" * 64}
+        try:
+            _refuse(none_rev, fresh_args, "fresh git unavailable", "current git_commit")
+            assert not fresh_out.parent.exists()
+            _refuse(
+                {"commit": None, "tree_sha256": "d" * 64},
+                fresh_args,
+                "missing commit",
+                "current git_commit",
+            )
+            _refuse(
+                {"commit": "abc", "tree_sha256": None},
+                fresh_args,
+                "missing tree",
+                "current git_tree_sha256",
+            )
+            _refuse(
+                {"commit": "abc", "tree_sha256": "d" * 64},
+                fresh_args,
+                "malformed commit",
+                "current git_commit",
+            )
+            _refuse(
+                {"commit": "", "tree_sha256": "d" * 64},
+                fresh_args,
+                "empty commit",
+                "current git_commit",
+            )
+            _refuse(
+                {"commit": "g" * 40, "tree_sha256": "d" * 64},
+                fresh_args,
+                "nonhex commit",
+                "current git_commit",
+            )
+            _refuse(
+                {"commit": "a" * 40, "tree_sha256": "xyz"},
+                fresh_args,
+                "malformed tree",
+                "current git_tree_sha256",
+            )
+            _refuse(
+                {"commit": "a" * 40, "tree_sha256": "g" * 64},
+                fresh_args,
+                "nonhex tree",
+                "current git_tree_sha256",
+            )
+            assert not fresh_out.parent.exists()
+            resume_root = Path(tempfile.mkdtemp())
+            resume_out = resume_root / "resume.json"
+            try:
+                good = run_identity(resume_out, "H0", 1, "stub", git=valid_rev)
+                resume_args = ["--stub", "--faults", "H0", "--out", str(resume_out), "--resume", "--save-episodes"]
+
+                def _save(identity):
+                    save_state(resume_out, {
+                        "completed": 0,
+                        "identity": identity,
+                        "episode_ids": [],
+                        "stats": empty_stats(1, 1, "stub"),
+                    })
+
+                _save(good)
+                _refuse(none_rev, resume_args, "resume git unavailable", "current git_commit")
+                _save(dict(good, git_commit=None, git_tree_sha256=None))
+                _refuse(none_rev, resume_args, "none equals none", "stored git_commit")
+                _save(dict(good, git_commit="abc"))
+                _refuse(valid_rev, resume_args, "malformed stored commit", "stored git_commit")
+                _save(dict(good, git_tree_sha256="xyz"))
+                _refuse(valid_rev, resume_args, "malformed stored tree", "stored git_tree_sha256")
+                _save(good)
+
+                def _differ(git_rev, needle):
+                    this = sys.modules[__name__]
+                    real = this._git_revision
+                    this._git_revision = lambda cwd=None: git_rev
+                    buf = io.StringIO()
+                    try:
+                        with redirect_stderr(buf):
+                            rc = run_loop(_parser().parse_args(resume_args), None, None)
+                    finally:
+                        this._git_revision = real
+                    assert rc == 2 and needle in buf.getvalue(), buf.getvalue()
+
+                _differ({"commit": "b" * 40, "tree_sha256": "d" * 64}, "git_commit differ")
+                _differ({"commit": "a" * 40, "tree_sha256": "e" * 64}, "git_tree_sha256 differ")
+                assert load_state(resume_out)["completed"] == 0
+                assert not resume_out.exists()
+                assert not episodes_dir_for(resume_out).exists()
+            finally:
+                import shutil
+                shutil.rmtree(resume_root, ignore_errors=True)
+        finally:
+            import shutil
+            shutil.rmtree(fresh_root, ignore_errors=True)
     finally:
         run_episode = real_run_episode
         import shutil

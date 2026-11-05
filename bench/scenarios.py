@@ -518,17 +518,28 @@ def _self_check():
         item.unlink()
     tmp.rmdir()
 
-    criteria = ROOT / "results" / "pilot_criteria.md"
-    criteria_before = criteria.read_bytes()
-    assert main(["--write-plan", str(criteria)]) == 2
-    assert criteria.read_bytes() == criteria_before
-    protected_plan = ROOT / "results" / "episodes" / "plan.json"
-    assert main(["--write-plan", str(protected_plan)]) == 2
-    assert not protected_plan.exists()
-    planned = Path(tempfile.mkdtemp()) / "nested" / "plan.json"
+    guard = Path(tempfile.mkdtemp())
+    sentinel = guard / "pilot_criteria.md"
+    sentinel.write_text("frozen\n", encoding="utf-8")
+    sentinel_before = sentinel.read_bytes()
+    import bench.contracts as contracts
+
+    saved_files, saved_dirs = contracts.PROTECTED_RESULTS, contracts.PROTECTED_DIRS
+    contracts.PROTECTED_RESULTS = saved_files + (sentinel,)
+    contracts.PROTECTED_DIRS = saved_dirs + (guard / "episodes",)
+    try:
+        assert main(["--write-plan", str(sentinel)]) == 2
+        assert sentinel.read_bytes() == sentinel_before
+        protected_plan = guard / "episodes" / "plan.json"
+        assert main(["--write-plan", str(protected_plan)]) == 2
+        assert not protected_plan.exists()
+    finally:
+        contracts.PROTECTED_RESULTS = saved_files
+        contracts.PROTECTED_DIRS = saved_dirs
+    planned = guard / "nested" / "plan.json"
     assert main(["--seeds", "1", "--write-plan", str(planned)]) == 0
     assert planned.is_file() and json.loads(planned.read_text(encoding="utf-8"))
-    shutil.rmtree(planned.parent.parent, ignore_errors=True)
+    shutil.rmtree(guard, ignore_errors=True)
 
     assert _ping_ok({"packet_loss_percent": 0.0})
     assert not _ping_ok({"packet_loss_percent": 100.0})
