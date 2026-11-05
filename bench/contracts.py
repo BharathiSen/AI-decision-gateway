@@ -638,6 +638,7 @@ PROTECTED_RESULTS = (
     _ROOT / "results" / "inseparable_pairs.json",
     _ROOT / "results" / "calibration_samples_v2.jsonl",
     _ROOT / "results" / "live_oam_cost.json",
+    _ROOT / "results" / "pilot_criteria.md",
 )
 PROTECTED_DIRS = (
     _ROOT / "results" / "episodes",

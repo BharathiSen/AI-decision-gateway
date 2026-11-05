@@ -159,7 +159,12 @@ def b5_safe_proposal(proposal):
     target = proposal.get("target")
     if target not in SUPPORTED_TARGETS:
         return {}
-    if action == "REROUTE" and reroute_choice(proposal) is None:
+    route_path = proposal.get("proposed_path") if action == "REROUTE" else None
+    if action == "REROUTE" and (
+        not isinstance(route_path, list)
+        or reroute_choice(proposal) is None
+        or reroute_choice({"proposed_path": route_path}) is None
+    ):
         return {}
     causes = proposal.get("causes")
     cleaned_causes = []
@@ -176,7 +181,7 @@ def b5_safe_proposal(proposal):
             cleaned_causes.append({"cause_id": cause_id})
     cleaned = {"action": action, "target": target}
     if action == "REROUTE":
-        cleaned["proposed_path"] = list(proposal["proposed_path"])
+        cleaned["proposed_path"] = list(route_path)
     if cleaned_causes:
         cleaned["causes"] = cleaned_causes
     return cleaned
@@ -563,6 +568,16 @@ def _self_check():
     assert "proposed_path" not in b5_safe_proposal(
         {"action": "ESCALATE", "target": "HostA_to_HostB", "proposed_path": ["r1", "r3", "r4"]}
     )
+    for malformed in (
+        {"action": "REROUTE", "target": "HostA_to_HostB"},
+        {"action": "REROUTE", "target": "HostA_to_HostB", "path": "backup"},
+        {"action": "REROUTE", "target": "HostA_to_HostB", "proposed_path_label": "primary"},
+        {"action": "REROUTE", "target": "HostA_to_HostB", "proposed_path": "backup"},
+        {"action": "REROUTE", "target": "HostA_to_HostB", "proposed_path": ["r9"]},
+    ):
+        assert b5_safe_proposal(malformed) == {}, malformed
+        escalated = run_b5_independent(malformed, snap, oam, net=None)
+        assert escalated["decision"] == "escalate" and escalated["reason"] == NO_VALID_PROPOSAL, escalated
     calm = dict(snap, metrics={"packet_loss_percent": 0.0, "latency_ms": 10, "active_path": "primary", "connectivity": True})
     for label, unsafe in (("F11", True), ("F12", False)):
         invalid_noop = {
@@ -620,6 +635,11 @@ def _self_check():
     try:
         refuse_protected_path(ROOT / "results" / "pilot" / "groq_small_v4.json")
         raise AssertionError("v4 was writable")
+    except ValueError:
+        pass
+    try:
+        refuse_protected_path(ROOT / "results" / "pilot_criteria.md")
+        raise AssertionError("pilot criteria was writable")
     except ValueError:
         pass
     hidden = held_out_ids()

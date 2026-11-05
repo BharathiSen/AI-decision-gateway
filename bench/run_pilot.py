@@ -615,16 +615,27 @@ def manifest_path(out_path):
     return out_path.with_name(out_path.stem + "_manifest.json")
 
 
-def run_identity(out_path, faults, seed, agent):
+def occupied_run_paths(out_path, episodes_dir):
+    """Artifacts a fresh run would overwrite or append to."""
+    paths = [Path(out_path), _state_path(out_path), manifest_path(out_path)]
+    if episodes_dir is not None:
+        paths.append(Path(episodes_dir))
+    return [path for path in paths if path.exists()]
+
+
+def run_identity(out_path, faults, seed, agent, git=None):
     """What must match before --resume may continue a run."""
     from agent.decision_agent import PROMPT_SHA256
 
+    rev = git if git is not None else _git_revision()
     return {
         "out": os.path.normcase(str(Path(out_path).resolve())),
         "faults": faults or "",
         "seed": seed,
         "agent": agent,
         "prompt_sha256": PROMPT_SHA256,
+        "git_commit": rev.get("commit"),
+        "git_dirty": rev.get("dirty"),
     }
 
 
@@ -648,7 +659,7 @@ def _git_revision():
     return {"commit": commit, "dirty": dirty}
 
 
-def build_manifest(out_path, identity, stats, episode_ids, provider, episodes_dir, git):
+def build_manifest(out_path, identity, stats, episode_ids, provider, episodes_dir):
     from agent.decision_agent import PROMPT_VERSION
 
     return {
@@ -664,7 +675,10 @@ def build_manifest(out_path, identity, stats, episode_ids, provider, episodes_di
         "faults": identity["faults"] or "random",
         "target_episodes": stats.get("target_episodes"),
         "episodes_attempted": stats.get("episodes_attempted"),
-        "git": git,
+        "git": {
+            "commit": identity.get("git_commit"),
+            "dirty": identity.get("git_dirty"),
+        },
         "episode_ids": list(episode_ids),
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -738,7 +752,7 @@ def run_loop(args, net, links):
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    identity = run_identity(out_path, args.faults, args.seed, agent)
+    identity = run_identity(out_path, args.faults, args.seed, agent, git=_git_revision())
     state = load_state(out_path) if args.resume else None
     if state:
         mismatch = identity_mismatch(state, identity)
@@ -749,15 +763,25 @@ def run_loop(args, net, links):
                 file=sys.stderr,
             )
             return 2
+        stored = state.get("identity") or {}
+        identity = dict(stored)
         start = int(state.get("completed") or 0)
         stats = state.get("stats") or empty_stats(args.episodes, args.seed, agent)
         episode_ids = list(state.get("episode_ids") or [])
         print(f"resume from episode {start + 1}/{args.episodes}", flush=True)
     else:
+        occupied = occupied_run_paths(out_path, episodes_dir)
+        if occupied:
+            print(
+                "refusing to start a new run over existing "
+                + ", ".join(str(path) for path in occupied)
+                + ". Use --resume to continue it, or a new --out.",
+                file=sys.stderr,
+            )
+            return 2
         start = 0
         stats = empty_stats(args.episodes, args.seed, agent)
         episode_ids = []
-    git = _git_revision()
 
     stats["target_episodes"] = args.episodes
     stats["agent"] = agent
@@ -867,14 +891,14 @@ def run_loop(args, net, links):
         _write_json(out_path, finalize_stats(dict(stats)))
         _write_json(
             manifest_path(out_path),
-            build_manifest(out_path, identity, stats, episode_ids, provider, episodes_dir, git),
+            build_manifest(out_path, identity, stats, episode_ids, provider, episodes_dir),
         )
 
     summary = finalize_stats(dict(stats))
     _write_json(out_path, summary)
     _write_json(
         manifest_path(out_path),
-        build_manifest(out_path, identity, summary, episode_ids, provider, episodes_dir, git),
+        build_manifest(out_path, identity, summary, episode_ids, provider, episodes_dir),
     )
     print(json.dumps(summary, indent=2))
     print(summary["go_nogo"]["claim"], flush=True)
@@ -1368,6 +1392,9 @@ def _self_check():
     assert identity_mismatch({"identity": base}, run_identity(Path("a.json"), "H0,F2", 1, "stub")) == ["faults"]
     assert identity_mismatch({"identity": base}, run_identity(Path("b.json"), "H0,F1", 1, "stub")) == ["out"]
     assert "prompt_sha256" in identity_mismatch({"identity": dict(base, prompt_sha256="old")}, base)
+    assert "git_commit" in identity_mismatch({"identity": dict(base, git_commit="0" * 40)}, base)
+    assert "git_dirty" in identity_mismatch({"identity": dict(base, git_dirty=not base["git_dirty"])}, base)
+    assert base["git_commit"] and isinstance(base["git_dirty"], bool)
     assert identity_mismatch({"seed": 1, "agent": "stub"}, base)
     try:
         save_episode({"episode_id": "x"}, ROOT / "results" / "episodes")
@@ -1412,10 +1439,17 @@ def _self_check():
         from agent.decision_agent import PROMPT_SHA256
 
         assert manifest["prompt_sha256"] == loop_summary["prompt_sha256"] == PROMPT_SHA256
-        assert "commit" in manifest["git"]
+        assert manifest["git"]["commit"] == load_state(run_out)["identity"]["git_commit"]
+        assert manifest["git"]["dirty"] == load_state(run_out)["identity"]["git_dirty"]
+        original_git = dict(manifest["git"])
+        fresh = ["--stub", "--faults", "H0,F11,F3", "--out", str(run_out), "--save-episodes"]
+        assert run_loop(_parser().parse_args(fresh), None, None) == 2
+        assert json.loads(run_out.read_text(encoding="utf-8"))["episodes_attempted"] == 3
         changed = ["--stub", "--faults", "H0,F12", "--out", str(run_out), "--resume"]
         assert run_loop(_parser().parse_args(changed), None, None) == 2
         assert run_loop(_parser().parse_args(loop_args + ["--resume"]), None, None) == 0
+        resumed = json.loads(manifest_path(run_out).read_text(encoding="utf-8"))
+        assert resumed["git"] == original_git
         assert json.loads(run_out.read_text(encoding="utf-8"))["episodes_attempted"] == 3
     finally:
         run_episode = real_run_episode

@@ -9,7 +9,9 @@ write-if-absent.
 
 import argparse
 import json
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 import yaml
@@ -516,6 +518,18 @@ def _self_check():
         item.unlink()
     tmp.rmdir()
 
+    criteria = ROOT / "results" / "pilot_criteria.md"
+    criteria_before = criteria.read_bytes()
+    assert main(["--write-plan", str(criteria)]) == 2
+    assert criteria.read_bytes() == criteria_before
+    protected_plan = ROOT / "results" / "episodes" / "plan.json"
+    assert main(["--write-plan", str(protected_plan)]) == 2
+    assert not protected_plan.exists()
+    planned = Path(tempfile.mkdtemp()) / "nested" / "plan.json"
+    assert main(["--seeds", "1", "--write-plan", str(planned)]) == 0
+    assert planned.is_file() and json.loads(planned.read_text(encoding="utf-8"))
+    shutil.rmtree(planned.parent.parent, ignore_errors=True)
+
     assert _ping_ok({"packet_loss_percent": 0.0})
     assert not _ping_ok({"packet_loss_percent": 100.0})
     _assert_frozen(before)
@@ -663,7 +677,11 @@ def main(argv=None):
         print(str(exc), file=sys.stderr)
         return 2
     if args.write_plan:
-        path = Path(args.write_plan)
+        try:
+            path = refuse_protected_path(args.write_plan)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(plan, indent=2), encoding="utf-8")
         print(str(path), len(plan))
