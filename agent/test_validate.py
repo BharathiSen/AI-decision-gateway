@@ -12,11 +12,22 @@ from agent.validate import (
     MAX_PROPOSAL_BYTES,
     SUPPORTED_TARGETS,
     catalog_cause_ids,
+    evaluation_cause_ids,
     proposal_freshness_errors,
     validate_batch,
     validate_proposal,
 )
-from agent.decision_agent import _canonical_target
+from agent.decision_agent import (
+    PREDICTION_SYSTEM_PROMPT,
+    PROMPT_SHA256,
+    PROMPT_VERSION,
+    AgentOutputError,
+    _canonical_target,
+    _decision_from_response,
+    model_snapshot_view,
+    prompt_bundle,
+    propose_with_predictions,
+)
 from bench.contracts import (
     TEST_IDS,
     expected_grade_ok,
@@ -54,6 +65,122 @@ def main():
     good = good_proposal()
     ok, errs = validate_proposal(good)
     check("well-formed proposal", ok, errs)
+    check("prompt version is v2", PROMPT_VERSION == "v2")
+    check(
+        "prompt sha256 is pinned",
+        PROMPT_SHA256 == "2cf074620e8f5c139382aaf91d0148ed3e38fec243650c222923f147e179b9ca",
+    )
+    bundle = prompt_bundle()
+    check(
+        "prompt pin covers payload template schema and snapshot view",
+        set(bundle) == {"system", "telemetry_key", "snapshot_view", "payload", "response_format"}
+        and {"policy_context", "fault_catalog", "oam_grade_vocabulary", "oam_test_catalog", "ticket_text"}
+        <= set(bundle["payload"])
+        and bundle["response_format"]["json_schema"]["strict"] is True
+        and bundle["snapshot_view"]["queue_keys_dropped"] == ["raw", "loss_rule", "rate_rule"]
+        and PROMPT_SHA256
+        != __import__("hashlib").sha256(PREDICTION_SYSTEM_PROMPT.encode("utf-8")).hexdigest(),
+    )
+
+    sent = []
+
+    class _Completions:
+        def __init__(self, content):
+            self.content = content
+
+        def create(self, **kwargs):
+            sent.append(kwargs)
+
+            class _M:
+                content = self.content
+
+            class _C:
+                message = _M()
+
+            class _R:
+                choices = [_C()]
+                usage = None
+
+            return _R()
+
+    class _FakeClient:
+        def __init__(self, content):
+            self.chat = type("chat", (), {"completions": _Completions(content)})()
+
+    good_json = __import__("json").dumps(good_proposal())
+    snap = {"queues": {"r2-eth1": {"raw": "qdisc netem loss 30%", "drops": 1}}}
+    made = propose_with_predictions(snap, client=_FakeClient(good_json))
+    request = sent[-1]
+    user = __import__("json").loads(request["messages"][1]["content"])
+    fp = made.get("_fingerprint") or {}
+    check(
+        "request is built from the fingerprinted config",
+        request["messages"][0]["content"] == bundle["system"]
+        and request["response_format"] == bundle["response_format"]
+        and set(user) == {bundle["telemetry_key"], *bundle["payload"]}
+        and "raw" not in user["current_network_state"]["queues"]["r2-eth1"]
+        and fp.get("prompt_sha256") == PROMPT_SHA256
+        and fp.get("request_sha256")
+        and fp.get("model") == request.get("model"),
+        fp,
+    )
+    stressed = propose_with_predictions(
+        snap, stress_mode="misleading_ticket", ticket_text="reroute now", client=_FakeClient(good_json)
+    )
+    check(
+        "stress ticket changes the request fingerprint",
+        stressed["_fingerprint"]["request_sha256"] != fp.get("request_sha256")
+        and stressed["_fingerprint"]["stress_mode"] == "misleading_ticket"
+        and propose_with_predictions(snap, client=_FakeClient(good_json))["_fingerprint"] == fp,
+    )
+    try:
+        propose_with_predictions(snap, client=_FakeClient("not-json {"))
+        raise AssertionError("bad JSON accepted")
+    except AgentOutputError as exc:
+        check(
+            "invalid output keeps the request fingerprint",
+            getattr(exc, "request_fingerprint", {}).get("request_sha256") == fp.get("request_sha256"),
+        )
+    check(
+        "prompt ranks causes most likely first",
+        "ordered most likely first" in PREDICTION_SYSTEM_PROMPT
+        and "causes[0] is your primary diagnosis" in PREDICTION_SYSTEM_PROMPT,
+    )
+    check("prompt does not name held-out U ids", "U1" not in PREDICTION_SYSTEM_PROMPT)
+    check("prompt names development catalog", "F1–F12" in PREDICTION_SYSTEM_PROMPT)
+
+    class _Msg:
+        content = (
+            '{"action":"DO_NOTHING","target":"HostA_to_HostB",'
+            '"proposed_path":["r1","r2","r4"],"reason":"ok"}'
+        )
+
+    class _Choice:
+        message = _Msg()
+
+    class _Resp:
+        choices = [_Choice()]
+
+    parsed = _decision_from_response(_Resp(), ["DO_NOTHING", "REROUTE", "ESCALATE"], "HostA_to_HostB")
+    check("raw model content preserved on valid parse", (parsed.get("_raw") or {}).get("content") == _Msg.content)
+    parsed.pop("_raw", None)
+    ok, errs = validate_proposal(parsed, allowed_actions=["DO_NOTHING", "REROUTE", "ESCALATE"])
+    check("stripped raw still a valid proposal", ok, errs)
+
+    class _Bad:
+        content = "not-json {"
+
+    class _BadChoice:
+        message = _Bad()
+
+    class _BadResp:
+        choices = [_BadChoice()]
+
+    try:
+        _decision_from_response(_BadResp(), ["DO_NOTHING"], "HostA_to_HostB")
+        check("malformed JSON raises AgentOutputError", False)
+    except AgentOutputError as exc:
+        check("malformed JSON keeps raw text", exc.error_class == "invalid_output" and "not-json" in (exc.raw or ""))
 
     unknown_cause = copy.deepcopy(good)
     unknown_cause["causes"][0]["cause_id"] = "not-in-catalog"
@@ -63,7 +190,9 @@ def main():
     held_out = copy.deepcopy(good)
     held_out["causes"][0]["cause_id"] = "U1"
     ok, errs = validate_proposal(held_out)
-    check("held-out catalog id accepted", ok, errs)
+    check("held-out catalog id rejected", not ok, errs)
+    check("evaluation catalog still lists U1", "U1" in evaluation_cause_ids())
+    check("model catalog excludes U1", "U1" not in catalog_cause_ids())
 
     bad = copy.deepcopy(good)
     bad["causes"][0]["predicted_tests"][0]["test_id"] = "T99"
@@ -94,8 +223,25 @@ def main():
     check("llm schema pins target", schema["properties"]["target"].get("enum") == ["HostA_to_HostB"])
     cause_enum = schema["properties"]["causes"]["items"]["properties"]["cause_id"].get("enum") or []
     check("llm schema includes catalog F1", "F1" in cause_enum)
-    check("llm schema includes held-out U1", "U1" in cause_enum)
+    check("llm schema excludes held-out U1", "U1" not in cause_enum)
     check("llm schema excludes compounds", "C1" not in cause_enum)
+    leaky = {
+        "queues": {
+            "r2/r2-eth1": {
+                "drops": 2,
+                "backlog_bytes": 0,
+                "raw": "qdisc netem delay 5ms loss 18%",
+                "loss_rule": True,
+                "rate_rule": False,
+            }
+        },
+        "metrics": {"packet_loss_percent": 0.0},
+    }
+    view = model_snapshot_view(leaky)
+    q = (view.get("queues") or {}).get("r2/r2-eth1") or {}
+    check("model snapshot drops raw tc", "raw" not in q and "loss_rule" not in q and "rate_rule" not in q)
+    check("grader snapshot still has raw tc", "raw" in leaky["queues"]["r2/r2-eth1"])
+    check("model snapshot keeps queue drops", q.get("drops") == 2)
     check(
         "llm schema allows a full OAM catalog",
         schema["properties"]["causes"]["items"]["properties"]["predicted_tests"].get("maxItems")

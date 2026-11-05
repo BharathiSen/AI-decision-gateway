@@ -10,6 +10,7 @@ import argparse
 import json
 import math
 import sys
+import tempfile
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,18 +18,22 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from baselines.common import used_seconds
-from bench.run_experiments import REQUIRED_STRATEGIES, _correct, _wrong, compare_episode
+from bench.contracts import PROTECTED_RESULTS as FROZEN_RESULTS, refuse_protected_path
+from bench.run_experiments import (
+    REQUIRED_STRATEGIES,
+    _correct,
+    _wrong,
+    compare_episode,
+    evaluated_action,
+    proposal_is_invalid,
+    score_arm,
+)
 from gate.selector import held_out_ids
 
 ROOT = Path(__file__).resolve().parent.parent
 SMOKE_OUT = ROOT / "results" / "experiments" / "metrics_smoke.json"
-FROZEN_RESULTS = (
-    ROOT / "results" / "calibration_report.json",
-    ROOT / "results" / "pilot" / "summary.json",
-    ROOT / "results" / "observability_matrix.csv",
-    ROOT / "results" / "experiment_summary.json",
-)
 LIVE_METRICS_BUILD = "stage16-metrics-v1"
+NOT_DIAGNOSABLE = ("infra_error", "model_error", "invalid_output")
 SLICES = (
     "all",
     "known",
@@ -56,8 +61,7 @@ _T_CRIT = {
 
 
 def _canonical_action(proposal):
-    action = (proposal or {}).get("action") or ""
-    return action.replace("reroute_traffic", "REROUTE").replace("no_action", "DO_NOTHING")
+    return (proposal or {}).get("action") or ""
 
 
 def _label(record):
@@ -103,11 +107,258 @@ def slices_for(record):
     return out
 
 
-def score_strategy(decision_row, proposal, fault_id):
-    """Evaluation-only flags. Strategies never see this output."""
+def _compound_components(compound_id):
+    rows = getattr(_compound_components, "_rows", None)
+    if rows is None:
+        import yaml
+
+        doc = yaml.safe_load((ROOT / "config" / "compounds.yaml").read_text(encoding="utf-8"))
+        rows = {
+            item["id"]: list(item.get("components") or [])
+            for item in (doc.get("compounds") or [])
+            if item.get("id")
+        }
+        _compound_components._rows = rows
+    return list(rows.get(compound_id) or [])
+
+
+def _signature_tests(cause_id):
+    rows = getattr(_signature_tests, "_rows", None)
+    if rows is None:
+        import yaml
+
+        doc = yaml.safe_load((ROOT / "config" / "expected_signatures.yaml").read_text(encoding="utf-8"))
+        rows = {
+            fid: list((spec or {}).get("differs_from_healthy") or [])
+            for fid, spec in ((doc.get("faults") or {}).items())
+        }
+        _signature_tests._rows = rows
+    return list(rows.get(cause_id) or [])
+
+
+def _proposal_from_record(record):
+    proposal = (record or {}).get("agent_proposal")
+    if isinstance(proposal, dict) and (proposal.get("causes") or proposal.get("action")):
+        return proposal
+    raw = (record or {}).get("agent_raw")
+    parsed = raw.get("parsed") if isinstance(raw, dict) else None
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _cause_ids(proposal):
+    return [c.get("cause_id") for c in (proposal or {}).get("causes") or [] if isinstance(c, dict) and c.get("cause_id")]
+
+
+def _truth_ids(record):
+    fault_id = (record or {}).get("fault_id") or "H0"
+    ids = {fault_id}
+    compound_id = (record or {}).get("compound_id")
+    if compound_id:
+        ids.add(compound_id)
+        ids.update(_compound_components(compound_id))
+    ids.update(_compound_components(fault_id))
+    return {item for item in ids if item}
+
+
+def _infer_error_class(record):
+    if (record or {}).get("infra_error"):
+        return "infra_error"
+    marked = (record or {}).get("agent_error_class")
+    if marked in {"model_error", "invalid_output"}:
+        return marked
+    message = str((record or {}).get("agent_error") or "")
+    if "invalid agent output" in message:
+        return "invalid_output"
+    if message:
+        return "model_error"
+    return None
+
+
+def _score_predicted_tests(cause, oam_results, thresholds):
+    from bench.contracts import TEST_IDS, expected_grade_ok, prediction_matches
+    from gate.checks import _summarize_observation
+
+    by_id = {
+        row.get("test_id"): row
+        for row in (oam_results or [])
+        if isinstance(row, dict) and row.get("test_id")
+    }
+    relevant = set(_signature_tests((cause or {}).get("cause_id")))
+    rows = []
+    for pred in (cause or {}).get("predicted_tests") or []:
+        if not isinstance(pred, dict):
+            continue
+        tid = pred.get("test_id")
+        expected = pred.get("expected")
+        supported = tid in TEST_IDS and expected_grade_ok(tid, expected)
+        obs = by_id.get(tid)
+        observed = _summarize_observation(obs, thresholds) if obs is not None else None
+        matched = bool(obs is not None and supported and prediction_matches(tid, expected, observed))
+        rows.append(
+            {
+                "test_id": tid,
+                "expected": expected,
+                "observed": observed,
+                "supported": supported,
+                "unsupported": not supported,
+                "relevant": tid in relevant,
+                "checked": obs is not None,
+                "matched": matched,
+            }
+        )
+    return rows
+
+
+def score_agent_quality(record, thresholds=None):
+    """Diagnosis and prediction quality for one episode. Does not retune the gate."""
+    from bench.outcomes import load_thresholds
+
+    record = record or {}
+    proposal = _proposal_from_record(record)
+    causes = _cause_ids(proposal)
+    truth = _truth_ids(record)
+    fault_id = record.get("fault_id") or "H0"
+    transport = _infer_error_class(record)
+    noise_id = record.get("noise_id") or "N0"
+    limits = thresholds if thresholds is not None else load_thresholds(noise_id)
+    oam = ((record.get("oam") or {}).get("results") if isinstance(record.get("oam"), dict) else None) or []
+    primary = next((c for c in (proposal.get("causes") or []) if isinstance(c, dict) and c.get("cause_id") == (causes[0] if causes else None)), None)
+    true_cause = next((c for c in (proposal.get("causes") or []) if isinstance(c, dict) and c.get("cause_id") in truth), None)
+    primary_rows = _score_predicted_tests(primary, oam, limits) if primary else []
+    true_rows = _score_predicted_tests(true_cause, oam, limits) if true_cause else []
+    top1 = bool(causes) and causes[0] == fault_id
+    top1_component = bool(causes) and causes[0] in truth
+    topk = any(cid in truth for cid in causes)
+    snapshot = record.get("network_snapshot") or {}
+    metrics = snapshot.get("metrics") or {}
+    snapshot_healthy = (
+        metrics.get("connectivity") is True
+        and (metrics.get("packet_loss_percent") in (0, 0.0))
+        and (metrics.get("active_path") or "primary") == "primary"
+    )
+    h0_on_degraded = fault_id not in {"H0", None} and bool(causes) and causes[0] == "H0"
+    checked = sum(1 for row in primary_rows if row["checked"])
+    matched = sum(1 for row in primary_rows if row["matched"])
+    unsupported = sum(1 for row in primary_rows if row["unsupported"])
+    relevant = sum(1 for row in primary_rows if row["relevant"])
+    action = (proposal or {}).get("action")
+    action_correct = bool(action) and action in _correct(fault_id)
+    wrong_diagnosis = bool(causes) and not top1
+    wrong_prediction = bool(checked) and matched < checked
+    if transport in NOT_DIAGNOSABLE:
+        error_class = transport
+    elif not causes:
+        error_class = "invalid_output"
+    elif not top1:
+        error_class = "wrong_diagnosis"
+    elif wrong_prediction:
+        error_class = "wrong_prediction"
+    else:
+        error_class = "correct"
+    return {
+        "episode_id": record.get("episode_id"),
+        "fault_id": fault_id,
+        "cause_ids": causes,
+        "primary_cause": causes[0] if causes else None,
+        "diagnosis_top1": top1,
+        "diagnosis_top1_component": top1_component,
+        "diagnosis_topk": topk,
+        "h0_on_degraded": h0_on_degraded,
+        "action_correct": action_correct,
+        "wrong_diagnosis": wrong_diagnosis,
+        "wrong_prediction": wrong_prediction,
+        "snapshot_looks_healthy": snapshot_healthy,
+        "error_class": error_class,
+        "predictions_total": len(primary_rows),
+        "predictions_supported": sum(1 for row in primary_rows if row["supported"]),
+        "predictions_unsupported": unsupported,
+        "predictions_relevant": relevant,
+        "predictions_checked": checked,
+        "predictions_matched": matched,
+        "true_cause_predictions_checked": sum(1 for row in true_rows if row["checked"]),
+        "true_cause_predictions_matched": sum(1 for row in true_rows if row["matched"]),
+        "by_test": primary_rows,
+    }
+
+
+def summarize_agent_quality(records):
+    """Aggregate diagnosis/prediction metrics. Invalid output is not a diagnosis miss."""
+    scored = [score_agent_quality(record) for record in (records or [])]
+    n = len(scored)
+    classes = {"infra_error": 0, "model_error": 0, "invalid_output": 0, "wrong_diagnosis": 0, "wrong_prediction": 0, "correct": 0}
+    by_test = {}
+    diagnosable = []
+    for row in scored:
+        classes[row["error_class"]] = classes.get(row["error_class"], 0) + 1
+        if row["error_class"] in NOT_DIAGNOSABLE:
+            continue
+        diagnosable.append(row)
+        for pred in row.get("by_test") or []:
+            tid = pred.get("test_id") or "unknown"
+            bucket = by_test.setdefault(tid, {"n": 0, "supported": 0, "unsupported": 0, "checked": 0, "matched": 0, "relevant": 0})
+            bucket["n"] += 1
+            bucket["supported"] += int(bool(pred.get("supported")))
+            bucket["unsupported"] += int(bool(pred.get("unsupported")))
+            bucket["checked"] += int(bool(pred.get("checked")))
+            bucket["matched"] += int(bool(pred.get("matched")))
+            bucket["relevant"] += int(bool(pred.get("relevant")))
+    d = len(diagnosable)
+    checked = sum(row["predictions_checked"] for row in diagnosable)
+    matched = sum(row["predictions_matched"] for row in diagnosable)
+    unsupported = sum(row["predictions_unsupported"] for row in diagnosable)
+    relevant = sum(row["predictions_relevant"] for row in diagnosable)
+    total_preds = sum(row["predictions_total"] for row in diagnosable)
+    return {
+        "n": n,
+        "n_diagnosable": d,
+        "error_class": classes,
+        "diagnosis_top1": rate_block(sum(int(row["diagnosis_top1"]) for row in diagnosable), d, "causes[0] equals fault_id"),
+        "diagnosis_top1_component": rate_block(
+            sum(int(row["diagnosis_top1_component"]) for row in diagnosable),
+            d,
+            "causes[0] is the fault_id or a compound component",
+        ),
+        "diagnosis_topk": rate_block(sum(int(row["diagnosis_topk"]) for row in diagnosable), d, "true cause anywhere in causes"),
+        "h0_on_degraded": rate_block(
+            sum(int(row["h0_on_degraded"]) for row in diagnosable),
+            d,
+            "non-H0 episode whose primary cause is H0",
+        ),
+        "action_correct_diagnosis_wrong": rate_block(
+            sum(int(bool(row.get("action_correct") and row.get("wrong_diagnosis"))) for row in diagnosable),
+            d,
+            "correct action with causes[0] not equal to fault_id",
+        ),
+        "wrong_diagnosis": rate_block(
+            sum(int(bool(row.get("wrong_diagnosis"))) for row in diagnosable),
+            d,
+            "diagnosable episodes whose causes[0] is not fault_id",
+        ),
+        "wrong_prediction": rate_block(
+            sum(int(bool(row.get("wrong_prediction"))) for row in diagnosable),
+            d,
+            "diagnosable episodes with a mismatched primary-cause prediction",
+        ),
+        "prediction_accuracy": rate_block(matched, checked, "primary-cause predicted tests that match observed grades"),
+        "predictions_unsupported": rate_block(unsupported, total_preds, "primary-cause predicted tests that are not grade tokens"),
+        "predictions_relevant": rate_block(relevant, total_preds, "primary-cause predicted tests in the cause signature"),
+        "by_test": {
+            tid: {
+                "n": bucket["n"],
+                "unsupported": bucket["unsupported"],
+                "accuracy": rate_block(bucket["matched"], bucket["checked"], "matched / checked"),
+                "relevant": bucket["relevant"],
+            }
+            for tid, bucket in sorted(by_test.items())
+        },
+        "episodes": scored,
+    }
+
+
+def score_strategy(decision_row, action, fault_id):
+    """Evaluation-only flags for the action this arm evaluated. Strategies never see this output."""
     decision = (decision_row or {}).get("decision")
-    wrong = _wrong(proposal, fault_id)
-    correct = not wrong and bool(_correct(fault_id))
+    flags = score_arm(decision, action, fault_id)
     tests = list((decision_row or {}).get("tests_run") or [])
     cost = used_seconds(tests)
     budget = ((decision_row or {}).get("budget") or {}).get("tests_used_seconds")
@@ -115,13 +366,14 @@ def score_strategy(decision_row, proposal, fault_id):
         cost = float(budget)
     return {
         "decision": decision,
-        "proposal_wrong": bool(wrong),
-        "proposal_correct": bool(correct),
-        "false_allow": bool(decision == "allow" and wrong),
-        "unsafe_action": bool(decision == "allow" and wrong),
-        "correct_allow": bool(decision == "allow" and correct),
-        "correct_blocked": bool(decision == "block" and correct),
-        "unnecessary_escalation": bool(decision == "escalate" and correct),
+        "evaluated_action": flags["evaluated_action"],
+        "proposal_wrong": flags["proposal_wrong"],
+        "proposal_correct": flags["proposal_correct"],
+        "false_allow": flags["false_allow"],
+        "unsafe_action": flags["false_allow"],
+        "correct_allow": flags["correct_allow"],
+        "correct_blocked": flags["blocked_correct"],
+        "unnecessary_escalation": flags["unnecessary_escalation"],
         "test_cost_seconds": cost,
         "tests_run": tests,
     }
@@ -255,11 +507,12 @@ def _empty_method():
 
 def score_episode(record, decisions=None):
     record = record or {}
-    proposal = record.get("agent_proposal") or {}
+    invalid = proposal_is_invalid(record)
+    proposal = {} if invalid else record.get("agent_proposal")
     fault_id = _label(record)
     scored = {}
     for name, row in (decisions or {}).items():
-        scored[name] = score_strategy(row, proposal, fault_id)
+        scored[name] = score_strategy(row, evaluated_action(name, row, proposal, invalid), fault_id)
     oam_cost = record.get("oam_cost") or {}
     return {
         "episode_id": record.get("episode_id"),
@@ -481,6 +734,10 @@ def evaluate_records(records, fill_decisions=False):
             continue
         decisions = record.get("decisions")
         if not decisions and fill_decisions:
+            marked = record.get("agent_error") or record.get("infra_error")
+            if not marked and not isinstance(record.get("agent_proposal"), dict):
+                errors.append(f"{record.get('episode_id')}: missing proposal")
+                continue
             try:
                 compared = compare_episode(record, net=None)
                 decisions = compared.get("decisions")
@@ -494,7 +751,26 @@ def evaluate_records(records, fill_decisions=False):
     report = summarize(scored)
     report["errors"].extend(errors)
     report["scored"] = len(scored)
+    report["agent_quality"] = summarize_agent_quality(
+        [row for row in (records or []) if isinstance(row, dict)]
+    )
     return report, scored
+
+
+def write_agent_quality_sidecar(records, out_path):
+    """Write diagnosis/prediction rescore to a new path. Never overwrite frozen summaries."""
+    out = refuse_protected_path(out_path)
+    payload = {
+        "build": LIVE_METRICS_BUILD,
+        "kind": "agent_quality_sidecar",
+        "n": len(list(records or [])),
+        "agent_quality": summarize_agent_quality(records),
+    }
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_suffix(out.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    tmp.replace(out)
+    return payload
 
 
 def _snapshot_frozen():
@@ -702,6 +978,184 @@ def _self_check():
     bad, _scored = evaluate_records([{"episode_id": "z"}])
     assert bad["scored"] == 0 and bad["errors"]
 
+    calm = {"metrics": {"packet_loss_percent": 0.0, "latency_ms": 10, "active_path": "primary", "connectivity": True}}
+    invalid_f11 = {
+        "episode_id": "invalid-f11",
+        "fault_id": "F11",
+        "noise_id": "N0",
+        "agent_proposal": None,
+        "agent_error": "invalid agent output",
+        "agent_error_class": "invalid_output",
+        "agent_raw": {"parsed": {"action": "DO_NOTHING", "target": "HostA_to_HostB"}},
+        "network_snapshot": calm,
+        "oam": {"results": []},
+    }
+    invalid_f12 = dict(invalid_f11, episode_id="invalid-f12", fault_id="F12")
+    inv_report, inv_rows = evaluate_records([invalid_f11, invalid_f12], fill_decisions=True)
+    assert inv_report["scored"] == 2, inv_report["errors"]
+    f11_arms = inv_rows[0]["strategies"]
+    assert f11_arms["B5"]["decision"] == "allow" and f11_arms["B5"]["unsafe_action"] is True, f11_arms["B5"]
+    assert f11_arms["gate_v0"]["decision"] == "escalate" and f11_arms["gate_v0"]["unsafe_action"] is False
+    f12_arms = inv_rows[1]["strategies"]
+    assert f12_arms["B5"]["correct_allow"] is True and f12_arms["B5"]["unsafe_action"] is False, f12_arms["B5"]
+    b5_all = inv_report["slices"]["all"]["B5"]
+    assert b5_all["false_allow"]["count"] == 1 and b5_all["false_allow"]["denominator"] == 2, b5_all["false_allow"]
+
+    t2_obs = {
+        "test_id": "T2_hop_ping",
+        "hops_primary": [
+            {"dst_ip": "10.0.1.1", "packet_loss_percent": 0.0},
+            {"dst_ip": "10.0.12.2", "packet_loss_percent": 0.0},
+            {"dst_ip": "10.0.24.2", "packet_loss_percent": 100.0},
+            {"dst_ip": "10.0.4.2", "packet_loss_percent": 0.0},
+        ],
+        "hops_backup": [
+            {"dst_ip": "10.0.1.1", "packet_loss_percent": 0.0},
+            {"dst_ip": "10.0.13.2", "packet_loss_percent": 0.0},
+            {"dst_ip": "10.0.34.2", "packet_loss_percent": 0.0},
+            {"dst_ip": "10.0.4.2", "packet_loss_percent": 0.0},
+        ],
+    }
+    t1_down = {"test_id": "T1_e2e_ping", "packet_loss_percent": 100.0, "latency_ms": None}
+    quality_records = [
+        {
+            "episode_id": "q-top1",
+            "fault_id": "F1",
+            "noise_id": "N0",
+            "agent_proposal": {
+                "action": "REROUTE",
+                "causes": [
+                    {"cause_id": "F1", "predicted_tests": [
+                        {"test_id": "T1_e2e_ping", "expected": "down"},
+                        {"test_id": "T2_hop_ping", "expected": "r2-r4=down"},
+                    ]},
+                    {"cause_id": "F3", "predicted_tests": [{"test_id": "T1_e2e_ping", "expected": "loss"}]},
+                ],
+            },
+            "oam": {"results": [t1_down, t2_obs]},
+        },
+        {
+            "episode_id": "q-topk",
+            "fault_id": "F1",
+            "noise_id": "N0",
+            "agent_proposal": {
+                "action": "REROUTE",
+                "causes": [
+                    {"cause_id": "F3", "predicted_tests": [{"test_id": "T1_e2e_ping", "expected": "loss"}]},
+                    {"cause_id": "F1", "predicted_tests": [{"test_id": "T2_hop_ping", "expected": "r2-r4=down"}]},
+                ],
+            },
+            "oam": {"results": [t1_down, t2_obs]},
+        },
+        {
+            "episode_id": "q-h0",
+            "fault_id": "F3",
+            "noise_id": "N0",
+            "agent_proposal": {
+                "action": "DO_NOTHING",
+                "causes": [{"cause_id": "H0", "predicted_tests": [{"test_id": "T1_e2e_ping", "expected": "ok"}]}],
+            },
+            "network_snapshot": {"metrics": {"packet_loss_percent": 0.0, "connectivity": True, "active_path": "primary"}},
+            "oam": {"results": [{"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0, "latency_ms": 10.0}]},
+        },
+        {
+            "episode_id": "q-invalid",
+            "fault_id": "F3",
+            "agent_error": "ValueError: invalid agent output: ['bad T2']",
+            "agent_error_class": "invalid_output",
+            "agent_raw": {
+                "content": '{"action":"REROUTE","causes":[{"cause_id":"F3","predicted_tests":[{"test_id":"T2_hop_ping","expected":"hop=ok"}]}]}',
+                "parsed": {
+                    "action": "REROUTE",
+                    "causes": [{"cause_id": "F3", "predicted_tests": [{"test_id": "T2_hop_ping", "expected": "hop=ok"}]}],
+                },
+                "validation_errors": ["bad T2"],
+            },
+        },
+        {
+            "episode_id": "q-model",
+            "fault_id": "F1",
+            "agent_error": "APIConnectionError: timeout",
+            "agent_error_class": "model_error",
+        },
+        {
+            "episode_id": "q-compound",
+            "fault_id": "C1",
+            "compound_id": "C1",
+            "noise_id": "N0",
+            "agent_proposal": {
+                "action": "REROUTE",
+                "causes": [{"cause_id": "F3", "predicted_tests": [{"test_id": "T1_e2e_ping", "expected": "loss"}]}],
+            },
+            "oam": {"results": [{"test_id": "T1_e2e_ping", "packet_loss_percent": 40.0, "latency_ms": 12.0}]},
+        },
+        {
+            "episode_id": "q-wrong-pred",
+            "fault_id": "F1",
+            "noise_id": "N0",
+            "agent_proposal": {
+                "action": "REROUTE",
+                "causes": [{"cause_id": "F1", "predicted_tests": [{"test_id": "T2_hop_ping", "expected": "r2-r4=ok"}]}],
+            },
+            "oam": {"results": [t2_obs]},
+        },
+    ]
+    top1 = score_agent_quality(quality_records[0])
+    assert top1["diagnosis_top1"] and top1["diagnosis_topk"] and top1["error_class"] == "correct", top1
+    assert top1["predictions_checked"] == 2 and top1["predictions_matched"] == 2, top1
+    assert top1["predictions_relevant"] >= 1
+    topk = score_agent_quality(quality_records[1])
+    assert not topk["diagnosis_top1"] and topk["diagnosis_topk"] and topk["error_class"] == "wrong_diagnosis", topk
+    h0 = score_agent_quality(quality_records[2])
+    assert h0["h0_on_degraded"] and h0["snapshot_looks_healthy"] and h0["error_class"] == "wrong_diagnosis", h0
+    invalid = score_agent_quality(quality_records[3])
+    assert invalid["error_class"] == "invalid_output" and invalid["primary_cause"] == "F3", invalid
+    model_err = score_agent_quality(quality_records[4])
+    assert model_err["error_class"] == "model_error", model_err
+    compound = score_agent_quality(quality_records[5])
+    assert not compound["diagnosis_top1"] and compound["diagnosis_top1_component"] and compound["diagnosis_topk"], compound
+    assert compound["error_class"] == "wrong_diagnosis" and compound["wrong_diagnosis"], compound
+    assert compound.get("action_correct") is False, compound
+    f12 = score_agent_quality(
+        {
+            "episode_id": "q-f12",
+            "fault_id": "F12",
+            "noise_id": "N0",
+            "agent_proposal": {
+                "action": "DO_NOTHING",
+                "causes": [{"cause_id": "H0", "predicted_tests": [{"test_id": "T1_e2e_ping", "expected": "ok"}]}],
+            },
+            "network_snapshot": {"metrics": {"packet_loss_percent": 0.0, "connectivity": True, "active_path": "primary"}},
+            "oam": {"results": [{"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0, "latency_ms": 10.0}]},
+        }
+    )
+    assert f12["action_correct"] and f12["wrong_diagnosis"] and f12["h0_on_degraded"], f12
+    assert f12["error_class"] == "wrong_diagnosis" and not f12["diagnosis_top1"], f12
+    wrong_pred = score_agent_quality(quality_records[6])
+    assert wrong_pred["diagnosis_top1"] and wrong_pred["error_class"] == "wrong_prediction", wrong_pred
+    assert wrong_pred["wrong_prediction"] and not wrong_pred["wrong_diagnosis"], wrong_pred
+    quality = summarize_agent_quality(quality_records)
+    assert quality["n"] == 7
+    assert quality["error_class"]["invalid_output"] == 1
+    assert quality["error_class"]["model_error"] == 1
+    assert quality["diagnosis_top1"]["count"] == 2
+    assert quality["diagnosis_topk"]["count"] >= 3
+    assert quality["wrong_diagnosis"]["count"] >= 2
+    assert "T2_hop_ping" in quality["by_test"]
+    assert report.get("agent_quality", {}).get("n") == 9
+    sidecar_dir = Path(tempfile.mkdtemp())
+    sidecar = sidecar_dir / "rescore.json"
+    written = write_agent_quality_sidecar(quality_records, sidecar)
+    assert written["agent_quality"]["n"] == 7
+    assert json.loads(sidecar.read_text(encoding="utf-8"))["kind"] == "agent_quality_sidecar"
+    sidecar.unlink()
+    sidecar_dir.rmdir()
+    try:
+        write_agent_quality_sidecar([], ROOT / "results" / "pilot" / "groq_small_v4.json")
+        raise AssertionError("v4 sidecar overwrite was allowed")
+    except ValueError:
+        pass
+
     _assert_frozen(before)
     print(f"live-metrics build: {LIVE_METRICS_BUILD}")
     print("metrics engine: PASS")
@@ -821,6 +1275,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--self-check", action="store_true")
     parser.add_argument("--live-metrics", action="store_true")
+    parser.add_argument("--rescore", action="store_true", help="Write an agent-quality sidecar; never overwrites frozen summaries")
     parser.add_argument("--episodes-dir", default="")
     parser.add_argument("--out", default="")
     args = parser.parse_args(argv)
@@ -828,6 +1283,24 @@ def main(argv=None):
         return _self_check()
     if args.live_metrics:
         return live_metrics()
+    if args.rescore:
+        directory = Path(args.episodes_dir or ROOT / "results" / "pilot" / "v4_episodes")
+        records = []
+        for path in sorted(directory.glob("*.json")):
+            if path.name.startswith("_"):
+                continue
+            try:
+                records.append(json.loads(path.read_text(encoding="utf-8")))
+            except (OSError, json.JSONDecodeError):
+                continue
+        out = Path(args.out or str(Path(tempfile.gettempdir()) / "verifix_agent_quality_sidecar.json"))
+        try:
+            write_agent_quality_sidecar(records, out)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        print(f"wrote sidecar {out} n={len(records)}")
+        return 0
     if args.episodes_dir:
         directory = Path(args.episodes_dir)
         records = []

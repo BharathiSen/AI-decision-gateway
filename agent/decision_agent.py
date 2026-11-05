@@ -14,6 +14,8 @@ no access to, anything that can change the network (network.controller,
 network.fault_injector).
 """
 
+import copy
+import hashlib
 import json
 import logging
 import os
@@ -237,6 +239,24 @@ def _model_cost(response, started):
 DEFAULT_ALLOWED_ACTIONS = ["REROUTE", "DO_NOTHING", "ESCALATE"]
 DEFAULT_OAM_CATALOG = list(TEST_IDS)
 DEFAULT_TARGET = "HostA_to_HostB"
+PROMPT_VERSION = "v2"
+_QUEUE_LEAK_KEYS = ("raw", "loss_rule", "rate_rule")
+
+
+class AgentOutputError(ValueError):
+    """Model returned JSON that failed validation, or non-JSON content.
+
+    Distinct from transport/API failures (auth, timeout, 429), which stay
+    as the client exception. Episode records store raw and parsed on this
+    error so invalid output is not discarded.
+    """
+
+    def __init__(self, message, raw=None, parsed=None, errors=None, error_class="invalid_output"):
+        super().__init__(message)
+        self.raw = raw
+        self.parsed = parsed
+        self.errors = list(errors or [])
+        self.error_class = error_class
 
 
 def _canonical_target(value, default=DEFAULT_TARGET):
@@ -259,6 +279,48 @@ def _canonical_target(value, default=DEFAULT_TARGET):
 def _apply_target(decision, target):
     if isinstance(decision, dict):
         decision["target"] = _canonical_target(decision.get("target"), target)
+    return decision
+
+
+def _message_content(response):
+    choice = (getattr(response, "choices", None) or [None])[0]
+    message = getattr(choice, "message", None) if choice is not None else None
+    content = getattr(message, "content", None) if message is not None else None
+    return content if isinstance(content, str) else ""
+
+
+def _decision_from_response(response, allowed_actions, target):
+    """Parse and validate model JSON. Always keep the raw text."""
+    from agent.validate import validate_proposal
+
+    raw_text = _message_content(response)
+    try:
+        decision = json.loads(raw_text) if raw_text else None
+    except json.JSONDecodeError as exc:
+        raise AgentOutputError(
+            f"invalid agent output: malformed JSON: {exc}",
+            raw=raw_text,
+            error_class="invalid_output",
+        ) from exc
+    if not isinstance(decision, dict):
+        raise AgentOutputError(
+            "invalid agent output: root must be an object",
+            raw=raw_text,
+            parsed=decision,
+            errors=["root must be an object"],
+            error_class="invalid_output",
+        )
+    _apply_target(decision, target)
+    ok, errors = validate_proposal(decision, allowed_actions=allowed_actions)
+    if not ok:
+        raise AgentOutputError(
+            f"invalid agent output: {errors}",
+            raw=raw_text,
+            parsed=decision,
+            errors=errors,
+            error_class="invalid_output",
+        )
+    decision["_raw"] = {"content": raw_text}
     return decision
 
 # Policy context now lives in policy/policy.yaml (sibling of this file's
@@ -290,9 +352,11 @@ short, factual reason grounded in the telemetry."""
 
 PREDICTION_SYSTEM_PROMPT = SYSTEM_PROMPT + """
 
-Also return up to five candidate causes. Each cause_id must be one of \
-the ids in fault_catalog (H0, F1–F12, U1–U5). Do not invent prose \
-labels, link names, or compound ids. For each cause, predict how named \
+Also return one to five candidate causes, ordered most likely first. \
+causes[0] is your primary diagnosis and must be consistent with the \
+action you propose. Each cause_id must be one of the ids in \
+fault_catalog (H0, F1–F12). Do not invent prose \
+labels, link names, held-out ids, or compound ids. For each cause, predict how named \
 OAM tests from oam_test_catalog would read if that cause were true. \
 expected must be exactly a grade token from oam_grade_vocabulary for \
 that test_id (T1: ok, down, loss, latency, loss+latency; T4: df_ok or \
@@ -307,6 +371,106 @@ hostA-r1 and r4-hostB need a path prefix. Do not write hop= as a \
 placeholder. Do not paraphrase (not success, fail, timeout, no errors, or \
 packet loss 100%). You still do not execute anything or choose which \
 tests the gate runs."""
+
+SCHEMA_NAME = "network_decision_with_predictions"
+TELEMETRY_KEY = "current_network_state"
+SNAPSHOT_VIEW = {"version": 1, "queue_keys_dropped": list(_QUEUE_LEAK_KEYS)}
+
+
+def request_config(
+    allowed_actions=None,
+    policy_context=None,
+    oam_test_catalog=None,
+    target=DEFAULT_TARGET,
+    stress_mode=None,
+    ticket_text=None,
+):
+    """Everything propose_with_predictions sends except the live telemetry."""
+    from agent.validate import SUPPORTED_TARGETS, catalog_cause_ids, catalog_entries
+
+    allowed_actions = list(allowed_actions or DEFAULT_ALLOWED_ACTIONS)
+    target = target or DEFAULT_TARGET
+    return {
+        "system": PREDICTION_SYSTEM_PROMPT,
+        "telemetry_key": TELEMETRY_KEY,
+        "snapshot_view": SNAPSHOT_VIEW,
+        "payload": {
+            "allowed_action_types": allowed_actions,
+            "policy_context": policy_context or DEFAULT_POLICY_CONTEXT,
+            "oam_test_catalog": list(oam_test_catalog or DEFAULT_OAM_CATALOG),
+            "oam_grade_vocabulary": grade_vocabulary_for_prompt(),
+            "supported_target": target,
+            "target": target,
+            "fault_catalog": catalog_entries(),
+            "prompt_version": PROMPT_VERSION,
+            "stress_mode": stress_mode,
+            "ticket_text": ticket_text,
+        },
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": SCHEMA_NAME,
+                "strict": True,
+                "schema": llm_proposal_schema(
+                    allowed_actions,
+                    predictions=True,
+                    cause_ids=sorted(catalog_cause_ids()),
+                    targets=sorted(SUPPORTED_TARGETS),
+                ),
+            },
+        },
+    }
+
+
+def _sha256(doc):
+    return hashlib.sha256(json.dumps(doc, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def prompt_bundle():
+    """The default request (no stress ticket), excluding live telemetry and provider."""
+    return request_config()
+
+
+def prompt_sha256():
+    return _sha256(prompt_bundle())
+
+
+PROMPT_SHA256 = prompt_sha256()
+
+
+def request_fingerprint(config, request_args):
+    """Identity of one actual model request: full config plus provider, model and effort."""
+    cfg = provider_config()
+    provider = {
+        "provider": cfg["provider"],
+        "base_url": cfg["base_url"],
+        "model": request_args.get("model"),
+        "reasoning_effort": request_args.get("reasoning_effort"),
+    }
+    return {
+        "prompt_version": PROMPT_VERSION,
+        "prompt_sha256": PROMPT_SHA256,
+        "request_sha256": _sha256({"config": config, "provider": provider}),
+        **provider,
+        "stress_mode": config["payload"]["stress_mode"],
+    }
+
+
+def model_snapshot_view(snapshot):
+    """Copy telemetry for the model. Drop raw tc and derived injection flags.
+
+    Grader and episode JSON keep the unsanitized snapshot.
+    """
+    if not isinstance(snapshot, dict):
+        return snapshot
+    view = copy.deepcopy(snapshot)
+    queues = view.get("queues")
+    if isinstance(queues, dict):
+        for row in queues.values():
+            if isinstance(row, dict):
+                for key in _QUEUE_LEAK_KEYS:
+                    row.pop(key, None)
+    return view
 
 
 def propose_decision(
@@ -334,7 +498,7 @@ def propose_decision(
     allowed_actions (belt-and-suspenders on top of the enforced schema).
     Never applies anything to the network.
     """
-    from agent.validate import SUPPORTED_TARGETS, validate_proposal
+    from agent.validate import SUPPORTED_TARGETS
 
     allowed_actions = list(allowed_actions or DEFAULT_ALLOWED_ACTIONS)
     policy_context = policy_context or DEFAULT_POLICY_CONTEXT
@@ -342,7 +506,7 @@ def propose_decision(
     client = client or _client()
 
     user_payload = {
-        "current_network_state": network_state,
+        "current_network_state": model_snapshot_view(network_state),
         "allowed_action_types": allowed_actions,
         "policy_context": policy_context,
         "supported_target": target,
@@ -366,16 +530,7 @@ def propose_decision(
         },
     )
 
-    try:
-        decision = json.loads(response.choices[0].message.content)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"invalid agent output: malformed JSON: {exc}") from exc
-
-    _apply_target(decision, target)
-    ok, errors = validate_proposal(decision, allowed_actions=allowed_actions)
-    if not ok:
-        raise ValueError(f"invalid agent output: {errors}")
-
+    decision = _decision_from_response(response, allowed_actions, target)
     decision["_cost"] = _model_cost(response, started)
     return decision
 
@@ -390,59 +545,34 @@ def propose_with_predictions(
     ticket_text=None,
     client=None,
 ):
-    """Phase 8: fix proposal plus structured OAM predictions per cause."""
-    from agent.validate import SUPPORTED_TARGETS, catalog_cause_ids, catalog_entries, validate_proposal
+    """Phase 8: fix proposal plus structured OAM predictions per cause.
 
-    allowed_actions = list(allowed_actions or DEFAULT_ALLOWED_ACTIONS)
-    oam_test_catalog = oam_test_catalog or DEFAULT_OAM_CATALOG
-    policy_context = policy_context or DEFAULT_POLICY_CONTEXT
-    target = target or DEFAULT_TARGET
-    client = client or _client()
-
-    user_payload = {
-        "current_network_state": network_state,
-        "allowed_action_types": allowed_actions,
-        "policy_context": policy_context,
-        "oam_test_catalog": oam_test_catalog,
-        "oam_grade_vocabulary": grade_vocabulary_for_prompt(),
-        "supported_target": target,
-        "target": target,
-        "fault_catalog": catalog_entries(),
-        "stress_mode": stress_mode,
-        "ticket_text": ticket_text,
-    }
+    The request is built only from request_config, so the recorded
+    fingerprint describes exactly what was sent.
+    """
+    config = request_config(allowed_actions, policy_context, oam_test_catalog, target, stress_mode, ticket_text)
+    args = _request_args()
+    fingerprint = request_fingerprint(config, args)
+    payload = config["payload"]
+    user_payload = {config["telemetry_key"]: model_snapshot_view(network_state), **payload}
 
     started = time.monotonic()
-    response = client.chat.completions.create(
-        **_request_args(),
-        messages=[
-            {"role": "system", "content": PREDICTION_SYSTEM_PROMPT},
-            {"role": "user", "content": json.dumps(user_payload, indent=2)},
-        ],
-        response_format={
-            "type": "json_schema",
-            "json_schema": {
-                "name": "network_decision_with_predictions",
-                "strict": True,
-                "schema": llm_proposal_schema(
-                    allowed_actions,
-                    predictions=True,
-                    cause_ids=catalog_cause_ids(),
-                    targets=sorted(SUPPORTED_TARGETS),
-                ),
-            },
-        },
-    )
-
     try:
-        decision = json.loads(response.choices[0].message.content)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"invalid agent output: malformed JSON: {exc}") from exc
-    _apply_target(decision, target)
-    ok, errors = validate_proposal(decision, allowed_actions=allowed_actions)
-    if not ok:
-        raise ValueError(f"invalid agent output: {errors}")
+        client = client or _client()
+        response = client.chat.completions.create(
+            **args,
+            messages=[
+                {"role": "system", "content": config["system"]},
+                {"role": "user", "content": json.dumps(user_payload, indent=2)},
+            ],
+            response_format=config["response_format"],
+        )
+        decision = _decision_from_response(response, payload["allowed_action_types"], payload["target"])
+    except Exception as exc:
+        exc.request_fingerprint = fingerprint
+        raise
     decision["_cost"] = _model_cost(response, started)
+    decision["_fingerprint"] = fingerprint
     return decision
 
 

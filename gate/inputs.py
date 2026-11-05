@@ -162,11 +162,11 @@ def load_frozen_context(noise_id="N0"):
 
 def validate_proposal_inputs(proposal, costs=None):
     """Proposed fix, hypotheses, and predicted outcomes. No silent fill-in."""
-    from agent.validate import validate_proposal
+    from agent.validate import evaluation_cause_ids, validate_proposal
 
     if not isinstance(proposal, dict):
         return ["proposal must be an object"]
-    ok, errors = validate_proposal(proposal)
+    ok, errors = validate_proposal(proposal, cause_ids=evaluation_cause_ids())
     errors = list(errors)
     if not ok and not errors:
         errors.append("invalid proposal")

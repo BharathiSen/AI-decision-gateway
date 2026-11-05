@@ -56,6 +56,9 @@ for fault in faults:
     assert "initial_acceptable_actions" in fault, (
         f"{fault['id']}: missing acceptable actions"
     )
+    allowed_actions = {"REROUTE", "DO_NOTHING", "ESCALATE"}
+    extras = set(fault.get("initial_acceptable_actions") or []) - allowed_actions
+    assert not extras, f"{fault['id']}: non-canonical actions {sorted(extras)}"
 
 assert faults_doc["version"] == 1
 assert compounds_doc["version"] == 1

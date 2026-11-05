@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 
 from bench import inject as inj
 from bench import tests as oam
-from bench.contracts import validate_record
+from bench.contracts import refuse_protected_path, validate_record
 from bench.traffic import apply_noise, clear_noise
 from telemetry.collector import collect_current_state
 
@@ -166,6 +166,7 @@ def screen_proposal(proposal, snapshot=None):
         return None
     return {
         "agent_error": "; ".join(errors),
+        "agent_error_class": "invalid_output",
         "execution_error": "invalid proposal",
         "execution_attempted": False,
     }
@@ -361,9 +362,13 @@ def run_episode(
             baseline_error = f"{type(exc).__name__}: {exc}"
         oam_bundle = parts["tests"](net) if run_oam else None
 
+        from agent.decision_agent import PROMPT_SHA256, PROMPT_VERSION
+
         record = {
             "episode_id": episode_id,
             "started_at": started,
+            "prompt_version": PROMPT_VERSION,
+            "prompt_sha256": PROMPT_SHA256,
             "fault_id": fault_label,
             "noise_id": noise_id,
             "seed": seed,
@@ -379,6 +384,9 @@ def run_episode(
             ),
             "agent_proposal": None,
             "agent_error": None,
+            "agent_error_class": None,
+            "agent_raw": None,
+            "request_fingerprint": None,
             "gate_decision": None,
             "gate_error": None,
             "execution_attempted": False,
@@ -397,12 +405,28 @@ def run_episode(
             return record
 
         if agent_fn:
+            from agent.decision_agent import AgentOutputError
+
             proposal, elapsed, agent_exc = _call_timed(lambda: agent_fn(snapshot))
+            if isinstance(proposal, dict):
+                record["agent_raw"] = proposal.pop("_raw", None)
+                record["request_fingerprint"] = proposal.pop("_fingerprint", None)
             record["agent_cost"] = _agent_cost(proposal, elapsed)
             if agent_exc is not None:
+                record["request_fingerprint"] = getattr(agent_exc, "request_fingerprint", None)
                 record["agent_error"] = f"{type(agent_exc).__name__}: {agent_exc}"
+                if isinstance(agent_exc, AgentOutputError):
+                    record["agent_error_class"] = agent_exc.error_class or "invalid_output"
+                    record["agent_raw"] = {
+                        "content": agent_exc.raw,
+                        "parsed": agent_exc.parsed,
+                        "validation_errors": agent_exc.errors,
+                    }
+                else:
+                    record["agent_error_class"] = "model_error"
                 record["completed_at"] = datetime.now(timezone.utc).isoformat()
                 return record
+            record["agent_error_class"] = None
             record["agent_proposal"] = bind_proposal_observation(proposal, snapshot)
             rejection = screen_proposal(record["agent_proposal"], snapshot)
             if rejection:
@@ -528,12 +552,43 @@ def aggregate_episode_costs(directory=None):
     }
 
 
-def save_episode(record, directory=None):
-    directory = Path(directory or EPISODE_DIR)
+def save_episode(record, directory):
+    directory = Path(directory)
+    path = refuse_protected_path(directory / f"{record['episode_id']}.json")
     directory.mkdir(parents=True, exist_ok=True)
-    path = directory / f"{record['episode_id']}.json"
     path.write_text(json.dumps(record, indent=2), encoding="utf-8")
     return path
+
+
+def infra_error_record(fault_id, noise_id, seed, exc, compound_id=None):
+    """Attempted episode that failed before a proposal was recorded."""
+    from agent.decision_agent import PROMPT_SHA256, PROMPT_VERSION
+
+    now = datetime.now(timezone.utc).isoformat()
+    return {
+        "episode_id": str(uuid.uuid4()),
+        "started_at": now,
+        "completed_at": now,
+        "status": "infra_error",
+        "infra_error": f"{type(exc).__name__}: {exc}",
+        "prompt_version": PROMPT_VERSION,
+        "prompt_sha256": PROMPT_SHA256,
+        "request_fingerprint": None,
+        "fault_id": compound_id or fault_id,
+        "noise_id": noise_id,
+        "seed": seed,
+        "agent_proposal": None,
+        "agent_error": None,
+        "agent_error_class": None,
+        "agent_raw": None,
+        "gate_decision": None,
+        "gate_error": None,
+        "execution_attempted": False,
+        "execution_result": None,
+        "execution_error": None,
+        "remediation_succeeded": False,
+        "state_verified": False,
+    }
 
 
 def _cause_proposal(action, cause_id, path=None, expected="ok"):
@@ -922,6 +977,7 @@ def _self_check():
     assert connected["gate_decision"].get("binding", {}).get("decision_id")
     assert connected["gate_decision"]["binding"]["signed"] is False
     assert connected["execution_attempted"] is True and connected["state_verified"] is True
+    assert connected.get("prompt_version") and connected.get("prompt_sha256")
     assert validate_record("proposal", connected["agent_proposal"])[0]
     assert validate_record("gate_decision", connected["gate_decision"])[0]
     assert validate_record("execution_result", _execution_view(connected))[0]
@@ -1161,6 +1217,20 @@ def _self_check():
     assert priced_cost["prompt_tokens"] == 11 and priced_cost["completion_tokens"] == 4
     bare = _agent_cost({"action": "DO_NOTHING"}, 0.1)
     assert bare["prompt_tokens"] is None and bare["model_latency_seconds"] is None
+    from agent.decision_agent import AgentOutputError
+
+    def _invalid_agent():
+        raise AgentOutputError(
+            "invalid agent output: ['bad T2']",
+            raw='{"action":"REROUTE","causes":[]}',
+            parsed={"action": "REROUTE", "causes": []},
+            errors=["bad T2"],
+        )
+
+    _, _, agent_exc = _call_timed(_invalid_agent)
+    assert isinstance(agent_exc, AgentOutputError)
+    assert agent_exc.error_class == "invalid_output"
+    assert agent_exc.raw.startswith("{") and agent_exc.parsed["action"] == "REROUTE"
 
     assert connected["agent_cost"]["prompt_tokens"] is None
     assert connected["agent_cost"]["latency_seconds"] >= 0
@@ -1183,6 +1253,7 @@ def _self_check():
         {"timestamp": full["timestamp"]},
     )
     assert stale and "does not match" in stale["agent_error"], stale
+    assert stale.get("agent_error_class") == "invalid_output", stale
 
     rolled = aggregate_episode_costs(tempfile.mkdtemp())
     assert rolled["episodes"] == 0 and rolled["oam"] is None

@@ -19,8 +19,10 @@ valid T6 interface. Grader precedence (unchanged): drops (excluding
 intentional netem loss without a rate rule), else backlog, else clear.
 """
 
+import os
 import re
 import unicodedata
+from pathlib import Path
 
 TEST_IDS = (
     "T1_e2e_ping",
@@ -618,3 +620,44 @@ def validate_record(kind, data):
         return False, [f"unknown record {kind}"]
     errors = _check(schema, data, kind)
     return len(errors) == 0, errors
+
+
+_ROOT = Path(__file__).resolve().parent.parent
+PROTECTED_RESULTS = (
+    _ROOT / "results" / "calibration_report.json",
+    _ROOT / "results" / "pilot" / "summary.json",
+    _ROOT / "results" / "observability_matrix.csv",
+    _ROOT / "results" / "experiment_summary.json",
+    _ROOT / "results" / "pilot" / "groq_small.json",
+    _ROOT / "results" / "pilot" / "groq_small_v2.json",
+    _ROOT / "results" / "pilot" / "groq_small_v3.json",
+    _ROOT / "results" / "pilot" / "groq_small_v3b.json",
+    _ROOT / "results" / "pilot" / "groq_small_v3b_manifest.json",
+    _ROOT / "results" / "pilot" / "groq_small_v4.json",
+    _ROOT / "results" / "ground_truth.json",
+    _ROOT / "results" / "inseparable_pairs.json",
+    _ROOT / "results" / "calibration_samples_v2.jsonl",
+    _ROOT / "results" / "live_oam_cost.json",
+)
+PROTECTED_DIRS = (
+    _ROOT / "results" / "episodes",
+    _ROOT / "results" / "pilot" / "v3_episodes",
+    _ROOT / "results" / "pilot" / "v3b_episodes",
+    _ROOT / "results" / "pilot" / "v4_episodes",
+)
+
+
+def _norm(path):
+    return os.path.normcase(str(Path(path).resolve()))
+
+
+def refuse_protected_path(out_path):
+    """Fail closed instead of writing to or inside preserved evidence."""
+    target = _norm(out_path)
+    if target in {_norm(path) for path in PROTECTED_RESULTS}:
+        raise ValueError(f"refusing to overwrite preserved artifact {out_path}")
+    for folder in PROTECTED_DIRS:
+        root = _norm(folder)
+        if target == root or target.startswith(root + os.sep):
+            raise ValueError(f"refusing to write inside preserved evidence {folder}")
+    return Path(out_path)

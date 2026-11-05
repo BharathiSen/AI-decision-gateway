@@ -2,8 +2,8 @@
 Validate agent JSON proposals.
 
 Malformed, oversized, or unsupported proposals are invalid. A cause id
-must be one of the catalog ids in config/faults.yaml, including the
-held-out U1–U5 ids.
+must be one of the model-facing catalog ids (H0, F1–F12). Held-out
+U1–U5 ids are evaluation-only and are not valid model outputs.
 """
 
 import json
@@ -37,22 +37,40 @@ def _parse_iso_timestamp(value):
     return parsed
 
 
-def catalog_entries():
-    """Catalog rows from config/faults.yaml: id plus description. No compounds."""
-    cached = getattr(catalog_entries, "_rows", None)
+def evaluation_catalog_entries():
+    """Full faults.yaml codebook for scoring and injection. Includes held-out ids."""
+    cached = getattr(evaluation_catalog_entries, "_rows", None)
     if cached is None:
         with _FAULTS.open(encoding="utf-8") as handle:
             doc = yaml.safe_load(handle)
         cached = [
-            {"id": item["id"], "description": item.get("description") or ""}
+            {
+                "id": item["id"],
+                "description": item.get("description") or "",
+                "split": item.get("split") or "",
+            }
             for item in (doc.get("faults") or [])
             if item.get("id")
+        ]
+        evaluation_catalog_entries._rows = cached
+    return list(cached)
+
+
+def catalog_entries():
+    """Model-facing rows: H0 and development F1–F12. No held-out ids, no compounds."""
+    cached = getattr(catalog_entries, "_rows", None)
+    if cached is None:
+        cached = [
+            {"id": item["id"], "description": item.get("description") or ""}
+            for item in evaluation_catalog_entries()
+            if item["id"] and item.get("split") != "held_out"
         ]
         catalog_entries._rows = cached
     return list(cached)
 
 
 def catalog_cause_ids():
+    """Cause ids the model may emit. Held-out U1–U5 are excluded."""
     cached = getattr(catalog_cause_ids, "_ids", None)
     if cached is None:
         cached = {item["id"] for item in catalog_entries()}
@@ -60,11 +78,19 @@ def catalog_cause_ids():
     return cached
 
 
+def evaluation_cause_ids():
+    cached = getattr(evaluation_cause_ids, "_ids", None)
+    if cached is None:
+        cached = {item["id"] for item in evaluation_catalog_entries()}
+        evaluation_cause_ids._ids = cached
+    return cached
+
+
 def _json_size(data):
     return len(json.dumps(data).encode("utf-8"))
 
 
-def validate_proposal(data, allowed_actions=None, max_causes=5, max_bytes=MAX_PROPOSAL_BYTES):
+def validate_proposal(data, allowed_actions=None, max_causes=5, max_bytes=MAX_PROPOSAL_BYTES, cause_ids=None):
     """
     Returns (ok: bool, errors: list[str]).
     """
@@ -110,7 +136,7 @@ def validate_proposal(data, allowed_actions=None, max_causes=5, max_bytes=MAX_PR
             cause_id = cause.get("cause_id")
             if not isinstance(cause_id, str) or not cause_id:
                 errors.append(f"causes[{i}] needs cause_id")
-            elif cause_id not in catalog_cause_ids():
+            elif cause_id not in (set(cause_ids) if cause_ids is not None else catalog_cause_ids()):
                 errors.append(f"causes[{i}] cause_id {cause_id!r} is not in the fault catalog")
             if "predicted_tests" not in cause:
                 errors.append(f"causes[{i}] needs predicted_tests")

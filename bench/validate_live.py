@@ -17,17 +17,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from bench.contracts import PROTECTED_RESULTS as FROZEN_RESULTS, refuse_protected_path
 from bench.inject import TUNING_PURPOSES, held_out_ids
 from bench.run_experiments import compare_episode
 
 ROOT = Path(__file__).resolve().parent.parent
 SMOKE_OUT = ROOT / "results" / "validation" / "_smoke" / "live_validation.json"
-FROZEN_RESULTS = (
-    ROOT / "results" / "calibration_report.json",
-    ROOT / "results" / "pilot" / "summary.json",
-    ROOT / "results" / "observability_matrix.csv",
-    ROOT / "results" / "experiment_summary.json",
-)
 LIVE_VALIDATE_BUILD = "stage19-validate-v2"
 DIAMOND_CASES = (
     {
@@ -99,9 +94,7 @@ def _assert_frozen(before):
 
 
 def _refuse_frozen(path):
-    resolved = Path(path).resolve()
-    if resolved in {item.resolve() for item in FROZEN_RESULTS}:
-        raise ValueError(f"refusing to overwrite frozen {path}")
+    refuse_protected_path(path)
 
 
 def scenario_from_case(case, seed=19):
@@ -338,6 +331,11 @@ def _self_check():
     from bench.run_episode import _snapshot, apply_authorized_action
 
     healthy = _snapshot(r1_via="10.0.12.2", active_path="primary")
+    healthy["metrics"] = {
+        "active_path": "primary",
+        "connectivity": True,
+        "packet_loss_percent": 0.0,
+    }
     risky = unseen_reroute_proposal()
     risky_out = decide(None, risky, healthy, [], mode="full", run_missing_tests=False)
     calls = []

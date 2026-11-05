@@ -11,7 +11,7 @@ faults:
     params: {}
     cleanup:
       type: none
-    initial_acceptable_actions: [NO_ACTION]
+    initial_acceptable_actions: [DO_NOTHING]
 
   # Single faults
   - id: F1
@@ -176,7 +176,7 @@ faults:
     params: {}
     cleanup:
       type: link_up
-    initial_acceptable_actions: [NO_ACTION]
+    initial_acceptable_actions: [DO_NOTHING]
 
   # Unseen faults: never use for tuning or calibration
   - id: U1
@@ -233,7 +233,7 @@ faults:
       cycles: 4
     cleanup:
       type: stop_flap_and_link_up
-    initial_acceptable_actions: [NO_ACTION, REROUTE]
+    initial_acceptable_actions: [DO_NOTHING, REROUTE]
 
   - id: U5
     description: Wrong return route for hostA prefix at R4

@@ -16,23 +16,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agent.validate import MAX_EXPECTED_LEN
 from bench.analyze import extract_trace, format_trace, write_analysis
-from bench.contracts import TEST_IDS
+from bench.contracts import PROTECTED_RESULTS as FROZEN_RESULTS, TEST_IDS, refuse_protected_path
 from bench.run_batch import config_fingerprint, provenance, software_version
 from bench.run_episode import _snapshot, apply_authorized_action
 from bench.run_experiments import run_strategies, strategy_inputs
-from bench.run_pilot import STRESS_TICKET, _stub_proposal
+from bench.run_pilot import STRESS_TICKET
 from gate.decide import decide
 from gate.selector import _load_matrix
 
 ROOT = Path(__file__).resolve().parent.parent
 ACCEPT_DIR = ROOT / "results" / "acceptance"
 SMOKE_DIR = ACCEPT_DIR / "_smoke"
-FROZEN_RESULTS = (
-    ROOT / "results" / "calibration_report.json",
-    ROOT / "results" / "pilot" / "summary.json",
-    ROOT / "results" / "observability_matrix.csv",
-    ROOT / "results" / "experiment_summary.json",
-)
 LIVE_ACCEPT_BUILD = "stage20-accept-v1"
 COMPARE_METHODS = ("B0", "B5", "verifix")
 SUITE = (
@@ -64,9 +58,7 @@ def _assert_frozen(before):
 
 
 def _refuse_frozen(path):
-    resolved = Path(path).resolve()
-    if resolved in {item.resolve() for item in FROZEN_RESULTS}:
-        raise ValueError(f"refusing to overwrite frozen {path}")
+    refuse_protected_path(path)
 
 
 def write_json(path, payload):
@@ -128,7 +120,22 @@ def f1_proposal():
 
 
 def trap_proposal(snapshot):
-    return _stub_proposal(snapshot, "F12")
+    """Explicit wrong REROUTE trap. Does not use a true fault_id."""
+    return {
+        "action": "REROUTE",
+        "target": "HostA_to_HostB",
+        "proposed_path": ["r1", "r3", "r4"],
+        "reason": "trap proposal: reroute despite healthy-looking snapshot",
+        "causes": [
+            {
+                "cause_id": "H0",
+                "predicted_tests": [
+                    {"test_id": "T1_e2e_ping", "expected": "ok"},
+                    {"test_id": "T7_route_check", "expected": "primary"},
+                ],
+            }
+        ],
+    }
 
 
 def misleading_proposal(_snapshot=None):

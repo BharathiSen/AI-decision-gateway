@@ -17,7 +17,8 @@ import yaml
 
 from baselines import run_method
 from bench import inject as inj
-from bench.run_episode import EPISODE_DIR, save_episode
+from bench.contracts import refuse_protected_path
+from bench.run_episode import save_episode
 from gate.decide import decide
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -25,6 +26,8 @@ FIXES = yaml.safe_load((ROOT / "config" / "correct_fixes.yaml").read_text(encodi
 COSTS = yaml.safe_load((ROOT / "config" / "costs.yaml").read_text(encoding="utf-8"))["tests"]
 MATRIX_PATH = ROOT / "results" / "observability_matrix.csv"
 PILOT_OUT = ROOT / "results" / "pilot"
+OFFLINE_OUT = PILOT_OUT / "offline_simulation.json"
+OFFLINE_EPISODES = ROOT / "results" / "offline_episodes"
 
 
 def _load_matrix():
@@ -101,13 +104,17 @@ def _correct_set(fault_id):
     return set()
 
 
-def _stub_proposal(snapshot, fault_id):
-    metrics = snapshot.get("metrics", {})
+def _stub_proposal(snapshot):
+    metrics = (snapshot or {}).get("metrics", {})
     loss = metrics.get("packet_loss_percent", 0)
-    action = "REROUTE" if loss > 10 else "DO_NOTHING"
-    if fault_id == "F12":
-        action = "REROUTE"
+    action = "REROUTE" if (loss or 0) > 10 else "DO_NOTHING"
     path = ["r1", "r3", "r4"] if action == "REROUTE" else ["r1", "r2", "r4"]
+    if loss is None or loss >= 100:
+        t1_expected = "down"
+    elif (loss or 0) > 5:
+        t1_expected = "loss"
+    else:
+        t1_expected = "ok"
     return {
         "action": action,
         "target": "HostA_to_HostB",
@@ -115,9 +122,9 @@ def _stub_proposal(snapshot, fault_id):
         "reason": f"stub agent loss={loss}",
         "causes": [
             {
-                "cause_id": fault_id,
+                "cause_id": "H0",
                 "predicted_tests": [
-                    {"test_id": "T1_e2e_ping", "expected": f"loss={loss}"},
+                    {"test_id": "T1_e2e_ping", "expected": t1_expected},
                     {"test_id": "T7_route_check", "expected": "primary"},
                 ],
             }
@@ -126,7 +133,7 @@ def _stub_proposal(snapshot, fault_id):
 
 
 def _is_wrong(proposal, fault_id):
-    action = proposal.get("action", "").replace("reroute_traffic", "REROUTE").replace("no_action", "DO_NOTHING")
+    action = (proposal or {}).get("action") or ""
     return action not in _correct_set(fault_id)
 
 
@@ -142,16 +149,19 @@ def _cost_for_tests(test_ids):
 
 def _evaluate_go_nogo(stats):
     """Apply frozen criteria from results/pilot_criteria.md (approximate for offline)."""
-    n = max(stats["episodes"], 1)
-    non_h0 = max(stats["episodes"] - stats.get("h0_episodes", 0), 1)
-    wrong_non_h0 = stats.get("wrong_proposals_non_h0", 0) / non_h0
-    gate_unsafe = stats["gate_v0_unsafe_rate"]
-    b5_unsafe = stats["b5_unsafe_rate"]
-    diff = abs(gate_unsafe - b5_unsafe)
-    continue_main = wrong_non_h0 >= 0.15 and (
-        gate_unsafe < b5_unsafe or stats["gate_v0_cost"] < stats["b5_cost"]
+    scored = stats.get("episodes") or 0
+    non_h0 = scored - stats.get("h0_episodes", 0)
+    wrong_non_h0 = stats.get("wrong_proposals_non_h0", 0) / non_h0 if non_h0 > 0 else None
+    gate_unsafe = stats.get("gate_v0_unsafe_rate")
+    b5_unsafe = stats.get("b5_unsafe_rate")
+    diff = abs(gate_unsafe - b5_unsafe) if gate_unsafe is not None and b5_unsafe is not None else None
+    continue_main = (
+        wrong_non_h0 is not None
+        and diff is not None
+        and wrong_non_h0 >= 0.15
+        and (gate_unsafe < b5_unsafe or stats["gate_v0_cost"] < stats["b5_cost"])
     )
-    pivot = diff < 0.02 and stats["episodes"] >= 400
+    pivot = diff is not None and diff < 0.02 and scored >= 400
     recommendation = (
         "continue_main_track"
         if continue_main
@@ -160,8 +170,8 @@ def _evaluate_go_nogo(stats):
     by = stats.get("by_scenario") or {}
     normal = by.get("normal") or {}
     stress = by.get("stress") or {}
-    n_norm = normal.get("episodes") or 0
-    n_stress = stress.get("episodes") or 0
+    n_norm = normal.get("episodes_scored", normal.get("episodes")) or 0
+    n_stress = stress.get("episodes_scored", stress.get("episodes")) or 0
     if n_norm and n_stress:
         normal_wrong = (normal.get("wrong_proposals") or 0) / n_norm
         stress_wrong = (stress.get("wrong_proposals") or 0) / n_stress
@@ -169,13 +179,13 @@ def _evaluate_go_nogo(stats):
             recommendation = "stress_led_track"
     return {
         "wrong_rate_non_h0": wrong_non_h0,
-        "unsafe_rate_delta_pp": diff * 100,
+        "unsafe_rate_delta_pp": diff * 100 if diff is not None else None,
         "recommendation": recommendation,
         "criteria_doc": "results/pilot_criteria.md",
     }
 
 
-def run_offline_pilot(episodes=500, seed=1, save_episodes=True, episodes_dir=None):
+def run_offline_pilot(episodes=500, seed=1, save_episodes=True, episodes_dir=None, out=None):
     rng = random.Random(seed)
     matrix_rows = _load_matrix()
     faults = [f for f in inj._FAULTS]
@@ -202,8 +212,9 @@ def run_offline_pilot(episodes=500, seed=1, save_episodes=True, episodes_dir=Non
         ),
     }
 
-    ep_dir = Path(episodes_dir) if episodes_dir else EPISODE_DIR
+    ep_dir = Path(episodes_dir) if episodes_dir else OFFLINE_EPISODES
     if save_episodes:
+        refuse_protected_path(ep_dir)
         ep_dir.mkdir(parents=True, exist_ok=True)
         for old in ep_dir.glob("*.json"):
             if old.name != "_batch_state.json":
@@ -216,7 +227,7 @@ def run_offline_pilot(episodes=500, seed=1, save_episodes=True, episodes_dir=Non
 
         oam_bundle = _build_oam_bundle(fault_id, matrix_rows)
         snapshot = _build_snapshot(oam_bundle)
-        proposal = _stub_proposal(snapshot, fault_id)
+        proposal = _stub_proposal(snapshot)
 
         if fault_id != "H0" and _is_wrong(proposal, fault_id):
             stats["wrong_proposals"] += 1
@@ -263,6 +274,8 @@ def run_offline_pilot(episodes=500, seed=1, save_episodes=True, episodes_dir=Non
     stats["b5_escalation_rate"] = stats["b5_escalate"] / n
     stats["go_nogo"] = _evaluate_go_nogo(stats)
 
-    PILOT_OUT.mkdir(parents=True, exist_ok=True)
-    (PILOT_OUT / "summary.json").write_text(json.dumps(stats, indent=2), encoding="utf-8")
+    dest = Path(out) if out else OFFLINE_OUT
+    refuse_protected_path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(json.dumps(stats, indent=2), encoding="utf-8")
     return stats

@@ -15,17 +15,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from bench.contracts import PROTECTED_RESULTS as FROZEN_RESULTS, refuse_protected_path
 from bench.metrics import evaluate_records, summarize
 from bench.run_batch import DATASET, SMOKE_DIR, jsonl_path, load_raw_json, provenance
 
 ROOT = Path(__file__).resolve().parent.parent
 ANALYSIS_DIR = ROOT / "results" / "analysis"
-FROZEN_RESULTS = (
-    ROOT / "results" / "calibration_report.json",
-    ROOT / "results" / "pilot" / "summary.json",
-    ROOT / "results" / "observability_matrix.csv",
-    ROOT / "results" / "experiment_summary.json",
-)
 LIVE_ANALYSIS_BUILD = "stage18-analysis-v1"
 ABLATION_METHODS = (
     "gate_no_predictions",
@@ -70,12 +65,7 @@ def _assert_frozen(before):
 
 
 def _refuse_frozen(path):
-    resolved = Path(path).resolve()
-    frozen = {item.resolve() for item in FROZEN_RESULTS}
-    if resolved in frozen:
-        raise ValueError(f"refusing to overwrite frozen {path}")
-    if resolved.is_file() and resolved in frozen:
-        raise ValueError(f"refusing to overwrite frozen {path}")
+    refuse_protected_path(path)
 
 
 def resolve_raw_dir(path):

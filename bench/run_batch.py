@@ -22,6 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from bench.contracts import PROTECTED_RESULTS as FROZEN_RESULTS, refuse_protected_path
 from bench.run_episode import run_episode, save_episode  # save_episode kept for orphan-json recovery in self-check
 from bench.scenarios import generate_matrix, raw_path, resume_pending, write_raw
 from gate.selector import held_out_ids
@@ -34,12 +35,6 @@ JSONL_NAME = "episodes.jsonl"
 CSV_NAME = "episodes.csv"
 STATE_NAME = "_batch_state.json"
 SMOKE_DIR = DATASET / "_smoke"
-FROZEN_RESULTS = (
-    ROOT / "results" / "calibration_report.json",
-    ROOT / "results" / "pilot" / "summary.json",
-    ROOT / "results" / "observability_matrix.csv",
-    ROOT / "results" / "experiment_summary.json",
-)
 LIVE_DATASET_BUILD = "stage17-dataset-v2"
 CSV_FIELDS = (
     "episode_id",
@@ -134,7 +129,7 @@ def load_state(out_dir):
 
 
 def save_state(out_dir, state):
-    out_dir = Path(out_dir)
+    out_dir = refuse_protected_path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     path = state_path(out_dir)
     tmp = path.with_suffix(".json.tmp")
@@ -144,7 +139,7 @@ def save_state(out_dir, state):
 
 def append_jsonl(path, record):
     """Append one complete JSON object. Never rewrites earlier lines."""
-    path = Path(path)
+    path = refuse_protected_path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     line = json.dumps(record, separators=(",", ":")) + "\n"
     with path.open("a", encoding="utf-8") as handle:
@@ -204,7 +199,7 @@ def tabular_row(record):
 
 def write_processed_csv(records, processed_dir):
     """Rebuild tabular output from records. Processed data may be overwritten."""
-    processed_dir = Path(processed_dir)
+    processed_dir = refuse_protected_path(processed_dir)
     processed_dir.mkdir(parents=True, exist_ok=True)
     path = csv_path(processed_dir)
     tmp = path.with_suffix(".csv.tmp")
@@ -336,10 +331,8 @@ def _stub_and_gate(scenario, net=None):
     from bench.run_pilot import _stub_proposal
     from gate.decide import decide
 
-    label = scenario.get("compound_id") or scenario.get("fault_id") or "H0"
-
-    def agent_fn(snapshot, _fault=label):
-        return _stub_proposal(snapshot, _fault)
+    def agent_fn(snapshot):
+        return _stub_proposal(snapshot)
 
     def gate_fn(episode, _net=net):
         oam_results = (episode.get("oam") or {}).get("results") or []
