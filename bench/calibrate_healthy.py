@@ -5,9 +5,15 @@ The fit sample and the false-alarm sample are different runs. Fault
 ids, including the held-out set, are not inputs. A short or partial
 sample cannot replace config/thresholds.yaml.
 
-Offline check, from the repo root:
+Offline check, from the repo root (a bare invocation is ALWAYS the offline
+check, also under sudo):
 
     python bench/calibrate_healthy.py
+
+Every collection or reprint writes its report to --report; the committed
+results/calibration_report.json is protected and refused. Example reprint:
+
+    python bench/calibrate_healthy.py --from-saved --noise all --report results/calibration/<run-id>.json
 
 Live collection, on the VM as root. Each launch saves 10 samples and exits
 so the VM can be powered off. Run the same command again to continue:
@@ -1473,6 +1479,10 @@ def _emit_reports(reports, report_path, write_thresholds=False):
     out = Path(report_path)
     if not out.is_absolute():
         out = ROOT / out
+    from bench.contracts import refuse_protected_path
+
+    # The committed calibration report is frozen evidence; reprints go to a new --report.
+    refuse_protected_path(out)
     levels = {}
     try:
         previous = json.loads(out.read_text(encoding="utf-8"))
@@ -1561,7 +1571,11 @@ def main():
     parser.add_argument("--noise", default="N0", help="N0, N1, N2, or all")
     parser.add_argument("--quick", action="store_true", help="T1 and T10 only; cannot write thresholds")
     parser.add_argument("--write-thresholds", action="store_true")
-    parser.add_argument("--report", default="results/calibration_report.json")
+    parser.add_argument(
+        "--report",
+        default="results/calibration_report.json",
+        help="new report path; the committed results/calibration_report.json is protected and refused",
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--batch", type=int, default=CALIBRATION_BATCH, help="new samples to collect before exiting")
     parser.add_argument("--fill-speed", action="store_true", help="measure T10 only where a saved run has no bitrate")
@@ -1586,6 +1600,14 @@ def main():
     if args.until_done:
         args.batch = None
         args.fill_speed = True
+    from bench.contracts import refuse_protected_path
+
+    report_target = Path(args.report) if Path(args.report).is_absolute() else ROOT / args.report
+    try:
+        refuse_protected_path(report_target)
+    except ValueError as exc:
+        print(f"refusing: {exc}. Pass --report results/calibration/<run-id>.json", file=sys.stderr)
+        sys.exit(2)
     sample_path = resolve_sample_path(args)
 
     noise_ids = ["N0", "N1", "N2"] if args.noise == "all" else [args.noise]
@@ -1642,12 +1664,9 @@ def main():
 
 
 if __name__ == "__main__":
-    live_flags = ("-h", "--help", "--from-saved", "--fill-speed", "--until-done", "--write-thresholds")
-    if any(flag in sys.argv for flag in live_flags):
-        main()
-    elif "--check" in sys.argv:
-        _self_check()
-    elif not _is_root():
+    # A bare invocation is always the offline self-check, as root or not.
+    # Collection and reprints need explicit arguments (see the docstring).
+    if len(sys.argv) == 1 or "--check" in sys.argv:
         _self_check()
     else:
         main()

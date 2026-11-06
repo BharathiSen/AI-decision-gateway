@@ -2396,7 +2396,9 @@ def _self_check():
             parent = Path(tempfile.mkdtemp(prefix="verifix-oracle-"))
             copy = parent / "repo"
             try:
-                shutil.copytree(source, copy)
+                # symlinks=True copies a link as a link (a dangling one included),
+                # which is what `git add -u` in the copy must see.
+                shutil.copytree(source, copy, symlinks=True)
                 env = _quiet_git_env()
                 subprocess.run(
                     ["git", "add", "-u"],
@@ -2488,7 +2490,12 @@ def _self_check():
                     ["git", "add", "--", "dangling.link"],
                     cwd=repo, check=True, capture_output=True, env=_quiet_git_env(),
                 )
-                assert _git_revision(repo)["tree_sha256"] == _expected_tree(repo)
+                # The index still holds the staged `conf` file that is now a
+                # directory, so `git write-tree` on the index is not the
+                # worktree tree. Compare with the add -u oracle instead.
+                link_tree, link_names = _oracle_add_u_tree(repo)
+                assert "dangling.link" in link_names and "conf" not in link_names, link_names
+                assert _git_revision(repo)["tree_sha256"] == link_tree
             else:
                 link.write_bytes(b"placeholder\n")
                 subprocess.run(
@@ -2844,99 +2851,104 @@ def _self_check():
             assert _object_rows(repo) == rows_before
             assert _index_bytes(repo) == index_before
 
-            import threading
-            import time
-            private = Path(tempfile.mkdtemp(prefix="verifix-lockroot-"))
-            old_tempdir = tempfile_mod.tempdir
-            old_cwd = os.getcwd()
-            held = {}
+            # Real file locks block deletion only on Windows. On Linux an open
+            # file or a process cwd does not stop rmtree (and root ignores
+            # permissions); the mocked _remove_temp_tree failure above covers
+            # the reporting path there.
+            if os.name == "nt":
+                import threading
+                import time
+                private = Path(tempfile.mkdtemp(prefix="verifix-lockroot-"))
+                old_tempdir = tempfile_mod.tempdir
+                old_cwd = os.getcwd()
+                held = {}
 
-            def _watch_lock():
-                while not held.get("stop"):
-                    for child in private.glob("verifix-objects-*"):
-                        if not child.is_dir():
-                            continue
+                def _watch_lock():
+                    while not held.get("stop"):
+                        for child in private.glob("verifix-objects-*"):
+                            if not child.is_dir():
+                                continue
+                            try:
+                                if os.name == "nt":
+                                    handle = open(child / "locked.bin", "wb")
+                                    handle.write(b"locked")
+                                    handle.flush()
+                                    held["handle"] = handle
+                                else:
+                                    os.chdir(child)
+                                    held["chdir"] = True
+                                held["path"] = child
+                                return
+                            except OSError:
+                                continue
+                        time.sleep(0.001)
+
+                tempfile_mod.tempdir = str(private)
+                thread = threading.Thread(target=_watch_lock, daemon=True)
+                thread.start()
+                locked_buf = io.StringIO()
+                try:
+                    with redirect_stderr(locked_buf):
+                        locked = _git_revision(repo)
+                    locked_text = locked_buf.getvalue()
+                    assert locked["commit"] == head and locked["tree_sha256"] == expected
+                    assert "cleanup failed" in locked_text
+                    assert "cleanup succeeded" not in locked_text
+                    if os.name == "nt":
+                        assert "WinError 32" in locked_text
+                        assert "being used by another process" in locked_text
+                    else:
+                        assert "WinError" not in locked_text
+                    assert held.get("path") and Path(held["path"]).exists()
+                    assert _object_rows(repo) == rows_before
+                    assert _index_bytes(repo) == index_before
+                finally:
+                    held["stop"] = True
+                    thread.join(timeout=5)
+                    tempfile_mod.tempdir = old_tempdir
+                    if held.get("handle") is not None:
+                        held["handle"].close()
+                    if held.get("chdir"):
+                        os.chdir(old_cwd)
+                    if private.exists():
+                        _remove_temp_tree(private)
+
+                (repo / "tracked.txt").write_bytes(b"v1\r\nmore\n")
+                private = Path(tempfile.mkdtemp(prefix="verifix-lockroot-"))
+                held = {}
+                tempfile_mod.tempdir = str(private)
+                thread = threading.Thread(target=_watch_lock, daemon=True)
+                thread.start()
+                fail_buf = io.StringIO()
+                caught = None
+                try:
+                    with redirect_stderr(fail_buf):
                         try:
-                            if os.name == "nt":
-                                handle = open(child / "locked.bin", "wb")
-                                handle.write(b"locked")
-                                handle.flush()
-                                held["handle"] = handle
-                            else:
-                                os.chdir(child)
-                                held["chdir"] = True
-                            held["path"] = child
-                            return
-                        except OSError:
-                            continue
-                    time.sleep(0.001)
-
-            tempfile_mod.tempdir = str(private)
-            thread = threading.Thread(target=_watch_lock, daemon=True)
-            thread.start()
-            locked_buf = io.StringIO()
-            try:
-                with redirect_stderr(locked_buf):
-                    locked = _git_revision(repo)
-                locked_text = locked_buf.getvalue()
-                assert locked["commit"] == head and locked["tree_sha256"] == expected
-                assert "cleanup failed" in locked_text
-                assert "cleanup succeeded" not in locked_text
-                if os.name == "nt":
-                    assert "WinError 32" in locked_text
-                    assert "being used by another process" in locked_text
-                else:
-                    assert "WinError" not in locked_text
-                assert held.get("path") and Path(held["path"]).exists()
-                assert _object_rows(repo) == rows_before
-                assert _index_bytes(repo) == index_before
-            finally:
-                held["stop"] = True
-                thread.join(timeout=5)
-                tempfile_mod.tempdir = old_tempdir
-                if held.get("handle") is not None:
-                    held["handle"].close()
-                if held.get("chdir"):
-                    os.chdir(old_cwd)
-                if private.exists():
-                    _remove_temp_tree(private)
-
-            (repo / "tracked.txt").write_bytes(b"v1\r\nmore\n")
-            private = Path(tempfile.mkdtemp(prefix="verifix-lockroot-"))
-            held = {}
-            tempfile_mod.tempdir = str(private)
-            thread = threading.Thread(target=_watch_lock, daemon=True)
-            thread.start()
-            fail_buf = io.StringIO()
-            caught = None
-            try:
-                with redirect_stderr(fail_buf):
-                    try:
-                        failed = _git_revision(repo)
-                    except OSError as exc:
-                        caught = exc
-                        failed = None
-                fail_text = fail_buf.getvalue()
-                assert caught is None
-                assert failed["commit"] is None and failed["tree_sha256"] is None
-                assert "cleanup failed" in fail_text
-                assert "cleanup succeeded" not in fail_text
-                if os.name == "nt":
-                    assert "WinError 32" in fail_text
-                else:
-                    assert "WinError" not in fail_text
-                assert _object_rows(repo) == rows_before
-                assert _index_bytes(repo) == index_before
-            finally:
-                held["stop"] = True
-                thread.join(timeout=5)
-                tempfile_mod.tempdir = old_tempdir
-                if held.get("handle") is not None:
-                    held["handle"].close()
-                if held.get("chdir"):
-                    os.chdir(old_cwd)
-                if private.exists():
-                    _remove_temp_tree(private)
+                            failed = _git_revision(repo)
+                        except OSError as exc:
+                            caught = exc
+                            failed = None
+                    fail_text = fail_buf.getvalue()
+                    assert caught is None
+                    assert failed["commit"] is None and failed["tree_sha256"] is None
+                    assert "cleanup failed" in fail_text
+                    assert "cleanup succeeded" not in fail_text
+                    if os.name == "nt":
+                        assert "WinError 32" in fail_text
+                    else:
+                        assert "WinError" not in fail_text
+                    assert _object_rows(repo) == rows_before
+                    assert _index_bytes(repo) == index_before
+                finally:
+                    held["stop"] = True
+                    thread.join(timeout=5)
+                    tempfile_mod.tempdir = old_tempdir
+                    if held.get("handle") is not None:
+                        held["handle"].close()
+                    if held.get("chdir"):
+                        os.chdir(old_cwd)
+                    if private.exists():
+                        _remove_temp_tree(private)
 
         with _temporary_git_repo() as (repo, git):
             (repo / "tracked.txt").write_bytes(b"v1\n")
