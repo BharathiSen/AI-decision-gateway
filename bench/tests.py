@@ -464,6 +464,15 @@ _SUMMARY_LINE = re.compile(
 )
 
 
+_RECEIVER_LINE = re.compile(
+    r"(\d+\.\d+)-(\d+\.\d+)\s+sec\s+[\d.]+\s+[KMG]?Bytes\s+([\d.]+)\s*([KMG])bits/sec\s+receiver\b"
+)
+# How long after the requested duration the receiver summary may end while
+# queued data drains (episodes: median +0.16 s, max +0.55 s observed). Below
+# 1 s so a 2-second run is never read as a 1-second probe.
+RECEIVER_DRAIN_SECONDS = 0.75
+
+
 def _covers(start, end, seconds):
     """The summary spans this transfer. The receiver line runs past the
     requested time while the link queue drains after the sender stops."""
@@ -488,12 +497,23 @@ def _summary_mbit(output, seconds):
     if "unable to send" in output or "error -" in output or "interrupt -" in output:
         return None
     scale = {"K": 1e-3, "M": 1.0, "G": 1e3}
-    chosen = None
-    for match in _SUMMARY_LINE.finditer(output):
-        start, end, value, unit = match.groups()
-        if not _covers(start, end, seconds):
-            continue
+    receiver = [m for m in _RECEIVER_LINE.finditer(output)]
+    if receiver:
+        # The receiver line is delivered throughput. The sender line counts
+        # bytes still in queues, so it is never a substitute: a v3b F12 run
+        # read 12.2 Mbit sender / 7.67 Mbit receiver and was graded slow.
+        start, end, value, unit = receiver[-1].groups()
+        span = float(end) - float(start)
+        if not -0.25 <= span - float(seconds) <= RECEIVER_DRAIN_SECONDS:
+            return None
         chosen = float(value) * scale[unit]
+    else:
+        chosen = None
+        for match in _SUMMARY_LINE.finditer(output):
+            start, end, value, unit = match.groups()
+            if not _covers(start, end, seconds):
+                continue
+            chosen = float(value) * scale[unit]
     if chosen is None or chosen <= 0 or chosen > _link_mbit():
         return None
     return chosen
@@ -1152,7 +1172,31 @@ def _check_ping_classification():
     print("ping classification: PASS")
 
 
+def _check_t10_receiver():
+    """The receiver summary is the measurement; the sender line never replaces it."""
+    v3b_f12 = (
+        "[ ID] Interval           Transfer     Bitrate         Retr\n"
+        "[  5]   0.00-3.00   sec  4.38 MBytes  12.2 Mbits/sec    0            sender\n"
+        "[  5]   0.00-3.55   sec  3.25 MBytes  7.67 Mbits/sec                  receiver\n\niperf Done.\n"
+    )
+    assert _summary_mbit(v3b_f12, 3) == 7.67, _summary_mbit(v3b_f12, 3)
+    normal = v3b_f12.replace("0.00-3.55", "0.00-3.16").replace("7.67", "8.38")
+    assert _summary_mbit(normal, 3) == 8.38
+    # Receiver far past the drain allowance: no reading, and no sender fallback.
+    stalled = v3b_f12.replace("0.00-3.55", "0.00-5.20")
+    assert _summary_mbit(stalled, 3) is None
+    # A receiver line above the link rate is still refused.
+    fast = v3b_f12.replace("7.67 Mbits/sec", "15.0 Mbits/sec")
+    assert _summary_mbit(fast, 3) is None
+    # Failures stay failures.
+    assert _summary_mbit(v3b_f12 + "iperf3: error - unable to send control message\n", 3) is None
+    unreachable = "iperf3: error - unable to connect to server - server may have stopped running: Network is unreachable\n"
+    assert _summary_mbit(unreachable, 3) is None
+    print("T10 receiver parsing: PASS")
+
+
 if __name__ == "__main__":
     _check_costs()
     print("test cost: PASS")
     _check_ping_classification()
+    _check_t10_receiver()
