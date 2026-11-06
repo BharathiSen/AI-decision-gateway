@@ -193,24 +193,29 @@ def noop_justified(snapshot, test_results, thresholds=None):
     from bench.outcomes import grade_result, is_degraded, load_thresholds
 
     thresholds = thresholds or load_thresholds("N0")
+    metrics = (snapshot or {}).get("metrics") or {}
+    max_loss = (thresholds.get("T1_e2e_ping") or {}).get("max_loss_percent", 5.0)
+    loss = metrics.get("packet_loss_percent")
+    loss_known = isinstance(loss, (int, float)) and not isinstance(loss, bool)
+    # Contradiction needs an explicit broken reading; a missing number is not one.
+    snapshot_broken = metrics.get("connectivity") is False or (loss_known and loss > max_loss)
+    snapshot_healthy = not snapshot_broken and loss_known
     seen = False
     for row in test_results or []:
         tid = row.get("test_id")
         if tid not in NOOP_EVIDENCE_TESTS:
             continue
+        if row.get("error"):
+            # The test did not measure anything: missing evidence, not health.
+            return False
         seen = True
         if is_degraded(tid, grade_result(row, thresholds), thresholds):
             return False
     if seen:
-        return True
-    metrics = (snapshot or {}).get("metrics") or {}
-    if metrics.get("connectivity") is False:
-        return False
-    loss = metrics.get("packet_loss_percent")
-    if loss is None:
-        return False
-    max_loss = (thresholds.get("T1_e2e_ping") or {}).get("max_loss_percent", 5.0)
-    return loss <= max_loss
+        # Healthy OAM next to a broken snapshot is contradictory evidence.
+        return not snapshot_broken
+    # No measured no-op test: the snapshot alone must show health.
+    return snapshot_healthy
 
 
 def check_safety(proposal, network_snapshot):

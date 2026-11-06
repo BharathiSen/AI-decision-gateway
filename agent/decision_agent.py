@@ -239,7 +239,7 @@ def _model_cost(response, started):
 DEFAULT_ALLOWED_ACTIONS = ["REROUTE", "DO_NOTHING", "ESCALATE"]
 DEFAULT_OAM_CATALOG = list(TEST_IDS)
 DEFAULT_TARGET = "HostA_to_HostB"
-PROMPT_VERSION = "v2"
+PROMPT_VERSION = "v3"
 _QUEUE_LEAK_KEYS = ("raw", "loss_rule", "rate_rule")
 
 

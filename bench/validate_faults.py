@@ -160,7 +160,24 @@ def main():
     parser.add_argument("--fault", action="append", help="Fault or compound id (repeatable); default all")
     parser.add_argument("--noise", action="append", choices=[*NOISE_IDS, "all"], help="Default all")
     parser.add_argument("--iterations", type=int, default=10)
+    parser.add_argument("--out", default=None, help="new report file (required when the default exists)")
     args = parser.parse_args()
+
+    out = Path(args.out) if args.out else OUT
+    from bench.contracts import refuse_protected_path
+
+    try:
+        refuse_protected_path(out)
+    except ValueError as exc:
+        print(f"refusing: {exc}", file=sys.stderr)
+        sys.exit(2)
+    if out.exists():
+        print(
+            f"refusing: {out} exists (historical evidence is never overwritten). "
+            "Pass --out results/fault_validation/<run-id>.json",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     if os.geteuid() != 0:
         print("validate_faults.py must run as root (sudo) on the Mininet VM.", file=sys.stderr)
@@ -225,8 +242,12 @@ def main():
     report["pass"] = all(
         item["failed"] == 0 for level in report["noise_levels"].values() for item in level.values()
     )
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    if out.exists():
+        print(f"refusing to overwrite {out}, which appeared during the run", file=sys.stderr)
+        sys.exit(2)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    print(f"wrote {out}", flush=True)
     for noise_id, lines in report["noise_cleanup_residual"].items():
         if lines:
             print(f"note: clear_noise({noise_id}) left {len(lines)} difference(s), e.g. {lines[0]}")

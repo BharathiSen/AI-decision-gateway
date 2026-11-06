@@ -424,6 +424,31 @@ def b0_harm_from_result(result):
     }
 
 
+def mcnemar_exact_p(left_only, right_only):
+    """Exact two-sided McNemar p-value from the two discordant counts.
+
+    None when there are no discordant pairs (no evidence either way).
+    """
+    left_only, right_only = int(left_only), int(right_only)
+    n = left_only + right_only
+    if n == 0:
+        return None
+    k = min(left_only, right_only)
+    tail = sum(math.comb(n, i) for i in range(k + 1)) / (2 ** n)
+    return min(1.0, 2.0 * tail)
+
+
+def holm_adjust(pvalues):
+    """Holm step-down adjustment for a dict of name -> p (None kept as None)."""
+    items = sorted(((p, name) for name, p in pvalues.items() if p is not None))
+    m = len(items)
+    adjusted, running = {}, 0.0
+    for rank, (p, name) in enumerate(items):
+        running = max(running, min(1.0, (m - rank) * p))
+        adjusted[name] = running
+    return {name: adjusted.get(name) for name in pvalues}
+
+
 def wilson_ci(count, n, z=1.96):
     if n <= 0:
         return None
@@ -697,7 +722,9 @@ def summarize(scored_rows):
                 "unsafe_only_left": left_only,
                 "unsafe_only_right": right_only,
                 "discordant": left_only + right_only,
-                "note": "paired on scenario_key; repeats in a config collapse to any-unsafe",
+                "mcnemar_exact_p": mcnemar_exact_p(left_only, right_only),
+                "note": "paired on scenario_key; repeats in a config collapse to any-unsafe; "
+                        "exact two-sided McNemar on discordant configs, uncorrected for multiple comparisons",
             }
 
     repeats = {
@@ -792,6 +819,15 @@ def _self_check():
     lo, hi = wilson_ci(10, 10)
     assert 0.0 <= lo <= hi <= 1.0
     assert wilson_ci(1, 0) is None
+    # Exact McNemar: known values. 0 vs 6 discordant -> 2 * (1/64) = 0.03125.
+    assert mcnemar_exact_p(0, 0) is None
+    assert abs(mcnemar_exact_p(0, 6) - 0.03125) < 1e-12
+    assert abs(mcnemar_exact_p(6, 0) - 0.03125) < 1e-12
+    assert mcnemar_exact_p(3, 3) == 1.0
+    assert abs(mcnemar_exact_p(1, 9) - 0.021484375) < 1e-12
+    held = holm_adjust({"a": 0.01, "b": 0.04, "c": None, "d": 0.03})
+    assert abs(held["a"] - 0.03) < 1e-12 and abs(held["d"] - 0.06) < 1e-12 and abs(held["b"] - 0.06) < 1e-12
+    assert held["c"] is None
 
     stats = summarize_values([1.0, 2.0, 3.0, 4.0, 100.0])
     assert stats["n"] == 5 and stats["mean"] == 22.0

@@ -24,6 +24,23 @@ that file has 250 runs and every T10 bitrate is present:
 reprint. --from-saved reprints without Mininet. --write-thresholds is
 refused unless the episode battery, 200 fit runs, a held-out eval set,
 and false_alarm_rate_target are all met.
+
+Methodology
+-----------
+1. H0 only: no fault is injected. Fault ids, including held-out ids, are
+   never inputs.
+2. Split: the first --runs bundles fit thresholds; the next --eval-runs
+   bundles are held out and only scored.
+3. Fit: per test and traffic level, the smallest upper quantile (p95 and
+   up) whose fit-set alarm rate meets false_alarm_rate_target.
+4. Score: a held-out run is a false alarm when any graded outcome is
+   degraded under the proposed thresholds.
+5. Errors are reported, not dropped. A run where a probe errored or
+   returned no usable number (no ping summary, no T10 bitrate) is counted in
+   eval_no_reading_runs per test. eval_error_inclusive_false_alarm_rate
+   counts those runs as alarms, because in an episode the same failure
+   grades as degraded (T10 'slow') or is missing evidence that stops a
+   no-op. --write-thresholds uses the error-inclusive rate.
 """
 
 import argparse
@@ -430,6 +447,44 @@ def _episode_battery(profile):
     )
 
 
+def _unusable(result):
+    """No usable first reading: errored, no number, or backfilled after a failure."""
+    return bool(result.get("error")) or _no_reading(result) or _backfilled(result)
+
+
+def score_no_readings(bundles):
+    """(runs with at least one unusable reading, unusable count per test_id).
+
+    These runs are healthy-network runs where a probe failed. In an episode
+    the same failure grades as degraded (T10 'slow') or is missing evidence,
+    so they are reported next to the false-alarm rate, never dropped.
+    """
+    runs = 0
+    per_test = {}
+    for bundle in bundles:
+        bad = [r for r in bundle.get("results") or [] if _unusable(r)]
+        if bad:
+            runs += 1
+        for row in bad:
+            tid = row.get("test_id") or "?"
+            per_test[tid] = per_test.get(tid, 0) + 1
+    return runs, dict(sorted(per_test.items()))
+
+
+def score_error_inclusive_alarms(bundles, thresholds, noise_id=None):
+    """Runs that alarm OR carry an unusable reading: the episode-facing rate."""
+    background = _background_enabled(noise_id)
+    count = 0
+    for bundle in bundles:
+        rows = bundle.get("results") or []
+        if any(_unusable(r) for r in rows):
+            count += 1
+            continue
+        if any(_counts_as_alarm(r, grade_result(r, thresholds), thresholds, background) for r in rows):
+            count += 1
+    return count
+
+
 def _false_alarm_target():
     with THRESHOLDS_PATH.open(encoding="utf-8") as handle:
         doc = yaml.safe_load(handle)
@@ -443,6 +498,9 @@ def build_report(calibration, evaluation, noise_id, existing, full_battery, seed
     tests, fit_quantile, proposed, notes, fit_rate = fit_thresholds(calibration, existing, noise_id, target)
     alarms = score_false_alarms(evaluation, proposed, noise_id)
     eval_runs = len(evaluation)
+    no_reading_runs, no_reading_tests = score_no_readings(evaluation)
+    fit_no_reading_runs, _ = score_no_readings(calibration)
+    inclusive = score_error_inclusive_alarms(evaluation, proposed, noise_id)
     battery_profile = _battery_profile(calibration)
     average_runs = _average_latency_runs(list(calibration) + list(evaluation))
     if average_runs:
@@ -473,6 +531,11 @@ def build_report(calibration, evaluation, noise_id, existing, full_battery, seed
         "threshold_notes": notes,
         "eval_false_alarms": alarms,
         "eval_false_alarm_rate": (alarms / eval_runs) if eval_runs else None,
+        "eval_no_reading_runs": no_reading_runs,
+        "eval_no_reading_tests": no_reading_tests,
+        "fit_no_reading_runs": fit_no_reading_runs,
+        "eval_error_inclusive_alarms": inclusive,
+        "eval_error_inclusive_false_alarm_rate": (inclusive / eval_runs) if eval_runs else None,
         "eval_alarm_tests": _alarm_tests(evaluation, proposed, noise_id),
         "eval_alarm_runs": _alarm_runs(evaluation, proposed, noise_id, first_index=len(calibration)),
         "false_alarm_rate_target": target,
@@ -481,7 +544,9 @@ def build_report(calibration, evaluation, noise_id, existing, full_battery, seed
 
 def ready_to_write(report):
     target = report.get("false_alarm_rate_target", _false_alarm_target())
-    rate = report.get("eval_false_alarm_rate")
+    # The error-inclusive rate is what episodes see: a failed probe on a
+    # healthy network still stops a no-op. Older reports lack it.
+    rate = report.get("eval_error_inclusive_false_alarm_rate", report.get("eval_false_alarm_rate"))
     return (
         report.get("full_battery") is True
         and report.get("calibration_runs", 0) >= MIN_CALIBRATION_RUNS
@@ -499,7 +564,7 @@ def update_thresholds_yaml(reports, path=THRESHOLDS_PATH):
     for noise, report in reports.items():
         if ready_to_write(report):
             continue
-        rate = report.get("eval_false_alarm_rate")
+        rate = report.get("eval_error_inclusive_false_alarm_rate", report.get("eval_false_alarm_rate"))
         target = report.get("false_alarm_rate_target", _false_alarm_target())
         if not report.get("episode_aligned_battery"):
             refused.append(f"{noise} (legacy 3-ping/1s battery; re-collect to {SAMPLES_EPISODE_PATH.name})")
@@ -679,6 +744,24 @@ def _self_check():
     assert missing_speed["proposed_thresholds"]["T10_speed"]["min_mbit"] == 1.0
     assert any("no bitrate" in note for note in missing_speed["threshold_notes"])
     assert missing_speed["eval_false_alarms"] == 0
+    # Errors are counted, never dropped: a failed T10 and an errored T1 on a
+    # healthy run raise the error-inclusive rate but not the alarm rate.
+    ok_t1 = {"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0, "latency_ms": 10.0, "raw": "0% packet loss"}
+    failed_t10 = {"test_id": "T10_speed", "mbit_per_sec": None, "raw": "iperf3: error - unable to send"}
+    errored_t1 = dict(ok_t1, error="ping command_error")
+    mixed = [{"results": [ok_t1]}, {"results": [ok_t1, failed_t10]}, {"results": [errored_t1]}]
+    runs_bad, per_test = score_no_readings(mixed)
+    assert runs_bad == 2 and per_test == {"T10_speed": 1, "T1_e2e_ping": 1}, (runs_bad, per_test)
+    filled = _store_speeds([{"results": [ok_t1, failed_t10]}], [0], [8.5], failed_attempts=[2])[0]
+    t10_row = next(r for r in filled["results"] if r["test_id"] == "T10_speed")
+    assert t10_row["filled_after_failure"] and t10_row["fill_attempts_failed"] == 2
+    assert "unable to send" in t10_row["original_error"]
+    assert _backfilled(t10_row) and _backfilled({"test_id": "T10_speed", "mbit_per_sec": 8.0, "checked": True})
+    assert not _backfilled({"test_id": "T10_speed", "mbit_per_sec": 8.0, "raw": "ok"})
+    assert score_no_readings([filled])[0] == 1, "a backfilled run is not a clean first reading"
+    assert score_error_inclusive_alarms(mixed, existing, "N0") == 2
+    inclusive_report = dict(report, eval_error_inclusive_false_alarm_rate=0.5, eval_false_alarm_rate=0.0)
+    assert not ready_to_write(inclusive_report), "error-inclusive rate must gate --write-thresholds"
 
     from bench.tests import _parse_mbit_intervals, _summary_mbit
     from bench.traffic import apply_noise
@@ -1061,14 +1144,43 @@ def _t10_mbit(bundle):
     return None
 
 
-def _store_speeds(bundles, indexes, intervals):
+def _store_speeds(bundles, indexes, intervals, failed_attempts=None):
+    """Put a filled T10 bitrate into each bundle.
+
+    The first reading failed on a healthy network, so the row keeps that:
+    filled_after_failure, the original error text, and how many fill
+    attempts failed before this one. Calibration counts these runs in the
+    error-inclusive false-alarm rate instead of treating them as clean.
+    """
     updates = {}
-    for index, mbit in zip(indexes, intervals):
+    failed_attempts = list(failed_attempts or [0] * len(indexes))
+    for pos, (index, mbit) in enumerate(zip(indexes, intervals)):
+        old = next((row for row in bundles[index].get("results") or [] if row.get("test_id") == "T10_speed"), {})
         results = [row for row in bundles[index].get("results") or [] if row.get("test_id") != "T10_speed"]
-        results.append({"test_id": "T10_speed", "mbit_per_sec": mbit, "checked": True})
+        results.append({
+            "test_id": "T10_speed",
+            "mbit_per_sec": mbit,
+            "checked": True,
+            "filled_after_failure": True,
+            "original_error": old.get("error") or (str(old.get("raw") or "")[-200:] or None),
+            "fill_attempts_failed": int(failed_attempts[pos] if pos < len(failed_attempts) else 0),
+        })
         bundles[index]["results"] = results
         updates[index] = bundles[index]
     return updates
+
+
+def _backfilled(result):
+    """A T10 row filled after its first reading failed.
+
+    Legacy fills (before filled_after_failure existed) are the bare
+    {test_id, mbit_per_sec, checked} shape that only _store_speeds wrote.
+    """
+    if result.get("test_id") != "T10_speed" or result.get("checked") is not True:
+        return False
+    if "filled_after_failure" in result:
+        return bool(result["filled_after_failure"])
+    return set(result) <= {"test_id", "mbit_per_sec", "checked"}
 
 
 def _print_iperf_tail(raw):
@@ -1117,6 +1229,7 @@ def fill_missing_speed(net, bundles, noise_id, sample_path=SAMPLES_PATH, batch=C
     free_tcp_port(net, 5201)
     found = []
     attempts = 0
+    failed_since_last = 0
     max_attempts = count * 2 + 8
     while len(found) < count and attempts < max_attempts and time.monotonic() < deadline:
         attempts += 1
@@ -1135,11 +1248,15 @@ def fill_missing_speed(net, bundles, noise_id, sample_path=SAMPLES_PATH, batch=C
             server_tail = one_off_log_tail(5201, lines=2)
             if server_tail:
                 print("  server: " + server_tail.replace("\n", " | "), flush=True)
+            failed_since_last += 1
             continue
         print(f"  {len(found) + 1}/{count}  {mbit:.2f} Mbit/s", flush=True)
         slot = missing[len(found)]
         found.append(mbit)
-        _replace_noise_bundles(sample_path, noise_id, _store_speeds(bundles, [slot], [mbit]))
+        _replace_noise_bundles(
+            sample_path, noise_id, _store_speeds(bundles, [slot], [mbit], failed_attempts=[failed_since_last])
+        )
+        failed_since_last = 0
     if not found:
         print("  speed fill got no bitrate. Not retrying this sitting.", flush=True)
         return bundles, True
@@ -1410,7 +1527,9 @@ def report_from_saved(noise_ids, runs, eval_runs, seed=0, sample_path=SAMPLES_PA
         print(
             f"  {noise_id}: T10 fit {usable}/{runs}, "
             f"eval false alarms {report['eval_false_alarms']}/{report['eval_runs']} "
-            f"({report['eval_false_alarm_rate']}) {report['eval_alarm_tests']}",
+            f"({report['eval_false_alarm_rate']}) {report['eval_alarm_tests']}; "
+            f"no-reading runs {report.get('eval_no_reading_runs')} {report.get('eval_no_reading_tests')}, "
+            f"error-inclusive rate {report.get('eval_error_inclusive_false_alarm_rate')}",
             flush=True,
         )
         if not report.get("episode_aligned_battery"):

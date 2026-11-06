@@ -10,11 +10,12 @@ from baselines.common import (
 _DECISIONS = {"allow", "block", "escalate"}
 
 
-def run_method(method, proposal, snapshot, test_results, net=None, budget_seconds=None):
+def run_method(method, proposal, snapshot, test_results, net=None, budget_seconds=None, noise_id=None):
     """Run one method on the shared proposal, snapshot, and OAM results.
 
     The true fault id is not an input. net is used only when a method
     needs to run extra OAM tests. B0 does not change the network here.
+    noise_id selects grading thresholds for B5, the same ones the gate uses.
     """
     name = (method or "").upper()
     proposal = proposal or {}
@@ -39,7 +40,10 @@ def run_method(method, proposal, snapshot, test_results, net=None, budget_second
         result = decide(proposal, snapshot, test_results, net=net)
     elif name == "B5":
         from baselines.b5_adaptive import decide_b5
-        result = decide_b5(net, proposal, snapshot, test_results, run_tests=net is not None)
+        from bench.outcomes import load_thresholds
+
+        thresholds = load_thresholds(noise_id) if noise_id else None
+        result = decide_b5(net, proposal, snapshot, test_results, run_tests=net is not None, thresholds=thresholds)
     else:
         raise ValueError(f"unknown method {method!r}")
 

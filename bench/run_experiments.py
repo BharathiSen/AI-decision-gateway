@@ -52,11 +52,10 @@ NO_VALID_PROPOSAL = "no valid proposal"
 
 
 def _correct(fault_id):
-    if fault_id in FIXES.get("faults", {}):
-        return set(FIXES["faults"][fault_id].get("correct", []))
-    if fault_id in FIXES.get("compounds", {}):
-        return set(FIXES["compounds"][fault_id].get("correct", []))
-    return set()
+    """Measured correct actions (bench/labels.py), not the gate's catalog table."""
+    from bench.labels import correct_actions
+
+    return correct_actions(fault_id)
 
 
 def _wrong(proposal, fault_id):
@@ -187,13 +186,16 @@ def b5_safe_proposal(proposal):
     return cleaned
 
 
-def run_b5_independent(proposal, snapshot, test_results, net=None, budget_seconds=None):
-    """B5 on a sanitized proposal. Empty input is escalate, not invented DO_NOTHING."""
+def run_b5_independent(proposal, snapshot, test_results, net=None, budget_seconds=None, noise_id=None):
+    """B5 on a sanitized proposal. Empty input is escalate, not invented DO_NOTHING.
+
+    noise_id grades B5 with the same traffic-level thresholds as the gate.
+    """
     cap = DEFAULT_BUDGET_SECONDS if budget_seconds is None else float(budget_seconds)
     cleaned = b5_safe_proposal(proposal)
     if not cleaned:
         return invalid_gate_outcome("B5", cap)
-    return run_method("B5", cleaned, snapshot, test_results, net=net, budget_seconds=cap)
+    return run_method("B5", cleaned, snapshot, test_results, net=net, budget_seconds=cap, noise_id=noise_id)
 
 
 def _contract(result, proposal, method, budget_seconds):
@@ -296,6 +298,7 @@ def compare_episode(record, net=None, budget_seconds=None):
         inputs["test_results"],
         net=net,
         budget_seconds=cap,
+        noise_id=inputs["noise_id"],
     )
     views = {name: _decision_view(row) for name, row in decisions.items()}
     return {

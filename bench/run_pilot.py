@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from bench import inject as inj
 from bench.contracts import refuse_protected_path
 from bench.offline_evaluation import _evaluate_go_nogo
-from bench.run_episode import infra_error_record, run_episode, save_episode
+from bench.run_episode import TopologyContaminated, infra_error_record, run_episode, save_episode
 from bench.run_experiments import (
     invalid_gate_outcome,
     proposal_is_invalid,
@@ -65,11 +65,10 @@ CLAIM = {
 
 
 def _correct_set(fault_id):
-    if fault_id in FIXES.get("faults", {}):
-        return set(FIXES["faults"][fault_id].get("correct", []))
-    if fault_id in FIXES.get("compounds", {}):
-        return set(FIXES["compounds"][fault_id].get("correct", []))
-    return set()
+    """Measured correct actions (bench/labels.py), not the gate's catalog table."""
+    from bench.labels import correct_actions
+
+    return correct_actions(fault_id)
 
 
 def _canonical_action(proposal):
@@ -326,9 +325,12 @@ def _empty_bucket():
 
 
 def empty_stats(episodes, seed, agent):
+    from bench.labels import provenance as label_provenance
+
     return {
         "episodes": 0,
         "target_episodes": episodes,
+        "labels": label_provenance(),
         "environment": "mininet_live",
         "agent": agent,
         "seed": seed,
@@ -615,6 +617,12 @@ def manifest_path(out_path):
     return out_path.with_name(out_path.stem + "_manifest.json")
 
 
+def halt_path(out_path):
+    """Where a run that stopped on a failed reset records why."""
+    out_path = Path(out_path)
+    return out_path.with_name(out_path.stem + ".halt.json")
+
+
 def occupied_run_paths(out_path, episodes_dir):
     """Artifacts a fresh run would overwrite or append to."""
     paths = [Path(out_path), _state_path(out_path), manifest_path(out_path)]
@@ -649,10 +657,10 @@ def _valid_git_commit(value):
 
 
 def _valid_git_tree(value):
-    """SHA-256 hex digest of the tracked diff."""
+    """Git tree object id. SHA-1 repos use 40 hex; SHA-256 repos use 64."""
     return (
         isinstance(value, str)
-        and len(value) == 64
+        and len(value) in (40, 64)
         and all(char in "0123456789abcdef" for char in value)
     )
 
@@ -688,17 +696,19 @@ def provenance_error(identity, stored=None):
     return (
         "refusing to run: Git provenance is invalid (" + ", ".join(gaps) + "). "
         "A run requires a valid Git repository and available provenance: "
-        "a full commit SHA and a 64-character hexadecimal tree fingerprint. "
+        "a full commit SHA and the Git tree id of the tracked worktree. "
         "There is no unversioned-run mode."
     )
 
 
 def untracked_source_paths(paths):
-    """Untracked Python or YAML outside results/. Run outputs are not source."""
+    """Untracked Python or YAML whose first component is not exactly results/."""
     found = []
     for raw in paths or []:
-        rel = str(raw).replace("\\", "/").lstrip("./")
-        if rel.lower().startswith("results/"):
+        rel = str(raw).replace("\\", "/")
+        if rel.startswith("./"):
+            rel = rel[2:]
+        if rel.split("/", 1)[0] == "results":
             continue
         if rel.lower().endswith((".py", ".yaml", ".yml")):
             found.append(rel)
@@ -720,65 +730,322 @@ def untracked_source_error(paths):
     )
 
 
-def _git_revision(cwd=None):
-    """Commit SHA plus a SHA-256 of tracked changes against HEAD.
+_GIT_REDIRECT_VARS = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+)
 
-    `git diff HEAD` includes staged and unstaged edits to tracked files.
-    `--no-ext-diff`, `--no-textconv`, and the `-c` options below keep the
-    bytes independent of external diff drivers, text conversion, and the
-    caller's Git configuration. The caller's config is not modified.
 
-    Untracked files are not part of the fingerprint. `git ls-files --others
-    --exclude-standard` is used only to refuse untracked `.py`, `.yaml`, and
-    `.yml` outside `results/`. That list is not hashed. Ignored files,
-    episode JSON, and other generated results stay out of both the hash and
-    the refusal. A gitignored source file, or an untracked file that is not
-    Python or YAML, can still change behavior without changing this
-    fingerprint; covering those would need a declared source manifest.
-    """
-    import hashlib
-    import subprocess
-
-    root = str(cwd or ROOT)
+def _provenance_env():
+    """Git environment that discovers the repository from the working directory."""
     env = os.environ.copy()
+    for name in _GIT_REDIRECT_VARS:
+        env.pop(name, None)
     env.pop("GIT_EXTERNAL_DIFF", None)
     env.pop("GIT_DIFF_OPTS", None)
-    base = [
-        "git",
-        "-c", "core.autocrlf=false",
-        "-c", "core.safecrlf=false",
-        "-c", "core.quotepath=false",
-        "-c", "diff.context=3",
-        "-c", "diff.noprefix=false",
-        "-c", "diff.renames=false",
-        "-c", "diff.mnemonicPrefix=false",
-        "-c", "diff.algorithm=myers",
-        "-c", "diff.external=",
-    ]
-    empty = {"commit": None, "tree_sha256": None, "untracked_source": []}
+    env["GIT_LITERAL_PATHSPECS"] = "1"
+    return env
+
+
+def _quote_alternate_object_directory(path):
+    """C-quote one GIT_ALTERNATE_OBJECT_DIRECTORIES entry.
+
+    Git splits this variable on ``;`` on Windows and ``:`` on Linux.
+    Quotes keep either separator, spaces, and quote characters inside one path.
+    """
+    escaped = str(path).replace("\\", "\\\\").replace('"', '\\"')
+    return '"' + escaped + '"'
+
+
+def _resolved_path(path):
+    return os.path.normcase(os.path.realpath(os.path.abspath(path)))
+
+
+def _same_existing(left, right):
+    """True when two existing paths name the same directory or file."""
     try:
-        commit = subprocess.run(
-            base + ["rev-parse", "HEAD"],
-            cwd=root, capture_output=True, env=env, check=True,
-        ).stdout.decode("utf-8", "replace").strip()
+        return os.path.samefile(left, right)
+    except (OSError, ValueError):
+        pass
+    try:
+        return _resolved_path(left) == _resolved_path(right)
+    except OSError:
+        return True
+
+
+def _ancestor_paths(path):
+    current = os.path.abspath(path)
+    seen = set()
+    while current and current not in seen:
+        yield current
+        seen.add(current)
+        parent = os.path.dirname(current.rstrip("\\/"))
+        if not parent or parent == current:
+            break
+        current = parent
+
+
+def _inside_or_alias(path, root):
+    """True when path is the object store or lies inside it, by filesystem identity.
+
+    Junctions, directory symlinks, UNC paths, and ``\\\\?\\`` paths match
+    when they name the same directory. A sibling such as ``objects-extra``
+    does not.
+    """
+    if not path or not root:
+        return True
+    try:
+        root_abs = os.path.abspath(root)
+    except OSError:
+        return True
+    for candidate in _ancestor_paths(path):
+        if _same_existing(candidate, root_abs):
+            return True
+    return False
+
+
+def _can_remove_created_object_temp(path, real_objects):
+    """True only for a temp directory this call created inside the store."""
+    name = os.path.basename(os.path.normpath(path))
+    if not name.startswith("verifix-objects-"):
+        return False
+    if _same_existing(path, real_objects):
+        return False
+    return _inside_or_alias(path, real_objects)
+
+
+def _parse_stage_listing(blob):
+    """Parse ``git ls-files -s -z`` into ``(mode, path)`` pairs.
+
+    Returns None when a record cannot be read. Callers then refuse.
+    """
+    entries = []
+    for part in blob.split(b"\0"):
+        if not part:
+            continue
+        if b"\t" not in part:
+            return None
+        meta, path = part.split(b"\t", 1)
+        bits = meta.split(b" ")
+        if len(bits) < 3 or not path:
+            return None
+        entries.append((bits[0].decode("ascii", "replace"), path.decode("utf-8", "surrogateescape")))
+    return entries
+
+
+def _directory_contains_git(root, name):
+    if not name or name == ".git" or name.startswith("../") or name.startswith("/"):
+        return False
+    full = os.path.join(root, name.replace("/", os.sep))
+    return os.path.lexists(os.path.join(full, ".git"))
+
+
+def _gitlink_blocks(root, entries):
+    for mode, name in entries:
+        if mode == "160000" or _directory_contains_git(root, name):
+            return True
+    return False
+
+
+def _stageable_worktree_entry(full):
+    """A staged addition is fingerprinted only as a file or symlink.
+
+    ``lexists`` keeps a dangling symlink, which ``exists`` would skip.
+    A directory is rejected so force-add cannot read its children.
+    """
+    if not os.path.lexists(full):
+        return False
+    return os.path.isfile(full) or os.path.islink(full)
+
+
+def _remove_temp_tree(path):
+    import shutil
+    import stat
+
+    def _writable(func, name, _exc):
+        os.chmod(name, stat.S_IWRITE)
+        func(name)
+
+    shutil.rmtree(path, onerror=_writable)
+
+
+def _discard_temp_tree(path):
+    """Remove a temporary directory. An OSError is reported and not raised."""
+    try:
+        _remove_temp_tree(path)
+    except FileNotFoundError:
+        return True
+    except OSError as exc:
+        print(
+            "Git provenance temporary directory cleanup failed: "
+            + str(path) + ": " + type(exc).__name__ + ": " + str(exc),
+            file=sys.stderr,
+        )
+        return False
+    return True
+
+
+def _discard_temp_file(path):
+    """Remove a temporary index file. An OSError is reported and not raised."""
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        return True
+    except OSError as exc:
+        print(
+            "Git provenance temporary index cleanup failed: "
+            + str(path) + ": " + type(exc).__name__ + ": " + str(exc),
+            file=sys.stderr,
+        )
+        return False
+    return True
+
+
+def _git_revision(cwd=None):
+    """Commit SHA plus the Git tree id of tracked worktree content.
+
+    A temporary index is loaded from HEAD with `git read-tree`. Staged
+    additions that are still regular files or symlinks, including ignored
+    files that were force-added and dangling symlinks, are applied with
+    `git add --force` under literal pathspecs. A directory is not added,
+    so ignored and untracked children cannot enter the tree. A staged
+    addition removed from the worktree is left out. `git add -u` then
+    applies tracked modifications and deletions. `git write-tree` names
+    that tree. A staged gitlink (mode 160000), or an index path whose
+    worktree directory contains `.git`, is refused before a fingerprint
+    is produced.
+
+    New objects are written to a temporary object directory. Its alternate
+    is the repository object directory, C-quoted so the path may contain
+    the platform separator (`;` on Windows, `:` on Linux), spaces, or
+    quotes. ``tempfile.gettempdir()`` is compared with the object store by
+    filesystem identity before the temporary index or object directory is
+    created. Junctions, directory symlinks, UNC paths, and ``\\\\?\\``
+    paths count as the same directory. A sibling directory does not. If
+    the temporary location is inside or aliases the object store, the call
+    refuses before `read-tree`, `add`, or `write-tree`. A cleanup OSError
+    for the temporary directory or index is reported and does not replace
+    a result or an earlier exception, and does not turn a failed
+    calculation into a fingerprint.
+
+    Inherited repository-redirection variables are removed for these
+    commands, so discovery uses the requested working directory. The
+    repository index and worktree are not modified. Object contents in the
+    repository object store are not modified; Git may refresh the
+    modification time of an object it reads from the alternate. The
+    caller's Git configuration is not modified. `GIT_CONFIG_GLOBAL` and
+    the user's global config, including clean filters and `core.autocrlf`,
+    still apply.
+
+    The tree id is the content of tracked files, so diff formatting, color,
+    abbreviation, textconv, external diff, and the stat cache do not affect
+    it. Untracked files are not in the tree. `git ls-files --others
+    --exclude-standard` only refuses untracked `.py`, `.yaml`, and `.yml`
+    whose first path component is not exactly `results`. Ignored files and
+    generated results stay out. A gitignored source file that was never
+    staged, or an untracked file that is not Python or YAML, can still
+    change behavior without changing this fingerprint. A staged directory
+    that is not a gitlink is omitted rather than recorded.
+    """
+    import subprocess
+    import tempfile
+
+    root = str(cwd or ROOT)
+    env = _provenance_env()
+    empty = {"commit": None, "tree_sha256": None, "untracked_source": []}
+    index_path = None
+    object_dir = None
+    real_objects = None
+
+    def _git(args, git_env):
+        return subprocess.run(
+            ["git", "-c", "core.quotepath=false", *args],
+            cwd=root, env=git_env, capture_output=True, check=True,
+        )
+
+    def _zset(blob):
+        return {
+            part.decode("utf-8", "surrogateescape")
+            for part in blob.split(b"\0")
+            if part
+        }
+
+    try:
+        commit = _git(["rev-parse", "HEAD"], env).stdout.decode("utf-8", "replace").strip()
         if not _valid_git_commit(commit):
             return empty
-        diff = subprocess.run(
-            base + ["diff", "--binary", "--no-ext-diff", "--no-textconv", "HEAD"],
-            cwd=root, capture_output=True, env=env, check=True,
-        ).stdout
-        listed = subprocess.run(
-            base + ["ls-files", "--others", "--exclude-standard", "-z"],
-            cwd=root, capture_output=True, env=env, check=True,
-        ).stdout
+        head_names = _zset(_git(["ls-tree", "-r", "-z", "--name-only", "HEAD"], env).stdout)
+        staged_entries = _parse_stage_listing(_git(["ls-files", "-s", "-z"], env).stdout)
+        if staged_entries is None or _gitlink_blocks(root, staged_entries):
+            print(
+                "refusing Git provenance: a staged gitlink (mode 160000) or a "
+                "working-tree directory containing .git is not fingerprinted. "
+                "There is no unversioned-run mode.",
+                file=sys.stderr,
+            )
+            return empty
+        index_names = {name for _mode, name in staged_entries}
+        listed = _git(["ls-files", "--others", "--exclude-standard", "-z"], env).stdout
+        raw_objects = _git(["rev-parse", "--git-path", "objects"], env).stdout.decode("utf-8", "replace").strip()
+        real_objects = raw_objects if os.path.isabs(raw_objects) else os.path.abspath(os.path.join(root, raw_objects))
+        temp_root = tempfile.gettempdir()
+        if _inside_or_alias(temp_root, real_objects):
+            print(
+                "refusing Git provenance: temporary directory resolves inside "
+                "the repository object store: " + str(temp_root),
+                file=sys.stderr,
+            )
+            return empty
+        descriptor, index_path = tempfile.mkstemp(prefix="verifix-index-")
+        os.close(descriptor)
+        object_dir = tempfile.mkdtemp(prefix="verifix-objects-")
+        if _inside_or_alias(index_path, real_objects) or _inside_or_alias(object_dir, real_objects):
+            print(
+                "refusing Git provenance: temporary object directory resolves inside "
+                "the repository object store: " + str(object_dir),
+                file=sys.stderr,
+            )
+            return empty
+        os.makedirs(os.path.join(object_dir, "info"), exist_ok=True)
+        os.makedirs(os.path.join(object_dir, "pack"), exist_ok=True)
+        index_env = dict(env)
+        index_env["GIT_INDEX_FILE"] = index_path
+        index_env["GIT_OBJECT_DIRECTORY"] = object_dir
+        index_env["GIT_ALTERNATE_OBJECT_DIRECTORIES"] = _quote_alternate_object_directory(real_objects)
+        _git(["read-tree", "HEAD"], index_env)
+        for path in sorted(index_names - head_names):
+            full = os.path.join(root, path.replace("/", os.sep))
+            if not _stageable_worktree_entry(full):
+                continue
+            _git(["add", "--force", "--", path], index_env)
+        _git(["add", "-u"], index_env)
+        tree = _git(["write-tree"], index_env).stdout.decode("utf-8", "replace").strip()
+        if not _valid_git_tree(tree):
+            return empty
+        names = [part.decode("utf-8", "surrogateescape") for part in listed.split(b"\0") if part]
+        return {
+            "commit": commit,
+            "tree_sha256": tree,
+            "untracked_source": untracked_source_paths(names),
+        }
     except (OSError, subprocess.CalledProcessError):
         return empty
-    names = [part.decode("utf-8", "replace") for part in listed.split(b"\0") if part]
-    return {
-        "commit": commit,
-        "tree_sha256": hashlib.sha256(diff).hexdigest(),
-        "untracked_source": untracked_source_paths(names),
-    }
+    finally:
+        if index_path:
+            for suffix in ("", ".lock"):
+                _discard_temp_file(index_path + suffix)
+        if object_dir:
+            # Never delete the repository object store. A directory this call
+            # created may be removed when it is strictly inside that store.
+            if real_objects and _inside_or_alias(object_dir, real_objects):
+                if _can_remove_created_object_temp(object_dir, real_objects):
+                    _discard_temp_tree(object_dir)
+            else:
+                _discard_temp_tree(object_dir)
 
 
 def _temporary_git_repo():
@@ -906,7 +1173,7 @@ def run_loop(args, net, links):
     out_path = Path(args.out)
     episodes_dir = episodes_dir_for(out_path) if args.save_episodes else None
     try:
-        for path in (out_path, _state_path(out_path), manifest_path(out_path), episodes_dir):
+        for path in (out_path, _state_path(out_path), manifest_path(out_path), episodes_dir, halt_path(out_path)):
             if path is not None:
                 refuse_protected_out(path)
     except ValueError as exc:
@@ -919,6 +1186,15 @@ def run_loop(args, net, links):
     gap = provenance_error(identity, stored_identity)
     if gap:
         print(gap, file=sys.stderr)
+        return 2
+    if "untracked_source" not in rev or not isinstance(rev.get("untracked_source"), list):
+        print(
+            "refusing to run: Git provenance is invalid (current untracked_source). "
+            "A run requires a valid Git repository and available provenance: "
+            "a full commit SHA and the Git tree id of the tracked worktree. "
+            "There is no unversioned-run mode.",
+            file=sys.stderr,
+        )
         return 2
     source_gap = untracked_source_error(rev.get("untracked_source"))
     if source_gap:
@@ -1004,6 +1280,28 @@ def run_loop(args, net, links):
                 agent_fn=agent_fn,
                 gate_fn=gate_fn,
             )
+        except TopologyContaminated as exc:
+            # Not an infra error to count and move past: the next episode
+            # would run on a topology that may still carry this fault.
+            halt = {
+                "halted_at": datetime.now(timezone.utc).isoformat(),
+                "episode_index": index,
+                "completed_before_halt": index,
+                "fault_id": label,
+                "noise_id": scenario["noise_id"],
+                "error": str(exc),
+                "reset_report": exc.report,
+                "episode_record": exc.record,
+            }
+            _write_json(halt_path(out_path), halt)
+            print(f"  topology contaminated: {exc}", file=sys.stderr, flush=True)
+            print(
+                f"stopping: reset or cleanup failed. Episode {index + 1} is not counted. "
+                f"Details: {halt_path(out_path)}. Restart Mininet (sudo mn -c), then rerun with --resume.",
+                file=sys.stderr,
+                flush=True,
+            )
+            return 4
         except Exception as exc:
             record = infra_error_record(fault_id, scenario["noise_id"], inject_seed, exc, compound_id=compound_id)
             print(f"  infra error: {record['infra_error']}", flush=True)
@@ -1025,6 +1323,7 @@ def run_loop(args, net, links):
             record.get("network_snapshot") or {},
             oam_results,
             net=net,
+            noise_id=record.get("noise_id") or scenario["noise_id"],
         )
         record["b5_decision"] = b
         stats["episodes_with_b5"] = stats.get("episodes_with_b5", 0) + 1
@@ -1581,11 +1880,35 @@ def _self_check():
     assert provenance_error({"git_commit": "g" * 40, "git_tree_sha256": "b" * 64})
     assert provenance_error({"git_commit": "a" * 39, "git_tree_sha256": "b" * 64})
     assert provenance_error({"git_commit": "a" * 40, "git_tree_sha256": "b" * 63})
+    assert provenance_error({"git_commit": "a" * 40, "git_tree_sha256": "b" * 39})
     assert provenance_error({"git_commit": "a" * 40, "git_tree_sha256": "g" * 64})
     assert provenance_error(valid_pair) is None
+    assert provenance_error({"git_commit": "a" * 40, "git_tree_sha256": "b" * 40}) is None
     assert untracked_source_paths(
         ["extra.py", "note.json", "results/helper.py", "config/a.yaml", "RESULTS/b.yml"]
-    ) == ["config/a.yaml", "extra.py"]
+    ) == ["RESULTS/b.yml", "config/a.yaml", "extra.py"]
+    assert untracked_source_paths([".results/evil.py"]) == [".results/evil.py"]
+    assert untracked_source_paths(["./results/generated.json"]) == []
+    assert untracked_source_paths(["results/helper.py"]) == []
+    assert untracked_source_paths(["bench/results/helper.py"]) == ["bench/results/helper.py"]
+    assert untracked_source_paths(["RESULTS/helper.py"]) == ["RESULTS/helper.py"]
+    assert untracked_source_paths(
+        ["bench\\results\\helper.py", "results\\helper.py", ".\\results\\generated.json", ".results\\evil.py"]
+    ) == [".results/evil.py", "bench/results/helper.py"]
+    listing = b"\0".join([
+        b".results/evil.py",
+        b"RESULTS/helper.py",
+        b"results/helper.py",
+        b"bench/results/helper.py",
+        b"./results/generated.json",
+        b"results\\helper.py",
+    ])
+    decoded = [part.decode("utf-8", "surrogateescape") for part in listing.split(b"\0") if part]
+    assert untracked_source_paths(decoded) == [
+        ".results/evil.py",
+        "RESULTS/helper.py",
+        "bench/results/helper.py",
+    ]
     assert base["git_commit"] and _valid_git_commit(base["git_commit"])
     assert _valid_git_tree(base["git_tree_sha256"])
     assert identity_mismatch({"seed": 1, "agent": "stub"}, base)
@@ -1646,6 +1969,7 @@ def _self_check():
         assert json.loads(run_out.read_text(encoding="utf-8"))["episodes_attempted"] == 3
 
         import io
+        import subprocess
         import sys
         from contextlib import redirect_stderr
 
@@ -1663,18 +1987,51 @@ def _self_check():
             tracked.write_text("v1\n", encoding="utf-8")
             git(["add", "tracked.txt"])
             git(["commit", "-m", "init"])
+            index_file = repo / ".git" / "index"
+            index_before = index_file.read_bytes()
             clean = _git_revision(repo)
-            assert clean["commit"] and clean["tree_sha256"]
+            head_tree = subprocess.run(
+                ["git", "rev-parse", "HEAD^{tree}"],
+                cwd=repo, capture_output=True, check=True,
+            ).stdout.decode("utf-8", "replace").strip()
+            assert clean["commit"] and clean["tree_sha256"] == head_tree
+            assert clean["untracked_source"] == []
+            assert index_file.read_bytes() == index_before
             (repo / "untracked.json").write_text("{}\n", encoding="utf-8")
             assert _git_revision(repo) == clean, "untracked output must not change the source fingerprint"
+            same = tracked.read_bytes()
+            tracked.write_bytes(same)
+            assert _git_revision(repo)["tree_sha256"] == clean["tree_sha256"]
+            tracked.unlink()
+            deleted = _git_revision(repo)
+            assert deleted["commit"] == clean["commit"] and deleted["tree_sha256"] != clean["tree_sha256"]
+            git(["checkout", "HEAD", "--", "tracked.txt"])
+            assert _git_revision(repo) == clean
+            added = repo / "added.txt"
+            added.write_text("new\n", encoding="utf-8")
+            git(["add", "added.txt"])
+            added_rev = _git_revision(repo)
+            assert added_rev["tree_sha256"] not in {clean["tree_sha256"], deleted["tree_sha256"]}
+            assert index_file.read_bytes() != index_before
+            staged_index = index_file.read_bytes()
+            assert _git_revision(repo)["tree_sha256"] == added_rev["tree_sha256"]
+            assert index_file.read_bytes() == staged_index
+            git(["reset", "-q", "HEAD", "--", "added.txt"])
+            added.unlink()
+            assert _git_revision(repo) == clean
             tracked.write_text("v2\n", encoding="utf-8")
+            dirty_index = index_file.read_bytes()
             unstaged = _git_revision(repo)
+            assert index_file.read_bytes() == dirty_index
             assert unstaged["commit"] == clean["commit"] and unstaged["tree_sha256"] != clean["tree_sha256"]
             git(["add", "tracked.txt"])
+            staged_index = index_file.read_bytes()
             staged = _git_revision(repo)
+            assert index_file.read_bytes() == staged_index
             assert staged["tree_sha256"] == unstaged["tree_sha256"]
             tracked.write_text("v3\n", encoding="utf-8")
             both = _git_revision(repo)
+            assert index_file.read_bytes() == staged_index
             assert both["tree_sha256"] not in {clean["tree_sha256"], staged["tree_sha256"]}
             git(["checkout", "--", "tracked.txt"])
             assert _git_revision(repo)["tree_sha256"] == staged["tree_sha256"]
@@ -1682,12 +2039,60 @@ def _self_check():
             assert _git_revision(repo) == clean
             git(["config", "diff.external", "verifix-missing-external-diff"])
             git(["config", "diff.txt.textconv", "verifix-missing-textconv"])
+            git(["config", "color.ui", "always"])
+            git(["config", "core.abbrev", "7"])
             (repo / ".git" / "info" / "attributes").write_text("*.txt diff=txt\n", encoding="utf-8")
             os.environ["GIT_EXTERNAL_DIFF"] = "verifix-missing-external-diff"
             try:
                 assert _git_revision(repo) == clean
             finally:
                 os.environ.pop("GIT_EXTERNAL_DIFF", None)
+            import tempfile as tempfile_mod
+
+            temp_root = Path(tempfile_mod.gettempdir())
+
+            def _index_leftovers():
+                names = {path.name for path in temp_root.glob("verifix-index-*")}
+                names.update(path.name for path in temp_root.glob("verifix-objects-*"))
+                return names
+
+            before_names = _index_leftovers()
+            seen_indexes = []
+            real_run = subprocess.run
+
+            def _watch(args, **kwargs):
+                cmd = list(args)
+                if "write-tree" in cmd:
+                    seen_indexes.append((kwargs.get("env") or {}).get("GIT_INDEX_FILE"))
+                return real_run(args, **kwargs)
+
+            subprocess.run = _watch
+            try:
+                assert _git_revision(repo)["tree_sha256"] == clean["tree_sha256"]
+            finally:
+                subprocess.run = real_run
+            assert seen_indexes
+            assert all(path and not Path(path).exists() and not Path(path + ".lock").exists() for path in seen_indexes)
+            assert _index_leftovers() == before_names
+
+            def _fail(args, **kwargs):
+                cmd = list(args)
+                if "write-tree" in cmd:
+                    index = (kwargs.get("env") or {}).get("GIT_INDEX_FILE")
+                    if index:
+                        Path(str(index) + ".lock").write_text("lock", encoding="utf-8")
+                    raise subprocess.CalledProcessError(128, cmd, stderr=b"write-tree failed")
+                return real_run(args, **kwargs)
+
+            subprocess.run = _fail
+            index_at_fail = index_file.read_bytes()
+            try:
+                failed_rev = _git_revision(repo)
+            finally:
+                subprocess.run = real_run
+            assert failed_rev["commit"] is None and failed_rev["tree_sha256"] is None
+            assert _index_leftovers() == before_names
+            assert index_file.read_bytes() == index_at_fail
             this = sys.modules[__name__]
             real_rev = this._git_revision
             this._git_revision = lambda cwd=None: real_rev(repo)
@@ -1714,15 +2119,25 @@ def _self_check():
                 (repo / "note.json").write_text("{}\n", encoding="utf-8")
                 (repo / "results").mkdir()
                 (repo / "results" / "helper.py").write_text("x = 1\n", encoding="utf-8")
+                (repo / ".results").mkdir()
+                (repo / ".results" / "evil.py").write_text("x = 1\n", encoding="utf-8")
+                (repo / "bench" / "results").mkdir(parents=True)
+                (repo / "bench" / "results" / "helper.py").write_text("x = 1\n", encoding="utf-8")
                 seen = real_rev(repo)
                 assert seen["tree_sha256"] == clean["tree_sha256"]
-                assert seen["untracked_source"] == ["extra.py"]
+                assert seen["untracked_source"] == [
+                    ".results/evil.py",
+                    "bench/results/helper.py",
+                    "extra.py",
+                ]
                 buf = io.StringIO()
                 with redirect_stderr(buf):
                     rc = run_loop(_parser().parse_args(git_args + ["--resume"]), None, None)
                 assert rc == 2 and "untracked source" in buf.getvalue() and "extra.py" in buf.getvalue()
                 assert git_out.read_bytes() == kept_bytes
                 (repo / "extra.py").unlink()
+                (repo / ".results" / "evil.py").unlink()
+                (repo / "bench" / "results" / "helper.py").unlink()
                 tracked.write_text("changed\n", encoding="utf-8")
                 buf = io.StringIO()
                 with redirect_stderr(buf):
@@ -1732,6 +2147,1158 @@ def _self_check():
             finally:
                 this._git_revision = real_rev
         assert not repo.exists()
+
+        with _temporary_git_repo() as (crlf_repo, crlf_git):
+            crlf_git(["config", "core.autocrlf", "true"])
+            crlf_file = crlf_repo / "tracked.txt"
+            crlf_file.write_bytes(b"v1\r\n")
+            crlf_git(["add", "tracked.txt"])
+            crlf_git(["commit", "-m", "init"])
+            crlf_file.write_bytes(b"v1\r\n")
+            crlf_head = subprocess.run(
+                ["git", "rev-parse", "HEAD^{tree}"],
+                cwd=crlf_repo, capture_output=True, check=True,
+            ).stdout.decode("utf-8", "replace").strip()
+            crlf_index = (crlf_repo / ".git" / "index").read_bytes()
+            crlf_rev = _git_revision(crlf_repo)
+            assert crlf_rev["tree_sha256"] == crlf_head
+            assert (crlf_repo / ".git" / "index").read_bytes() == crlf_index
+        assert not crlf_repo.exists()
+
+        def _quiet_git_env():
+            env = os.environ.copy()
+            for name in _GIT_REDIRECT_VARS:
+                env.pop(name, None)
+            env["GIT_LITERAL_PATHSPECS"] = "1"
+            return env
+
+        def _object_rows(repo):
+            import hashlib
+            objects = repo / ".git" / "objects"
+            rows = []
+            for path in objects.rglob("*"):
+                if path.is_file():
+                    st = path.stat()
+                    rows.append((
+                        path.relative_to(objects).as_posix(),
+                        hashlib.sha256(path.read_bytes()).hexdigest(),
+                        st.st_size,
+                        st.st_mode,
+                    ))
+            return tuple(sorted(rows))
+
+        def _index_bytes(repo):
+            return (repo / ".git" / "index").read_bytes()
+
+        def _expected_tree(repo):
+            return subprocess.run(
+                ["git", "write-tree"],
+                cwd=repo, capture_output=True, check=True, env=_quiet_git_env(),
+            ).stdout.decode("utf-8", "replace").strip()
+
+        def _head_tree(repo):
+            return subprocess.run(
+                ["git", "rev-parse", "HEAD^{tree}"],
+                cwd=repo, capture_output=True, check=True, env=_quiet_git_env(),
+            ).stdout.decode("utf-8", "replace").strip()
+
+        with _temporary_git_repo() as (repo, git):
+            tracked = repo / "tracked.txt"
+            tracked.write_bytes(b"v1\n")
+            git(["add", "tracked.txt"])
+            git(["commit", "-m", "init"])
+            (repo / ".gitignore").write_text("*.log\n", encoding="utf-8")
+            git(["add", ".gitignore"])
+            git(["commit", "-m", "ignore"])
+            ignored = repo / "secret.log"
+            ignored.write_bytes(b"secret\n")
+            git(["add", "-f", "--", "secret.log"])
+            expected = _expected_tree(repo)
+            objects_before = _object_rows(repo)
+            index_before = _index_bytes(repo)
+            forced = _git_revision(repo)
+            assert forced["tree_sha256"] == expected
+            assert _object_rows(repo) == objects_before
+            assert _index_bytes(repo) == index_before
+            ignored.write_bytes(b"changed\n")
+            assert _git_revision(repo)["tree_sha256"] != expected
+            git(["checkout", "--", "secret.log"])
+            bracket = repo / "x[1].py"
+            plain = repo / "x1.py"
+            bracket.write_bytes(b"bracket\n")
+            plain.write_bytes(b"plain\n")
+            subprocess.run(
+                ["git", "add", "--", "x[1].py"],
+                cwd=repo, check=True, capture_output=True, env=_quiet_git_env(),
+            )
+            staged_names = subprocess.run(
+                ["git", "ls-files", "-z"],
+                cwd=repo, capture_output=True, check=True, env=_quiet_git_env(),
+            ).stdout.split(b"\0")
+            assert b"x[1].py" in staged_names and b"x1.py" not in staged_names
+            expected_bracket = _expected_tree(repo)
+            seen = _git_revision(repo)
+            assert seen["tree_sha256"] == expected_bracket
+            listed = subprocess.run(
+                ["git", "ls-tree", "-r", "--name-only", seen["tree_sha256"]],
+                cwd=repo, capture_output=True, check=True, env=_quiet_git_env(),
+            ).stdout.decode("utf-8", "replace")
+            assert "x[1].py" in listed.splitlines() and "x1.py" not in listed.splitlines()
+            spaced = repo / "a b.py"
+            dashed = repo / "-dash.py"
+            spaced.write_bytes(b"space\n")
+            dashed.write_bytes(b"dash\n")
+            subprocess.run(
+                ["git", "add", "--", "a b.py", "-dash.py"],
+                cwd=repo, check=True, capture_output=True, env=_quiet_git_env(),
+            )
+            assert _git_revision(repo)["tree_sha256"] == _expected_tree(repo)
+            gone = repo / "gone.txt"
+            gone.write_bytes(b"gone\n")
+            subprocess.run(
+                ["git", "add", "--", "gone.txt"],
+                cwd=repo, check=True, capture_output=True, env=_quiet_git_env(),
+            )
+            gone.unlink()
+            copy_fd, copy_index = tempfile.mkstemp(prefix="verifix-expect-")
+            os.close(copy_fd)
+            try:
+                import shutil
+                shutil.copyfile(repo / ".git" / "index", copy_index)
+                expect_env = _quiet_git_env()
+                expect_env["GIT_INDEX_FILE"] = copy_index
+                subprocess.run(
+                    ["git", "update-index", "--force-remove", "--", "gone.txt"],
+                    cwd=repo, check=True, capture_output=True, env=expect_env,
+                )
+                absent = subprocess.run(
+                    ["git", "write-tree"],
+                    cwd=repo, check=True, capture_output=True, env=expect_env,
+                ).stdout.decode("utf-8", "replace").strip()
+            finally:
+                os.remove(copy_index)
+            objects_after = _object_rows(repo)
+            index_after = _index_bytes(repo)
+            present = _git_revision(repo)["tree_sha256"]
+            assert present == absent
+            assert present != _head_tree(repo)
+            assert _object_rows(repo) == objects_after
+            assert _index_bytes(repo) == index_after
+            real_run = subprocess.run
+
+            def _fail_force(args, **kwargs):
+                cmd = list(args)
+                if "--force" in cmd and "add" in cmd:
+                    raise subprocess.CalledProcessError(1, cmd, stderr=b"fatal: genuine add failure")
+                return real_run(args, **kwargs)
+
+            held_index = _index_bytes(repo)
+            held_objects = _object_rows(repo)
+            subprocess.run = _fail_force
+            try:
+                assert _git_revision(repo)["commit"] is None
+            finally:
+                subprocess.run = real_run
+            assert _index_bytes(repo) == held_index
+            assert _object_rows(repo) == held_objects
+            assert _git_revision(repo)["tree_sha256"] == present
+            assert _index_bytes(repo) == held_index
+            assert _object_rows(repo) == held_objects
+
+        with _temporary_git_repo() as (repo, git):
+            (repo / "tracked.txt").write_bytes(b"v1\n")
+            git(["add", "tracked.txt"])
+            git(["commit", "-m", "init"])
+            home = _git_revision(repo)
+            with _temporary_git_repo() as (other, other_git):
+                (other / "tracked.txt").write_bytes(b"other\n")
+                other_git(["add", "tracked.txt"])
+                other_git(["commit", "-m", "init"])
+                foreign = _git_revision(other)
+                saved_env = {name: os.environ.get(name) for name in _GIT_REDIRECT_VARS}
+                try:
+                    os.environ["GIT_DIR"] = str(other / ".git")
+                    redirected = _git_revision(repo)
+                    assert redirected["commit"] == home["commit"]
+                    assert redirected["tree_sha256"] == home["tree_sha256"]
+                    assert redirected["commit"] != foreign["commit"]
+                    os.environ.pop("GIT_DIR", None)
+                    os.environ["GIT_WORK_TREE"] = str(other)
+                    os.environ["GIT_INDEX_FILE"] = str(other / ".git" / "index")
+                    again = _git_revision(repo)
+                    assert again["commit"] == home["commit"] and again["tree_sha256"] == home["tree_sha256"]
+                finally:
+                    for name, value in saved_env.items():
+                        if value is None:
+                            os.environ.pop(name, None)
+                        else:
+                            os.environ[name] = value
+
+        import tempfile as tempfile_mod
+
+        made_objects = []
+        real_mkdtemp = tempfile_mod.mkdtemp
+
+        def _remember_objects(*args, **kwargs):
+            path = real_mkdtemp(*args, **kwargs)
+            if str(path).find("verifix-objects-") >= 0 or kwargs.get("prefix") == "verifix-objects-":
+                made_objects.append(path)
+            return path
+
+        with _temporary_git_repo() as (repo, git):
+            (repo / "tracked.txt").write_bytes(b"v1\n")
+            git(["add", "tracked.txt"])
+            git(["commit", "-m", "init"])
+            tempfile_mod.mkdtemp = _remember_objects
+            real_run = subprocess.run
+            try:
+                assert _git_revision(repo)["commit"]
+                assert made_objects and all(not Path(path).exists() for path in made_objects)
+                made_objects.clear()
+
+                def _fail_tree(args, **kwargs):
+                    if "write-tree" in list(args):
+                        raise subprocess.CalledProcessError(128, list(args), stderr=b"write-tree failed")
+                    return real_run(args, **kwargs)
+
+                subprocess.run = _fail_tree
+                failed = _git_revision(repo)
+                assert failed["commit"] is None and failed["tree_sha256"] is None
+                assert made_objects and all(not Path(path).exists() for path in made_objects)
+                made_objects.clear()
+
+                def _interrupt(args, **kwargs):
+                    if "write-tree" in list(args):
+                        raise KeyboardInterrupt()
+                    return real_run(args, **kwargs)
+
+                subprocess.run = _interrupt
+                interrupted = False
+                try:
+                    _git_revision(repo)
+                except KeyboardInterrupt:
+                    interrupted = True
+                assert interrupted
+                assert made_objects and all(not Path(path).exists() for path in made_objects)
+            finally:
+                subprocess.run = real_run
+                tempfile_mod.mkdtemp = real_mkdtemp
+
+        assert _quote_alternate_object_directory("C:\\a b\\objects") == '"C:\\\\a b\\\\objects"'
+        assert _quote_alternate_object_directory("C:\\a\"b\\objects") == '"C:\\\\a\\"b\\\\objects"'
+        assert _quote_alternate_object_directory("C:\\a;b\\objects") == '"C:\\\\a;b\\\\objects"'
+        assert _quote_alternate_object_directory("/tmp/a:b/objects") == '"/tmp/a:b/objects"'
+        assert _quote_alternate_object_directory("/tmp/a b/objects") == '"/tmp/a b/objects"'
+        assert _quote_alternate_object_directory("C:\\a b;\"c\\objects") == '"C:\\\\a b;\\"c\\\\objects"'
+
+        def _oracle_add_u_tree(source):
+            import shutil
+            parent = Path(tempfile.mkdtemp(prefix="verifix-oracle-"))
+            copy = parent / "repo"
+            try:
+                shutil.copytree(source, copy)
+                env = _quiet_git_env()
+                subprocess.run(
+                    ["git", "add", "-u"],
+                    cwd=copy, env=env, capture_output=True, check=True,
+                )
+                tree = subprocess.run(
+                    ["git", "write-tree"],
+                    cwd=copy, env=env, capture_output=True, check=True,
+                ).stdout.decode("utf-8", "replace").strip()
+                listed = subprocess.run(
+                    ["git", "ls-tree", "-r", "--name-only", tree],
+                    cwd=copy, env=env, capture_output=True, check=True,
+                ).stdout.decode("utf-8", "replace").splitlines()
+                return tree, listed
+            finally:
+                _remove_temp_tree(parent)
+
+        with _temporary_git_repo() as (repo, git):
+            (repo / "tracked.txt").write_bytes(b"v1\n")
+            git(["add", "tracked.txt"])
+            git(["commit", "-m", "init"])
+            (repo / ".gitignore").write_text("*.log\n", encoding="utf-8")
+            git(["add", ".gitignore"])
+            git(["commit", "-m", "ignore"])
+            (repo / "kept.txt").write_bytes(b"kept\n")
+            (repo / "conf").write_bytes(b"file\n")
+            git(["add", "--", "kept.txt", "conf"])
+            (repo / "conf").unlink()
+            (repo / "conf").mkdir()
+            (repo / "conf" / "hidden.py").write_bytes(b"hidden\n")
+            (repo / "conf" / "secret.log").write_bytes(b"secret\n")
+            (repo / "conf" / "untracked.txt").write_bytes(b"x\n")
+            exclude = repo / ".git" / "info" / "exclude"
+            exclude.write_text(exclude.read_text(encoding="utf-8") + "conf/hidden.py\n", encoding="utf-8")
+            ignore_env = _quiet_git_env()
+            ignore_env.pop("GIT_LITERAL_PATHSPECS", None)
+            assert subprocess.run(
+                ["git", "check-ignore", "-q", "--", "conf/hidden.py"],
+                cwd=repo, env=ignore_env, capture_output=True,
+            ).returncode == 0
+            assert subprocess.run(
+                ["git", "check-ignore", "-q", "--", "conf/secret.log"],
+                cwd=repo, env=ignore_env, capture_output=True,
+            ).returncode == 0
+            oracle_tree, oracle_names = _oracle_add_u_tree(repo)
+            assert "kept.txt" in oracle_names
+            assert "conf" not in oracle_names
+            assert "conf/hidden.py" not in oracle_names
+            assert "conf/secret.log" not in oracle_names
+            assert "conf/untracked.txt" not in oracle_names
+            objects_before = _object_rows(repo)
+            index_before = _index_bytes(repo)
+            cmds = []
+            real_run = subprocess.run
+
+            def _watch_add(args, **kwargs):
+                cmds.append(list(args))
+                return real_run(args, **kwargs)
+
+            subprocess.run = _watch_add
+            try:
+                replaced = _git_revision(repo)
+            finally:
+                subprocess.run = real_run
+            assert replaced["tree_sha256"] == oracle_tree
+            assert replaced["untracked_source"] == []
+            assert any("add" in cmd and "--force" in cmd and "kept.txt" in cmd for cmd in cmds)
+            assert not any("add" in cmd and "--force" in cmd and "conf" in cmd for cmd in cmds)
+            assert _object_rows(repo) == objects_before
+            assert _index_bytes(repo) == index_before
+            direct = _git_revision(repo)
+            assert direct["tree_sha256"] == oracle_tree
+            assert direct["untracked_source"] == []
+            assert _object_rows(repo) == objects_before
+            assert _index_bytes(repo) == index_before
+            link = repo / "dangling.link"
+            link_error = None
+            try:
+                os.symlink("missing-target", link)
+            except OSError as exc:
+                link_error = exc
+            if (
+                link_error is None
+                and os.path.islink(link)
+                and os.path.lexists(link)
+                and not os.path.exists(link)
+            ):
+                subprocess.run(
+                    ["git", "add", "--", "dangling.link"],
+                    cwd=repo, check=True, capture_output=True, env=_quiet_git_env(),
+                )
+                assert _git_revision(repo)["tree_sha256"] == _expected_tree(repo)
+            else:
+                link.write_bytes(b"placeholder\n")
+                subprocess.run(
+                    ["git", "add", "--", "dangling.link"],
+                    cwd=repo, check=True, capture_output=True, env=_quiet_git_env(),
+                )
+                link.unlink()
+                target = os.path.normcase(os.path.abspath(link))
+                stat_calls = {"lexists": 0}
+                real_lexists = os.path.lexists
+                real_islink = os.path.islink
+                real_isfile = os.path.isfile
+
+                def _lexists(path):
+                    if os.path.normcase(os.path.abspath(path)) == target:
+                        stat_calls["lexists"] += 1
+                        return True
+                    return real_lexists(path)
+
+                def _islink(path):
+                    if os.path.normcase(os.path.abspath(path)) == target:
+                        return True
+                    return real_islink(path)
+
+                def _isfile(path):
+                    if os.path.normcase(os.path.abspath(path)) == target:
+                        return False
+                    return real_isfile(path)
+
+                os.path.lexists = _lexists
+                os.path.islink = _islink
+                os.path.isfile = _isfile
+                cmds.clear()
+                subprocess.run = _watch_add
+                try:
+                    held_index = _index_bytes(repo)
+                    held_objects = _object_rows(repo)
+                    dangling = _git_revision(repo)
+                finally:
+                    os.path.lexists = real_lexists
+                    os.path.islink = real_islink
+                    os.path.isfile = real_isfile
+                    subprocess.run = real_run
+                assert stat_calls["lexists"] >= 1
+                assert any("add" in cmd and "--force" in cmd and "dangling.link" in cmd for cmd in cmds)
+                assert dangling["commit"] is None
+                assert _index_bytes(repo) == held_index
+                assert _object_rows(repo) == held_objects
+
+        separator_prefix = "verifix alt;" if os.name == "nt" else "verifix alt:"
+        parent = Path(tempfile.mkdtemp(prefix=separator_prefix))
+        try:
+            quoted_repo = parent / "repo"
+            quoted_repo.mkdir()
+
+            def quoted_git(args):
+                subprocess.run(
+                    ["git", *args],
+                    cwd=quoted_repo, check=True, capture_output=True, env=_quiet_git_env(),
+                )
+
+            quoted_git(["init"])
+            quoted_git(["config", "user.email", "verifix-test@example.com"])
+            quoted_git(["config", "user.name", "verifix-test"])
+            quoted_git(["config", "commit.gpgsign", "false"])
+            quoted_git(["config", "tag.gpgsign", "false"])
+            quoted_git(["config", "core.autocrlf", "false"])
+            quoted_git(["config", "core.safecrlf", "false"])
+            (quoted_repo / "tracked.txt").write_bytes(b"v1\n")
+            quoted_git(["add", "tracked.txt"])
+            quoted_git(["commit", "-m", "init"])
+            raw_objects = subprocess.run(
+                ["git", "rev-parse", "--git-path", "objects"],
+                cwd=quoted_repo, capture_output=True, check=True, env=_quiet_git_env(),
+            ).stdout.decode("utf-8", "replace").strip()
+            real_objects = raw_objects if os.path.isabs(raw_objects) else os.path.abspath(
+                os.path.join(quoted_repo, raw_objects)
+            )
+            assert " " in real_objects
+            if os.name == "nt":
+                assert ";" in real_objects and ":" in real_objects
+            else:
+                assert ":" in real_objects
+            alts = []
+            real_run = subprocess.run
+
+            def _watch_alt(args, **kwargs):
+                env = kwargs.get("env") or {}
+                alt = env.get("GIT_ALTERNATE_OBJECT_DIRECTORIES")
+                if alt:
+                    alts.append(alt)
+                return real_run(args, **kwargs)
+
+            subprocess.run = _watch_alt
+            try:
+                quoted_rev = _git_revision(quoted_repo)
+            finally:
+                subprocess.run = real_run
+            assert quoted_rev["tree_sha256"] == _head_tree(quoted_repo)
+            assert quoted_rev["commit"]
+            assert alts
+            assert set(alts) == {_quote_alternate_object_directory(real_objects)}
+            assert alts[0].startswith('"') and alts[0].endswith('"')
+            assert " " in alts[0]
+            if os.name == "nt":
+                assert ";" in alts[0]
+            else:
+                assert ":" in alts[0]
+            probe_files = []
+            probe_dirs = []
+            try:
+                for alternate, expect_ok in (
+                    (_quote_alternate_object_directory(real_objects), True),
+                    (real_objects, False),
+                ):
+                    descriptor, index_path = tempfile.mkstemp(prefix="verifix-quote-probe-")
+                    os.close(descriptor)
+                    probe_files.append(index_path)
+                    object_dir = tempfile.mkdtemp(prefix="verifix-quote-probe-objects-")
+                    probe_dirs.append(object_dir)
+                    os.makedirs(os.path.join(object_dir, "info"), exist_ok=True)
+                    os.makedirs(os.path.join(object_dir, "pack"), exist_ok=True)
+                    env = _quiet_git_env()
+                    env["GIT_INDEX_FILE"] = index_path
+                    env["GIT_OBJECT_DIRECTORY"] = object_dir
+                    env["GIT_ALTERNATE_OBJECT_DIRECTORIES"] = alternate
+                    read = subprocess.run(
+                        ["git", "read-tree", "HEAD"],
+                        cwd=quoted_repo, env=env, capture_output=True,
+                    )
+                    if expect_ok:
+                        assert read.returncode == 0, read.stderr.decode("utf-8", "replace")
+                        written = subprocess.run(
+                            ["git", "write-tree"],
+                            cwd=quoted_repo, env=env, capture_output=True, check=True,
+                        ).stdout.decode("utf-8", "replace").strip()
+                        assert written == _head_tree(quoted_repo)
+                    else:
+                        assert read.returncode != 0
+            finally:
+                for path in probe_files:
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
+                for path in probe_dirs:
+                    if Path(path).exists():
+                        _remove_temp_tree(path)
+        finally:
+            _remove_temp_tree(parent)
+
+        with _temporary_git_repo() as (repo, git):
+            (repo / "tracked.txt").write_bytes(b"v1\n")
+            git(["add", "tracked.txt"])
+            git(["commit", "-m", "init"])
+            objects = repo / ".git" / "objects"
+            rows_before = _object_rows(repo)
+            index_before = _index_bytes(repo)
+            real_mkdtemp = tempfile_mod.mkdtemp
+            real_run = subprocess.run
+            created = []
+
+            def _inside_store(*args, **kwargs):
+                if kwargs.get("prefix") != "verifix-objects-":
+                    return real_mkdtemp(*args, **kwargs)
+                unresolved = os.path.join(str(objects), "..", "objects", "verifix-objects-inside")
+                resolved = Path(os.path.normpath(unresolved))
+                resolved.mkdir()
+                created.append(resolved)
+                return unresolved
+
+            cmds = []
+
+            def _watch_cmds(args, **kwargs):
+                cmds.append(list(args))
+                return real_run(args, **kwargs)
+
+            tempfile_mod.mkdtemp = _inside_store
+            subprocess.run = _watch_cmds
+            inside_buf = io.StringIO()
+            try:
+                with redirect_stderr(inside_buf):
+                    inside = _git_revision(repo)
+            finally:
+                tempfile_mod.mkdtemp = real_mkdtemp
+                subprocess.run = real_run
+            assert inside["commit"] is None and inside["tree_sha256"] is None
+            assert "resolves inside" in inside_buf.getvalue()
+            assert created and all(not path.exists() for path in created)
+            assert not any("read-tree" in cmd or "write-tree" in cmd or "add" in cmd for cmd in cmds)
+            assert _object_rows(repo) == rows_before
+            assert _index_bytes(repo) == index_before
+            assert (objects / "pack").is_dir() and (objects / "info").is_dir()
+
+            def _store_itself(*args, **kwargs):
+                if kwargs.get("prefix") == "verifix-objects-":
+                    return str(objects)
+                return real_mkdtemp(*args, **kwargs)
+
+            tempfile_mod.mkdtemp = _store_itself
+            subprocess.run = _watch_cmds
+            cmds.clear()
+            store_buf = io.StringIO()
+            try:
+                with redirect_stderr(store_buf):
+                    store_rev = _git_revision(repo)
+            finally:
+                tempfile_mod.mkdtemp = real_mkdtemp
+                subprocess.run = real_run
+            assert store_rev["commit"] is None and store_rev["tree_sha256"] is None
+            assert "resolves inside" in store_buf.getvalue()
+            assert "cleanup succeeded" not in store_buf.getvalue()
+            assert objects.is_dir() and (objects / "pack").is_dir()
+            assert _object_rows(repo) == rows_before
+            assert _index_bytes(repo) == index_before
+            assert not any("read-tree" in cmd or "write-tree" in cmd or "add" in cmd for cmd in cmds)
+
+        with _temporary_git_repo() as (repo, git):
+            (repo / "tracked.txt").write_bytes(b"v1\n")
+            git(["add", "tracked.txt"])
+            git(["commit", "-m", "init"])
+            head = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo, capture_output=True, check=True, env=_quiet_git_env(),
+            ).stdout.decode("utf-8", "replace").strip()
+            expected = _head_tree(repo)
+            quiet = io.StringIO()
+            with redirect_stderr(quiet):
+                clean = _git_revision(repo)
+            assert clean["commit"] == head and clean["tree_sha256"] == expected
+            assert "cleanup failed" not in quiet.getvalue()
+            assert "cleanup succeeded" not in quiet.getvalue()
+            this = sys.modules[__name__]
+            real_remove = this._remove_temp_tree
+            leaked = []
+            real_mkdtemp = tempfile_mod.mkdtemp
+            real_run = subprocess.run
+
+            def _remember(*args, **kwargs):
+                path = real_mkdtemp(*args, **kwargs)
+                if kwargs.get("prefix") == "verifix-objects-":
+                    leaked.append(path)
+                return path
+
+            def _locked(path):
+                raise PermissionError(
+                    32,
+                    "The process cannot access the file because it is being used by another process",
+                    str(path),
+                )
+
+            rows_before = _object_rows(repo)
+            index_before = _index_bytes(repo)
+            tempfile_mod.mkdtemp = _remember
+            this._remove_temp_tree = _locked
+            locked_buf = io.StringIO()
+            try:
+                with redirect_stderr(locked_buf):
+                    locked = _git_revision(repo)
+            finally:
+                this._remove_temp_tree = real_remove
+                tempfile_mod.mkdtemp = real_mkdtemp
+            locked_text = locked_buf.getvalue()
+            assert locked["commit"] == head and locked["tree_sha256"] == expected
+            assert "cleanup failed" in locked_text
+            assert "being used by another process" in locked_text
+            assert "cleanup succeeded" not in locked_text
+            assert leaked and all(Path(path).exists() for path in leaked)
+            assert _object_rows(repo) == rows_before
+            assert _index_bytes(repo) == index_before
+            for path in leaked:
+                if Path(path).exists():
+                    real_remove(path)
+            leaked.clear()
+
+            def _fail_tree(args, **kwargs):
+                if "write-tree" in list(args):
+                    raise subprocess.CalledProcessError(128, list(args), stderr=b"fatal: write-tree failed")
+                return real_run(args, **kwargs)
+
+            tempfile_mod.mkdtemp = _remember
+            this._remove_temp_tree = _locked
+            subprocess.run = _fail_tree
+            fail_buf = io.StringIO()
+            try:
+                with redirect_stderr(fail_buf):
+                    failed = _git_revision(repo)
+            finally:
+                subprocess.run = real_run
+                this._remove_temp_tree = real_remove
+                tempfile_mod.mkdtemp = real_mkdtemp
+            assert failed["commit"] is None and failed["tree_sha256"] is None
+            assert "cleanup failed" in fail_buf.getvalue()
+            assert "cleanup succeeded" not in fail_buf.getvalue()
+            assert type(failed) is dict
+            for path in leaked:
+                if Path(path).exists():
+                    real_remove(path)
+            leaked.clear()
+
+            def _interrupt(args, **kwargs):
+                if "write-tree" in list(args):
+                    raise KeyboardInterrupt()
+                return real_run(args, **kwargs)
+
+            tempfile_mod.mkdtemp = _remember
+            this._remove_temp_tree = _locked
+            subprocess.run = _interrupt
+            interrupt_buf = io.StringIO()
+            caught = None
+            try:
+                with redirect_stderr(interrupt_buf):
+                    try:
+                        _git_revision(repo)
+                    except KeyboardInterrupt as exc:
+                        caught = exc
+                    except OSError as exc:
+                        caught = exc
+            finally:
+                subprocess.run = real_run
+                this._remove_temp_tree = real_remove
+                tempfile_mod.mkdtemp = real_mkdtemp
+                for path in list(leaked):
+                    if Path(path).exists():
+                        real_remove(path)
+            assert isinstance(caught, KeyboardInterrupt)
+            assert "cleanup failed" in interrupt_buf.getvalue()
+            assert "cleanup succeeded" not in interrupt_buf.getvalue()
+            assert _object_rows(repo) == rows_before
+            assert _index_bytes(repo) == index_before
+
+        with _temporary_git_repo() as (repo, git):
+            git(["config", "core.autocrlf", "true"])
+            git(["config", "core.safecrlf", "true"])
+            (repo / "tracked.txt").write_bytes(b"v1\r\n")
+            git(["add", "tracked.txt"])
+            git(["commit", "-m", "init"])
+            head = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo, capture_output=True, check=True, env=_quiet_git_env(),
+            ).stdout.decode("utf-8", "replace").strip()
+            expected = _head_tree(repo)
+            rows_before = _object_rows(repo)
+            index_before = _index_bytes(repo)
+            (repo / "tracked.txt").write_bytes(b"v1\r\nmore\n")
+            refused = _git_revision(repo)
+            assert refused["commit"] is None and refused["tree_sha256"] is None
+            assert _object_rows(repo) == rows_before
+            assert _index_bytes(repo) == index_before
+            (repo / "tracked.txt").write_bytes(b"v1\r\n")
+            restored = _git_revision(repo)
+            assert restored["commit"] == head and restored["tree_sha256"] == expected
+            assert _object_rows(repo) == rows_before
+            assert _index_bytes(repo) == index_before
+
+            import threading
+            import time
+            private = Path(tempfile.mkdtemp(prefix="verifix-lockroot-"))
+            old_tempdir = tempfile_mod.tempdir
+            old_cwd = os.getcwd()
+            held = {}
+
+            def _watch_lock():
+                while not held.get("stop"):
+                    for child in private.glob("verifix-objects-*"):
+                        if not child.is_dir():
+                            continue
+                        try:
+                            if os.name == "nt":
+                                handle = open(child / "locked.bin", "wb")
+                                handle.write(b"locked")
+                                handle.flush()
+                                held["handle"] = handle
+                            else:
+                                os.chdir(child)
+                                held["chdir"] = True
+                            held["path"] = child
+                            return
+                        except OSError:
+                            continue
+                    time.sleep(0.001)
+
+            tempfile_mod.tempdir = str(private)
+            thread = threading.Thread(target=_watch_lock, daemon=True)
+            thread.start()
+            locked_buf = io.StringIO()
+            try:
+                with redirect_stderr(locked_buf):
+                    locked = _git_revision(repo)
+                locked_text = locked_buf.getvalue()
+                assert locked["commit"] == head and locked["tree_sha256"] == expected
+                assert "cleanup failed" in locked_text
+                assert "cleanup succeeded" not in locked_text
+                if os.name == "nt":
+                    assert "WinError 32" in locked_text
+                    assert "being used by another process" in locked_text
+                else:
+                    assert "WinError" not in locked_text
+                assert held.get("path") and Path(held["path"]).exists()
+                assert _object_rows(repo) == rows_before
+                assert _index_bytes(repo) == index_before
+            finally:
+                held["stop"] = True
+                thread.join(timeout=5)
+                tempfile_mod.tempdir = old_tempdir
+                if held.get("handle") is not None:
+                    held["handle"].close()
+                if held.get("chdir"):
+                    os.chdir(old_cwd)
+                if private.exists():
+                    _remove_temp_tree(private)
+
+            (repo / "tracked.txt").write_bytes(b"v1\r\nmore\n")
+            private = Path(tempfile.mkdtemp(prefix="verifix-lockroot-"))
+            held = {}
+            tempfile_mod.tempdir = str(private)
+            thread = threading.Thread(target=_watch_lock, daemon=True)
+            thread.start()
+            fail_buf = io.StringIO()
+            caught = None
+            try:
+                with redirect_stderr(fail_buf):
+                    try:
+                        failed = _git_revision(repo)
+                    except OSError as exc:
+                        caught = exc
+                        failed = None
+                fail_text = fail_buf.getvalue()
+                assert caught is None
+                assert failed["commit"] is None and failed["tree_sha256"] is None
+                assert "cleanup failed" in fail_text
+                assert "cleanup succeeded" not in fail_text
+                if os.name == "nt":
+                    assert "WinError 32" in fail_text
+                else:
+                    assert "WinError" not in fail_text
+                assert _object_rows(repo) == rows_before
+                assert _index_bytes(repo) == index_before
+            finally:
+                held["stop"] = True
+                thread.join(timeout=5)
+                tempfile_mod.tempdir = old_tempdir
+                if held.get("handle") is not None:
+                    held["handle"].close()
+                if held.get("chdir"):
+                    os.chdir(old_cwd)
+                if private.exists():
+                    _remove_temp_tree(private)
+
+        with _temporary_git_repo() as (repo, git):
+            (repo / "tracked.txt").write_bytes(b"v1\n")
+            git(["add", "tracked.txt"])
+            git(["commit", "-m", "init"])
+            objects = repo / ".git" / "objects"
+            rows_before = _object_rows(repo)
+            index_before = _index_bytes(repo)
+            names_before = sorted(path.relative_to(objects).as_posix() for path in objects.rglob("*"))
+            old_tempdir = tempfile_mod.tempdir
+            saved_env = {name: os.environ.get(name) for name in ("TMP", "TEMP", "TMPDIR")}
+            tempfile_mod.tempdir = None
+            os.environ["TMP"] = str(objects)
+            os.environ["TEMP"] = str(objects)
+            os.environ["TMPDIR"] = str(objects)
+            inside_buf = io.StringIO()
+            try:
+                with redirect_stderr(inside_buf):
+                    inside = _git_revision(repo)
+            finally:
+                tempfile_mod.tempdir = old_tempdir
+                for name, value in saved_env.items():
+                    if value is None:
+                        os.environ.pop(name, None)
+                    else:
+                        os.environ[name] = value
+            names_after = sorted(path.relative_to(objects).as_posix() for path in objects.rglob("*"))
+            assert inside["commit"] is None and inside["tree_sha256"] is None
+            assert "resolves inside" in inside_buf.getvalue()
+            assert "cleanup succeeded" not in inside_buf.getvalue()
+            assert names_after == names_before
+            assert not any("verifix-" in name for name in names_after)
+            assert _object_rows(repo) == rows_before
+            assert _index_bytes(repo) == index_before
+            assert (objects / "pack").is_dir() and (objects / "info").is_dir()
+
+        def _stage_modes(repo):
+            blob = subprocess.run(
+                ["git", "ls-files", "-s", "-z"],
+                cwd=repo, capture_output=True, check=True, env=_quiet_git_env(),
+            ).stdout
+            parsed = _parse_stage_listing(blob)
+            assert parsed is not None
+            return parsed
+
+        def _init_embedded(path):
+            subprocess.run(["git", "init"], cwd=path, check=True, capture_output=True, env=_quiet_git_env())
+            for key, value in (
+                ("user.email", "verifix-test@example.com"),
+                ("user.name", "verifix-test"),
+                ("commit.gpgsign", "false"),
+                ("core.autocrlf", "false"),
+            ):
+                subprocess.run(
+                    ["git", "config", key, value],
+                    cwd=path, check=True, capture_output=True, env=_quiet_git_env(),
+                )
+
+        with _temporary_git_repo() as (repo, git):
+            (repo / "tracked.txt").write_bytes(b"v1\n")
+            git(["add", "tracked.txt"])
+            git(["commit", "-m", "init"])
+            sub = repo / "sub"
+            sub.mkdir()
+            _init_embedded(sub)
+            (sub / "inner.txt").write_bytes(b"inner\n")
+            subprocess.run(
+                ["git", "add", "inner.txt"],
+                cwd=sub, check=True, capture_output=True, env=_quiet_git_env(),
+            )
+            subprocess.run(
+                ["git", "commit", "-m", "inner"],
+                cwd=sub, check=True, capture_output=True, env=_quiet_git_env(),
+            )
+            git(["add", "sub"])
+            assert any(mode == "160000" and name == "sub" for mode, name in _stage_modes(repo))
+            rows_before = _object_rows(repo)
+            index_before = _index_bytes(repo)
+            staged_buf = io.StringIO()
+            with redirect_stderr(staged_buf):
+                staged_rev = _git_revision(repo)
+            assert staged_rev["commit"] is None and staged_rev["tree_sha256"] is None
+            assert "160000" in staged_buf.getvalue()
+            assert _object_rows(repo) == rows_before
+            assert _index_bytes(repo) == index_before
+            git(["commit", "-m", "add sub"])
+
+            def _gitlink_object(path):
+                blob = subprocess.run(
+                    ["git", "ls-files", "-s", "-z"],
+                    cwd=path, capture_output=True, check=True, env=_quiet_git_env(),
+                ).stdout
+                for part in blob.split(b"\0"):
+                    if not part or b"\t" not in part:
+                        continue
+                    meta, name = part.split(b"\t", 1)
+                    if name.decode("utf-8", "surrogateescape") == "sub":
+                        return meta.split(b" ")[1]
+                return None
+
+            first_object = _gitlink_object(repo)
+            (sub / "inner.txt").write_bytes(b"changed\n")
+            subprocess.run(
+                ["git", "add", "inner.txt"],
+                cwd=sub, check=True, capture_output=True, env=_quiet_git_env(),
+            )
+            subprocess.run(
+                ["git", "commit", "-m", "change"],
+                cwd=sub, check=True, capture_output=True, env=_quiet_git_env(),
+            )
+            git(["add", "sub"])
+            second_object = _gitlink_object(repo)
+            assert first_object and second_object and first_object != second_object
+            assert any(mode == "160000" and name == "sub" for mode, name in _stage_modes(repo))
+            changed_buf = io.StringIO()
+            with redirect_stderr(changed_buf):
+                changed_rev = _git_revision(repo)
+            assert changed_rev["commit"] is None and changed_rev["tree_sha256"] is None
+            assert "160000" in changed_buf.getvalue()
+
+        with _temporary_git_repo() as (repo, git):
+            (repo / "tracked.txt").write_bytes(b"v1\n")
+            git(["add", "tracked.txt"])
+            git(["commit", "-m", "init"])
+            nested = repo / "nested"
+            nested.write_bytes(b"file\n")
+            git(["add", "--", "nested"])
+            nested.unlink()
+            nested.mkdir()
+            _init_embedded(nested)
+            assert all(mode != "160000" for mode, _name in _stage_modes(repo))
+            directory_buf = io.StringIO()
+            with redirect_stderr(directory_buf):
+                directory_rev = _git_revision(repo)
+            assert directory_rev["commit"] is None and directory_rev["tree_sha256"] is None
+            assert ".git" in directory_buf.getvalue()
+
+        def _refuse_temp_location(location, repo, rows, index_bytes):
+            old_tempdir = tempfile_mod.tempdir
+            tempfile_mod.tempdir = str(location)
+            cmds = []
+            real_run = subprocess.run
+
+            def _watch(args, **kwargs):
+                cmds.append(list(args))
+                return real_run(args, **kwargs)
+
+            subprocess.run = _watch
+            buf = io.StringIO()
+            try:
+                with redirect_stderr(buf):
+                    rev = _git_revision(repo)
+            finally:
+                subprocess.run = real_run
+                tempfile_mod.tempdir = old_tempdir
+            assert rev["commit"] is None and rev["tree_sha256"] is None, buf.getvalue()
+            assert "resolves inside" in buf.getvalue()
+            assert "cleanup succeeded" not in buf.getvalue()
+            assert not any(
+                "read-tree" in cmd or "write-tree" in cmd or "add" in cmd
+                for cmd in cmds
+            )
+            assert _object_rows(repo) == rows
+            assert _index_bytes(repo) == index_bytes
+
+        with _temporary_git_repo() as (repo, git):
+            (repo / "tracked.txt").write_bytes(b"v1\n")
+            git(["add", "tracked.txt"])
+            git(["commit", "-m", "init"])
+            git(["repack", "-ad"])
+            assert _git_revision(repo)["tree_sha256"] == _head_tree(repo)
+            objects = repo / ".git" / "objects"
+            rows_before = _object_rows(repo)
+            index_before = _index_bytes(repo)
+            sibling = repo / ".git" / "objects-sibling"
+            sibling.mkdir()
+            assert _inside_or_alias(objects / "pack", objects)
+            assert not _inside_or_alias(sibling, objects)
+            old_tempdir = tempfile_mod.tempdir
+            tempfile_mod.tempdir = str(sibling)
+            try:
+                sibling_rev = _git_revision(repo)
+            finally:
+                tempfile_mod.tempdir = old_tempdir
+            assert sibling_rev["tree_sha256"] == _head_tree(repo)
+            assert sibling_rev["commit"]
+            assert _object_rows(repo) == rows_before
+            assert _index_bytes(repo) == index_before
+            linked_parent = Path(tempfile.mkdtemp(prefix="verifix-linked-"))
+            linked = linked_parent / "wt"
+            try:
+                git(["worktree", "add", "--detach", str(linked), "HEAD"])
+                linked_rev = _git_revision(linked)
+                assert linked_rev["commit"] == sibling_rev["commit"]
+                assert linked_rev["tree_sha256"] == sibling_rev["tree_sha256"]
+                assert _object_rows(repo) == rows_before
+                assert _index_bytes(repo) == index_before
+            finally:
+                subprocess.run(
+                    ["git", "worktree", "remove", "--force", str(linked)],
+                    cwd=repo, capture_output=True, env=_quiet_git_env(),
+                )
+                if linked_parent.exists():
+                    _remove_temp_tree(linked_parent)
+            if os.name == "nt":
+                extended = "\\\\?\\" + os.path.normpath(str(objects))
+                drive, rest = os.path.splitdrive(os.path.abspath(objects))
+                unc = "\\\\localhost\\" + drive[0].upper() + "$" + rest
+                junction = repo.parent / "objects-junction"
+                created = subprocess.run(
+                    ["cmd", "/c", "mklink", "/J", str(junction), str(objects)],
+                    capture_output=True,
+                )
+                assert created.returncode == 0, created.stderr.decode("utf-8", "replace")
+                try:
+                    assert os.path.samefile(extended, objects)
+                    assert os.path.samefile(junction, objects)
+                    assert os.path.exists(unc) and os.path.samefile(unc, objects)
+                    assert _inside_or_alias(extended, objects)
+                    assert _inside_or_alias(os.path.join(extended, "pack"), objects)
+                    assert _inside_or_alias(junction, objects)
+                    assert _inside_or_alias(unc, objects)
+                    assert not _inside_or_alias("\\\\?\\" + os.path.normpath(str(sibling)), objects)
+                    for location in (extended, junction, unc):
+                        _refuse_temp_location(location, repo, rows_before, index_before)
+                finally:
+                    if junction.exists():
+                        os.rmdir(junction)
+            else:
+                alias = repo.parent / "objects-alias"
+                os.symlink(objects, alias, target_is_directory=True)
+                try:
+                    assert os.path.samefile(alias, objects)
+                    assert _inside_or_alias(alias, objects)
+                    _refuse_temp_location(alias, repo, rows_before, index_before)
+                finally:
+                    if alias.exists() or alias.is_symlink():
+                        alias.unlink()
+
+        with _temporary_git_repo() as (repo, git):
+            (repo / "tracked.txt").write_bytes(b"v1\n")
+            git(["add", "tracked.txt"])
+            git(["commit", "-m", "init"])
+            head = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo, capture_output=True, check=True, env=_quiet_git_env(),
+            ).stdout.decode("utf-8", "replace").strip()
+            expected = _head_tree(repo)
+            rows_before = _object_rows(repo)
+            index_before = _index_bytes(repo)
+            real_remove = os.remove
+
+            def _deny_index(path):
+                if "verifix-index-" in str(path):
+                    if os.name == "nt":
+                        raise PermissionError(
+                            32,
+                            "The process cannot access the file because it is being used by another process",
+                            str(path),
+                        )
+                    raise PermissionError(13, "Permission denied", str(path))
+                return real_remove(path)
+
+            def _with_index_failure():
+                temp_dir = Path(tempfile_mod.gettempdir())
+                before_files = set(temp_dir.glob("verifix-index-*"))
+                os.remove = _deny_index
+                buf = io.StringIO()
+                try:
+                    with redirect_stderr(buf):
+                        try:
+                            rev = _git_revision(repo)
+                        except OSError as exc:
+                            return exc, buf.getvalue()
+                    return rev, buf.getvalue()
+                finally:
+                    os.remove = real_remove
+                    # The denied removal leaves this call's index behind; the
+                    # test, not production, owns that file.
+                    for leftover in set(temp_dir.glob("verifix-index-*")) - before_files:
+                        try:
+                            real_remove(leftover)
+                        except OSError:
+                            pass
+
+            outcome, text = _with_index_failure()
+            assert not isinstance(outcome, OSError)
+            assert outcome["commit"] == head and outcome["tree_sha256"] == expected
+            assert "temporary index cleanup failed" in text
+            assert "cleanup succeeded" not in text
+            if os.name == "nt":
+                assert "being used by another process" in text
+            else:
+                assert "WinError" not in text
+                assert "PermissionError" in text
+            assert _object_rows(repo) == rows_before
+            assert _index_bytes(repo) == index_before
+            if os.name == "nt":
+                private = Path(tempfile.mkdtemp(prefix="verifix-index-lock-"))
+                old_tempdir = tempfile_mod.tempdir
+                held = {}
+
+                def _hold_index():
+                    while not held.get("stop"):
+                        for child in private.glob("verifix-index-*"):
+                            if not child.is_file():
+                                continue
+                            try:
+                                held["handle"] = open(child, "rb")
+                                held["path"] = child
+                                return
+                            except OSError:
+                                continue
+                        time.sleep(0.001)
+
+                tempfile_mod.tempdir = str(private)
+                thread = threading.Thread(target=_hold_index, daemon=True)
+                thread.start()
+                real_buf = io.StringIO()
+                try:
+                    with redirect_stderr(real_buf):
+                        try:
+                            real_rev = _git_revision(repo)
+                        except OSError as exc:
+                            real_rev = exc
+                    real_text = real_buf.getvalue()
+                    assert not isinstance(real_rev, OSError)
+                    assert "temporary index cleanup failed" in real_text
+                    assert "WinError 32" in real_text
+                    assert "cleanup succeeded" not in real_text
+                    if real_rev["commit"] is None:
+                        assert real_rev["tree_sha256"] is None
+                    else:
+                        assert real_rev["commit"] == head and real_rev["tree_sha256"] == expected
+                    assert _object_rows(repo) == rows_before
+                    assert _index_bytes(repo) == index_before
+                finally:
+                    held["stop"] = True
+                    thread.join(timeout=5)
+                    tempfile_mod.tempdir = old_tempdir
+                    if held.get("handle") is not None:
+                        held["handle"].close()
+                    if private.exists():
+                        _remove_temp_tree(private)
+            git(["config", "core.autocrlf", "true"])
+            git(["config", "core.safecrlf", "true"])
+            (repo / "tracked.txt").write_bytes(b"v1\r\nmore\n")
+            failed, failed_text = _with_index_failure()
+            assert not isinstance(failed, OSError)
+            assert failed["commit"] is None and failed["tree_sha256"] is None
+            assert "temporary index cleanup failed" in failed_text
+            assert "cleanup succeeded" not in failed_text
+            if os.name != "nt":
+                assert "WinError" not in failed_text
+            assert _object_rows(repo) == rows_before
+            assert _index_bytes(repo) == index_before
+
+        project_index = (ROOT / ".git" / "index").read_bytes()
+        project_objects = _object_rows(ROOT)
+        _git_revision()
+        assert (ROOT / ".git" / "index").read_bytes() == project_index
+        assert _object_rows(ROOT) == project_objects
 
         def _refuse(git_rev, args, label, needle):
             this = sys.modules[__name__]
@@ -1799,6 +3366,18 @@ def _self_check():
                 "nonhex tree",
                 "current git_tree_sha256",
             )
+            _refuse(
+                {"commit": "a" * 40, "tree_sha256": "d" * 64},
+                fresh_args,
+                "missing untracked_source",
+                "current untracked_source",
+            )
+            _refuse(
+                {"commit": "a" * 40, "tree_sha256": "d" * 64, "untracked_source": None},
+                fresh_args,
+                "untracked_source none",
+                "current untracked_source",
+            )
             assert not fresh_out.parent.exists()
             resume_root = Path(tempfile.mkdtemp())
             resume_out = resume_root / "resume.json"
@@ -1836,8 +3415,14 @@ def _self_check():
                         this._git_revision = real
                     assert rc == 2 and needle in buf.getvalue(), buf.getvalue()
 
-                _differ({"commit": "b" * 40, "tree_sha256": "d" * 64}, "git_commit differ")
-                _differ({"commit": "a" * 40, "tree_sha256": "e" * 64}, "git_tree_sha256 differ")
+                _differ(
+                    {"commit": "b" * 40, "tree_sha256": "d" * 64, "untracked_source": []},
+                    "git_commit differ",
+                )
+                _differ(
+                    {"commit": "a" * 40, "tree_sha256": "e" * 64, "untracked_source": []},
+                    "git_tree_sha256 differ",
+                )
                 assert load_state(resume_out)["completed"] == 0
                 assert not resume_out.exists()
                 assert not episodes_dir_for(resume_out).exists()

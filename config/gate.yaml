@@ -1,5 +1,14 @@
-version: 1
+version: 2
 frozen: true
+
+# Which agent predictions the consistency check compares (protocol v1 §5).
+#   discriminating: only the OAM tests the gate selected to separate the
+#     proposed cause from alternatives that need a different fix. A missing
+#     prediction for such a test, or no discriminating test at all, is
+#     missing evidence (ESCALATE). A mismatch on one is negative evidence (BLOCK).
+#   all: every prediction the agent made (rule used through pilot v4; ablation).
+# pilot_v0 mode always uses `all`.
+consistency_scope: discriminating
 
 # Deterministic threshold grading until a later experiment justifies a model.
 learned_grader: false

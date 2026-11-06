@@ -336,13 +336,19 @@ def run_episode(
     parts = dict(default_components())
     if _components:
         parts.update(_components)
+    real_reset = parts["reset_all"] is inj.reset_all
     episode_id = str(uuid.uuid4())
     started = datetime.now(timezone.utc).isoformat()
     noise_applied = parts["apply_noise"](net, noise_id, links)
     correlation_ids = []
+    record = None
 
     try:
-        parts["reset_all"](net)
+        pre_reset = parts["reset_all"](net)
+        # Background traffic is on here, so only errors and residual count.
+        problem = teardown_problem(pre_reset, real_reset, check_health=False)
+        if problem:
+            raise TopologyContaminated(f"pre-episode reset: {problem}", pre_reset)
         if compound_id:
             comp = parts["inject_compound"](net, compound_id, seed=seed)
             correlation_ids = comp["correlation_ids"]
@@ -486,8 +492,62 @@ def run_episode(
         record["completed_at"] = datetime.now(timezone.utc).isoformat()
         return record
     finally:
-        parts["clear_noise"](net, noise_applied, links)
-        parts["reset_all"](net, baseline=True)
+        clear_error = None
+        try:
+            parts["clear_noise"](net, noise_applied, links)
+        except Exception as exc:
+            clear_error = f"clear_noise: {type(exc).__name__}: {exc}"
+        teardown = parts["reset_all"](net, baseline=True)
+        problem = teardown_problem(teardown, real_reset, check_health=True)
+        if clear_error:
+            problem = f"{problem}; {clear_error}" if problem else clear_error
+        if isinstance(record, dict):
+            record["teardown"] = teardown_summary(teardown, problem)
+        if problem:
+            # Never run another episode on a topology that may still carry
+            # this one's fault. The caller stops; the operator resets.
+            raise TopologyContaminated(f"episode teardown: {problem}", teardown, record=record)
+
+
+class TopologyContaminated(RuntimeError):
+    """Reset or cleanup failed. The topology may still carry a fault.
+
+    Runners must stop instead of recording an infra error and continuing.
+    """
+
+    def __init__(self, message, report=None, record=None):
+        super().__init__(message)
+        self.report = report
+        self.record = record
+
+
+def teardown_problem(report, real_reset, check_health=True):
+    """Why a reset report shows a possibly contaminated topology, or None."""
+    if not isinstance(report, dict):
+        return "reset returned no report" if real_reset else None
+    problems = []
+    if report.get("errors"):
+        problems.append("reset errors " + json.dumps(report["errors"], default=str)[:300])
+    if report.get("residual"):
+        problems.append("residual changes " + json.dumps(report["residual"], default=str)[:300])
+    if check_health and report.get("healthy") is False:
+        problems.append(f"hostA->hostB loss {report.get('loss_percent')}% after reset")
+    if check_health and real_reset and "healthy" not in report:
+        problems.append("reset report has no health check")
+    return "; ".join(problems) or None
+
+
+def teardown_summary(report, problem):
+    report = report if isinstance(report, dict) else {}
+    return {
+        "clean": problem is None,
+        "problem": problem,
+        "cleared": len(report.get("cleared") or []),
+        "errors": report.get("errors") or [],
+        "residual": report.get("residual") or {},
+        "healthy": report.get("healthy"),
+        "loss_percent": report.get("loss_percent"),
+    }
 
 
 def aggregate_episode_costs(directory=None):
@@ -1136,7 +1196,10 @@ def _self_check():
     assert cfg.get("require_signatures") is False
     t1_ok = [{"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0, "latency_ms": 10.0}]
     vacuous = gate_decide(None, predicted_ok, healthy, t1_ok, mode="full", run_missing_tests=False)
-    assert vacuous["decision"] == "allow" and vacuous["reason"] == "all checks passed", vacuous
+    # consistency_scope=discriminating: no discriminating test is missing
+    # evidence, so a risky action escalates (protocol v1 §5, rule 2).
+    assert vacuous["decision"] == "escalate", vacuous
+    assert vacuous["reason"] == "insufficient evidence: no discriminating test for the proposed cause", vacuous
     assert vacuous.get("snapshot_fingerprint")
     assert vacuous["log"]["learned_grader"] is False
     assert vacuous["log"]["frozen"] is True
@@ -1170,7 +1233,9 @@ def _self_check():
         budget_seconds=0.1,
     )
     assert tight["decision"] == "escalate", tight
-    assert tight["reason"] in {"no affordable discriminating test", "inseparable", "no discrimination"}, tight
+    assert tight["reason"] in {"no affordable discriminating test", "inseparable", "no discrimination"} or tight[
+        "reason"
+    ].startswith("insufficient evidence"), tight
     v0_same = gate_decide(
         None,
         predicted_ok,
@@ -1416,7 +1481,11 @@ def _self_check():
     assert f1_ok["passed"], f1_ok
     f1_gate = gate_decide(None, f1_vocab, healthy, f1_obs, mode="full", run_missing_tests=False)
     assert f1_gate["reason"] != "consistency failed", f1_gate
-    assert (f1_gate.get("checks") or {}).get("consistency", {}).get("passed") is True, f1_gate
+    # Healthy snapshot: no alternative needs a different fix, so there is no
+    # discriminating test; consistency_scope=discriminating escalates (fail-safe).
+    f1_consistency = (f1_gate.get("checks") or {}).get("consistency", {})
+    assert f1_consistency.get("scope") == "discriminating" and f1_consistency.get("discriminating_tests") == [], f1_gate
+    assert f1_gate["decision"] == "escalate" and "no discriminating test" in f1_gate["reason"], f1_gate
     f1_wrong_t7 = dict(
         f1_vocab,
         causes=[{
@@ -1431,7 +1500,8 @@ def _self_check():
     assert not f1_t7["passed"], f1_t7
     assert any(row.get("test_id") == "T7_route_check" and row.get("observed") == "primary" for row in f1_t7["mismatches"]), f1_t7
     f1_t7_gate = gate_decide(None, f1_wrong_t7, healthy, f1_obs, mode="full", run_missing_tests=False)
-    assert f1_t7_gate["decision"] == "block" and f1_t7_gate["reason"] == "consistency failed", f1_t7_gate
+    # T7 is not a discriminating test here: a wrong side-prediction cannot block.
+    assert f1_t7_gate["decision"] == "escalate" and f1_t7_gate["reason"] != "consistency failed", f1_t7_gate
     f1_t9 = check_consistency(
         {
             **f1_vocab,
@@ -1610,7 +1680,9 @@ def _self_check():
         mode="full",
         run_missing_tests=False,
     )
-    assert unrun_gate["decision"] == "block" and unrun_gate["reason"] == "consistency failed", unrun_gate
+    # Unchecked predictions are missing evidence: escalate, not block.
+    assert unrun_gate["decision"] == "escalate", unrun_gate
+    assert unrun_gate["reason"].startswith("insufficient evidence"), unrun_gate
     assert unrun_gate["checks"]["consistency"]["reason"] == "no checked predictions"
 
     from agent.validate import validate_proposal as _validate_proposal

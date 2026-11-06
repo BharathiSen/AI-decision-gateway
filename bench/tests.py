@@ -60,10 +60,61 @@ LEGACY_BATTERY = {"ping_count": 3, "ping_interval": 0.2, "speed_seconds": 1}
 _REPLY_RTT = re.compile(r"time[=<]([\d.]+) ms")
 
 
+_PING_STATS = re.compile(r"(\d+) packets transmitted, (\d+) (?:packets )?received")
+# Not a network measurement: the probe itself did not run as intended.
+PING_TOOL_FAILURES = ("dns", "command_error")
+PING_STATUSES = ("ok", "loss", "no_reply", "unreachable", "frag_needed") + PING_TOOL_FAILURES
+
+
+def classify_ping(output):
+    """What one ping run observed, or why it could not observe anything.
+
+    Network outcomes: ok, loss (some replies), no_reply (every request timed
+    out), unreachable (ICMP unreachable came back), frag_needed (DF packet
+    too big for a hop or the local interface). Tool failures: dns (name did
+    not resolve) and command_error (no output, no statistics line, bad
+    arguments, or ping missing). A tool failure says nothing about the path.
+    """
+    text = output or ""
+    low = text.lower()
+    if not text.strip():
+        return "command_error"
+    if any(token in low for token in (
+        "unknown host", "name or service not known", "temporary failure in name resolution",
+        "no address associated",
+    )):
+        return "dns"
+    if any(token in low for token in (
+        "command not found", "usage: ping", "invalid argument", "bad number", "invalid value",
+        "operation not permitted", "permission denied", "cannot assign requested address",
+    )):
+        return "command_error"
+    stats = _PING_STATS.search(text)
+    if "frag needed" in low or "message too long" in low:
+        return "frag_needed"
+    if not stats:
+        return "command_error"
+    sent, received = int(stats.group(1)), int(stats.group(2))
+    if sent == 0:
+        return "command_error"
+    if received == 0:
+        return "unreachable" if "unreachable" in low else "no_reply"
+    return "loss" if received < sent else "ok"
+
+
+def ping_error(status):
+    """`error` text for a tool failure, else None."""
+    return f"ping {status}" if status in PING_TOOL_FAILURES else None
+
+
 def _parse_ping(output):
     """latency_ms is the median reply RTT. One VM scheduler stall moves the
     average of 10 pings by tens of ms; a delay fault moves every reply.
     The ping summary average is the fallback when no reply lines parse.
+
+    ping_status separates a dead path from a ping that never ran. Loss stays
+    100 for both, so graded outcomes match the frozen observability matrix;
+    callers mark a tool failure with `error` so it is missing evidence.
     """
     output = output or ""
     loss_match = re.search(r"(\d+(?:\.\d+)?)% packet loss", output)
@@ -75,6 +126,7 @@ def _parse_ping(output):
         "latency_ms": statistics.median(rtts) if rtts else average,
         "latency_avg_ms": average,
         "rtt_ms": rtts,
+        "ping_status": classify_ping(output),
         "raw": output,
     }
 
@@ -110,7 +162,7 @@ def T1_e2e_ping(net, count=10, interval=0.2):
     parsed["connectivity"] = parsed["packet_loss_percent"] < 100.0
     parsed["duration_seconds"] = time.monotonic() - t0
     parsed["probes"] = [_icmp_probe(count)]
-    return {"test_id": "T1_e2e_ping", "error": None, **parsed}
+    return {"test_id": "T1_e2e_ping", "error": ping_error(parsed["ping_status"]), **parsed}
 
 
 def _hop_ping(net, src, dst_ip, count=10, interval=0.2):
@@ -137,6 +189,11 @@ def T2_hop_ping(net, path="primary", count=10, interval=0.2):
     primary = _ping_hops(net, HOPS, count=count, interval=interval)
     backup = _ping_hops(net, HOPS_BACKUP, count=count, interval=interval)
     selected = primary if path != "backup" else backup
+    failed = sorted({
+        f"{hop.get('src')}->{hop.get('dst_ip')}: {hop.get('ping_status')}"
+        for hop in primary + backup
+        if hop.get("ping_status") in PING_TOOL_FAILURES
+    })
     return {
         "test_id": "T2_hop_ping",
         "path": path,
@@ -145,7 +202,7 @@ def T2_hop_ping(net, path="primary", count=10, interval=0.2):
         "hops_backup": backup,
         "duration_seconds": time.monotonic() - t0,
         "probes": [_icmp_probe((len(HOPS) + len(HOPS_BACKUP)) * count)],
-        "error": None,
+        "error": ("ping tool failure: " + "; ".join(failed)) if failed else None,
     }
 
 
@@ -160,14 +217,21 @@ def T4_mtu(net):
     )
     # Match the loss number. A substring check treats "100% packet loss"
     # as success because it contains "0% packet loss".
-    loss = _parse_ping(out)["packet_loss_percent"]
+    parsed = _parse_ping(out)
+    loss = parsed["packet_loss_percent"]
+    status = parsed["ping_status"]
+    # df_ok/mtu_fail stay the graded tokens the frozen matrix was built with.
+    # ping_status says why: frag_needed is MTU evidence; no_reply/unreachable
+    # is a dead path that also fails a DF ping; a tool failure is no evidence.
     return {
         "test_id": "T4_mtu",
         "df_ping_ok": loss == 0.0,
+        "ping_status": status,
+        "mtu_evidence": status == "frag_needed",
         "raw": out,
         "duration_seconds": time.monotonic() - t0,
         "probes": [_icmp_probe(count, payload)],
-        "error": None,
+        "error": ping_error(status),
     }
 
 
@@ -1013,6 +1077,82 @@ def _check_one_way():
         globals()["run_in_node"] = saved
 
 
+def _check_ping_classification():
+    """T4/T1 ping outcomes: real outputs from iputils ping on Linux."""
+    ok = (
+        "PING 10.0.4.2 (10.0.4.2) 56(84) bytes of data.\n"
+        "64 bytes from 10.0.4.2: icmp_seq=1 ttl=62 time=40.1 ms\n"
+        "--- 10.0.4.2 ping statistics ---\n"
+        "5 packets transmitted, 5 received, 0% packet loss, time 801ms\n"
+        "rtt min/avg/max/mdev = 40.1/41.0/42.0/0.6 ms\n"
+    )
+    lossy = ok.replace("5 received, 0% packet loss", "3 received, 40% packet loss")
+    timeout = (
+        "PING 10.0.4.2 (10.0.4.2) 1400(1428) bytes of data.\n\n--- 10.0.4.2 ping statistics ---\n"
+        "5 packets transmitted, 0 received, 100% packet loss, time 4093ms\n"
+    )
+    unreachable = (
+        "From 10.0.1.1 icmp_seq=1 Destination Net Unreachable\n--- 10.0.4.2 ping statistics ---\n"
+        "5 packets transmitted, 0 received, +5 errors, 100% packet loss, time 4005ms\n"
+    )
+    frag = (
+        "From 10.0.12.2 icmp_seq=1 Frag needed and DF set (mtu = 1000)\n--- 10.0.4.2 ping statistics ---\n"
+        "5 packets transmitted, 0 received, +5 errors, 100% packet loss, time 4005ms\n"
+    )
+    local_mtu = "ping: local error: message too long, mtu=1000\n"
+    dns = "ping: hostB: Name or service not known\n"
+    missing = "bash: line 1: ping: command not found\n"
+    cases = {
+        ok: "ok", lossy: "loss", timeout: "no_reply", unreachable: "unreachable",
+        frag: "frag_needed", local_mtu: "frag_needed", dns: "dns", missing: "command_error",
+        "": "command_error", "garbage without statistics\n": "command_error",
+    }
+    for text, want in cases.items():
+        got = classify_ping(text)
+        assert got == want, (want, got, text)
+        parsed = _parse_ping(text)
+        assert parsed["ping_status"] == want
+    # Loss stays 100 for a dead path and for a ping that never ran, so graded
+    # tokens match the frozen matrix; only `error` separates them.
+    assert _parse_ping(timeout)["packet_loss_percent"] == 100.0
+    assert _parse_ping(missing)["packet_loss_percent"] == 100.0
+    assert ping_error("no_reply") is None and ping_error("unreachable") is None
+    assert ping_error("frag_needed") is None and ping_error("dns") == "ping dns"
+    assert ping_error("command_error") == "ping command_error"
+
+    class _Node:
+        def __init__(self, ip):
+            self._ip = ip
+            self.name = "n"
+
+        def IP(self):
+            return self._ip
+
+    class _Net:
+        def get(self, name):
+            return _Node("10.0.4.2")
+
+    saved = globals()["run_in_node"]
+    try:
+        for text, df_ok, mtu_evidence, error in (
+            (ok, True, False, None),
+            (frag, False, True, None),
+            (timeout, False, False, None),
+            (dns, False, False, "ping dns"),
+            (missing, False, False, "ping command_error"),
+        ):
+            globals()["run_in_node"] = lambda node, cmd, timeout=60.0, _t=text: _t
+            row = T4_mtu(_Net())
+            assert row["df_ping_ok"] is df_ok and row["mtu_evidence"] is mtu_evidence, row
+            assert row["error"] == error, row
+            t1 = T1_e2e_ping(_Net())
+            assert t1["error"] == error and t1["ping_status"] == classify_ping(text)
+    finally:
+        globals()["run_in_node"] = saved
+    print("ping classification: PASS")
+
+
 if __name__ == "__main__":
     _check_costs()
     print("test cost: PASS")
+    _check_ping_classification()

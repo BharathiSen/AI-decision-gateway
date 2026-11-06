@@ -16,6 +16,7 @@ from gate.grader import grade_test
 _ROOT = Path(__file__).resolve().parent.parent
 _THRESHOLDS = _ROOT / "config" / "thresholds.yaml"
 _GATE = _ROOT / "config" / "gate.yaml"
+CONSISTENCY_SCOPES = ("discriminating", "all")
 REQUIRED_LINKS = ("r1-r2", "r2-r4", "r1-r3", "r3-r4")
 REQUIRED_ROUTES = (("r1", "10.0.4.0/24"), ("r4", "10.0.1.0/24"))
 KNOWN_PATHS = {"primary", "backup", "none"}
@@ -67,6 +68,9 @@ def load_gate_config():
     conf = doc.get("min_grade_confidence", 0.5)
     if not isinstance(conf, (int, float)) or isinstance(conf, bool) or not 0 <= conf <= 1:
         errors.append("gate config min_grade_confidence must be between 0 and 1")
+    scope = doc.get("consistency_scope")
+    if scope not in CONSISTENCY_SCOPES:
+        errors.append(f"gate config consistency_scope must be one of {list(CONSISTENCY_SCOPES)}")
     cfg = {
         "frozen": doc.get("frozen") is True,
         "learned_grader": bool(doc.get("learned_grader")),
@@ -74,6 +78,7 @@ def load_gate_config():
         "budget_seconds": float(budget) if isinstance(budget, (int, float)) and not isinstance(budget, bool) else 8.0,
         "reuse_max_age_seconds": float(age) if isinstance(age, (int, float)) and not isinstance(age, bool) else 120.0,
         "require_signatures": bool(doc.get("require_signatures")),
+        "consistency_scope": scope if scope in CONSISTENCY_SCOPES else None,
         "version": doc.get("version"),
     }
     return cfg, errors

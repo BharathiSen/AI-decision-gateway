@@ -3,4 +3,5 @@ backup_path: [r1, r3, r4]
 rules:
   - "Only reroute hostA<->hostB traffic between the pre-approved primary path (r1-r2-r4) and backup path (r1-r3-r4). No other path is permitted."
   - "Propose REROUTE only when telemetry shows the currently active path is degraded or down (packet loss, high latency, or a link that is administratively down) and the other path is currently healthy."
-  - "Propose DO_NOTHING when the active path is healthy, or when neither path is currently usable (rerouting to an equally broken path helps nobody)."
+  - "Propose DO_NOTHING only when the active path is healthy."
+  - "Propose ESCALATE when neither path is currently usable, when the evidence does not identify a fix, or when the cause is outside the catalog. Rerouting to an equally broken path helps nobody, and leaving a broken network unchanged is not a fix."
