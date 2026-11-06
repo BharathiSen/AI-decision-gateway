@@ -956,6 +956,18 @@ def _self_check():
     assert "latency_basis" not in fresh
     assert _average_latency_runs([saved, {"results": [fresh]}]) == 1
     assert "rtt_ms" in _slim({"results": [dict(fresh, raw="x")]})["results"][0]
+    # Failed readings keep their evidence; successful ones stay slim.
+    good_t10 = {"test_id": "T10_speed", "mbit_per_sec": 8.4, "raw": "x" * 5000}
+    bad_t10 = {"test_id": "T10_speed", "mbit_per_sec": None, "raw": "y" * 5000 + "Broken pipe",
+               "server_log": "iperf3: error - unable to receive"}
+    errored = {"test_id": "T1_e2e_ping", "packet_loss_percent": 100.0, "error": "ping command_error", "raw": "bash: ping: not found"}
+    slim = _slim({"results": [good_t10, bad_t10, errored]})["results"]
+    assert "raw" not in slim[0] and "failure_evidence" not in slim[0]
+    assert slim[1]["failure_evidence"]["raw"].endswith("Broken pipe")
+    assert len(slim[1]["failure_evidence"]["raw"]) == RAW_TAIL_CHARS
+    assert "unable to receive" in slim[1]["failure_evidence"]["server_log"]
+    assert "server_log" not in slim[1] and "raw" not in slim[1]
+    assert slim[2]["failure_evidence"]["raw"] == "bash: ping: not found"
     old_run = {"results": [
         {"test_id": "T1_e2e_ping", "latency_ms": 87.4, "packet_loss_percent": 0.0},
         {"test_id": "T2_hop_ping", "hops_primary": [{"latency_ms": 87.4, "packet_loss_percent": 0.0, "raw": stall}]},
@@ -994,10 +1006,37 @@ def _self_check():
     print("healthy calibration: PASS")
 
 
+RAW_TAIL_CHARS = 400
+
+
+def _failure_evidence(result):
+    """Raw-output tail for a result with no usable reading, else None.
+
+    Successful rows are stored without raw output to keep the checkpoint
+    small. A failed reading keeps the end of its output (and the iperf3
+    server log) so the cause can be diagnosed later; without it, 101 VM T10
+    failures could not be explained.
+    """
+    failed = bool(result.get("error")) or _no_reading(result)
+    if result.get("test_id") == "T10_speed" and accepted_speed(result) is None:
+        failed = True
+    if not failed:
+        return None
+    evidence = {}
+    for key in ("raw", "tcp_raw", "server_log"):
+        text = result.get(key)
+        if isinstance(text, str) and text.strip():
+            evidence[key] = text[-RAW_TAIL_CHARS:]
+    return evidence or {"raw": ""}
+
+
 def _slim(bundle):
     results = []
     for result in bundle.get("results") or []:
-        item = {key: value for key, value in result.items() if key not in ("raw", "tcp_raw")}
+        item = {key: value for key, value in result.items() if key not in ("raw", "tcp_raw", "server_log")}
+        evidence = _failure_evidence(result)
+        if evidence is not None:
+            item["failure_evidence"] = evidence
         queues = item.get("queues")
         if isinstance(queues, dict):
             item["queues"] = {

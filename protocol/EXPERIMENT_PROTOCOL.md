@@ -152,6 +152,7 @@ runners refuse protected paths and existing files.
 |---|---|---|
 | 0 offline gate | `sudo python3 bench/run_pilot.py --self-check` (+ the offline suite in readiness report F) | PASS required on the VM |
 | 1 fault validity | `sudo python3 bench/validate_faults.py --out results/fault_validation/<run-id>.json` | 10 inject/reset cycles × scenario × N0/N1/N2 |
+| 1b healthy calibration | `sudo python3 bench/calibrate_healthy.py --noise all --runs 200 --eval-runs 50 --until-done --samples results/calibration/<run-id>.jsonl --report results/calibration/<run-id>.json` | episode-battery healthy samples with failure evidence; must pass the acceptance rule below before step 2 |
 | 2 labels | `sudo python3 bench/verify_fault_observability.py --out-dir results/labels/<N>-s<seed> --noise <N> --seed <seed>` for N0,N1,N2 × seeds 1–3 | matrix, ground_truth.json, manifest per run |
 | 3 consensus | `python3 -m bench.label_audit results/labels/* --write results/labels/consensus.json` | trusted/untrusted labels |
 | 4 development episodes | `export VERIFIX_LABELS=results/labels/consensus.json` then `sudo --preserve-env=GROQ_API_KEY,VERIFIX_LABELS python3 bench/run_pilot.py --require-model --save-episodes --faults <dev ids> --seed <s> --out results/campaign/dev-<run-id>.json` | summary, manifest, state, episodes; the summary's `labels` block records which label file (and its SHA-256) scored the run |
@@ -159,6 +160,15 @@ runners refuse protected paths and existing files.
 | 6 held-out episodes | as step 4 with held-out ids, `--out results/campaign/heldout-<run-id>.json` | — |
 | 7 all arms | `python3 bench/run_experiments.py --episodes-dir <episodes dir> --out results/campaign/<run-id>_arms.json` | paired arm decisions |
 | 8 metrics/analysis | `python3 bench/metrics.py --episodes-dir … --out …`; `python3 bench/analyze.py --from … --out-dir …` | tables, CIs, paired tests, figures |
+
+**Calibration acceptance (step 1b, pre-registered).** Per traffic level: first-try
+T10 reading in ≥ 95% of runs (no backfill), and the error-inclusive held-out
+false-alarm rate ≤ 0.05. Why: the VM's existing N0 samples had a first-try T10
+reading in 14/250 runs, and the current N0 floor (8.09 Mbit, from 1-second
+probes) grades 3 of 4 healthy H0 episodes `slow` (episodes deliver 6.6–8.4
+Mbit over 3 s). If a level fails, T10 is excluded from evidence at that level
+for the whole campaign (decided now, not after results), and the exclusion is
+reported.
 
 Exit codes: 2 = refused (provenance, protected path, identity mismatch);
 3 = fatal agent error (fix, then `--resume`); 4 = reset/cleanup failed, topology
