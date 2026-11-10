@@ -69,7 +69,14 @@ def _parse_ping(output):
 def _ping_metrics(net, src_name="hostA", dst_name="hostB", count=4):
     src = net.get(src_name)
     dst = net.get(dst_name)
-    result = _parse_ping(run_in_node(src, f"ping -c {count} -W 1 {dst.IP()}"))
+    output = run_in_node(src, f"ping -c {count} -W 1 {dst.IP()}")
+    result = _parse_ping(output)
+    from bench.tests import classify_ping, ping_error
+
+    # A ping that never ran still reads as no connectivity (fail closed), but
+    # ping_status/ping_error say it was the probe, not the path.
+    result["ping_status"] = classify_ping(output)
+    result["ping_error"] = ping_error(result["ping_status"])
     result["connectivity"] = result["packet_loss_percent"] < 100.0
     return result
 

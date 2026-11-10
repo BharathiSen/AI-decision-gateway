@@ -9,13 +9,14 @@ from pathlib import Path
 import yaml
 
 from bench.contracts import TEST_IDS
-from bench.outcomes import load_thresholds, load_yaml_thresholds
+from bench.outcomes import load_thresholds, threshold_set_errors
 from gate import catalog, checks, selector
 from gate.grader import grade_test
 
 _ROOT = Path(__file__).resolve().parent.parent
-_THRESHOLDS = _ROOT / "config" / "thresholds.yaml"
+_NOISE = _ROOT / "config" / "noise.yaml"
 _GATE = _ROOT / "config" / "gate.yaml"
+CONSISTENCY_SCOPES = ("discriminating", "all")
 REQUIRED_LINKS = ("r1-r2", "r2-r4", "r1-r3", "r3-r4")
 REQUIRED_ROUTES = (("r1", "10.0.4.0/24"), ("r4", "10.0.1.0/24"))
 KNOWN_PATHS = {"primary", "backup", "none"}
@@ -38,9 +39,10 @@ def pipeline_interfaces():
 
 
 def _noise_ids():
-    with _THRESHOLDS.open(encoding="utf-8") as handle:
-        doc = yaml.safe_load(handle) or {}
-    return set((doc.get("by_noise_level") or {}).keys())
+    """Traffic levels defined in config/noise.yaml (thresholds may still be unaccepted)."""
+    from bench.traffic import load_noise_levels
+
+    return set(load_noise_levels().keys())
 
 
 def load_gate_config():
@@ -67,6 +69,9 @@ def load_gate_config():
     conf = doc.get("min_grade_confidence", 0.5)
     if not isinstance(conf, (int, float)) or isinstance(conf, bool) or not 0 <= conf <= 1:
         errors.append("gate config min_grade_confidence must be between 0 and 1")
+    scope = doc.get("consistency_scope")
+    if scope not in CONSISTENCY_SCOPES:
+        errors.append(f"gate config consistency_scope must be one of {list(CONSISTENCY_SCOPES)}")
     cfg = {
         "frozen": doc.get("frozen") is True,
         "learned_grader": bool(doc.get("learned_grader")),
@@ -74,6 +79,7 @@ def load_gate_config():
         "budget_seconds": float(budget) if isinstance(budget, (int, float)) and not isinstance(budget, bool) else 8.0,
         "reuse_max_age_seconds": float(age) if isinstance(age, (int, float)) and not isinstance(age, bool) else 120.0,
         "require_signatures": bool(doc.get("require_signatures")),
+        "consistency_scope": scope if scope in CONSISTENCY_SCOPES else None,
         "version": doc.get("version"),
     }
     return cfg, errors
@@ -134,15 +140,13 @@ def load_frozen_context(noise_id="N0"):
     thresholds = None
     if noise_id in known:
         try:
+            # Unaccepted calibration raises ThresholdsUnavailable: the gate
+            # escalates on "frozen inputs" instead of grading.
             thresholds = load_thresholds(noise_id)
-            yaml_level = load_yaml_thresholds(noise_id)
         except Exception as exc:
             errors.append(f"thresholds: {type(exc).__name__}: {exc}")
-            yaml_level = None
-        if not isinstance(thresholds, dict) or not thresholds:
-            errors.append("thresholds are empty")
-        if yaml_level is not None and yaml_level.get("T1_e2e_ping") is None and thresholds.get("T1_e2e_ping") is None:
-            errors.append("thresholds missing T1_e2e_ping")
+        else:
+            errors.extend(f"thresholds: {gap}" for gap in threshold_set_errors(thresholds))
 
     gate_cfg, gate_errors = load_gate_config()
     errors.extend(gate_errors)

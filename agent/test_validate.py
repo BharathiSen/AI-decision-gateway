@@ -65,10 +65,19 @@ def main():
     good = good_proposal()
     ok, errs = validate_proposal(good)
     check("well-formed proposal", ok, errs)
-    check("prompt version is v2", PROMPT_VERSION == "v2")
+    check("prompt version is v3", PROMPT_VERSION == "v3")
     check(
         "prompt sha256 is pinned",
-        PROMPT_SHA256 == "2cf074620e8f5c139382aaf91d0148ed3e38fec243650c222923f147e179b9ca",
+        PROMPT_SHA256 == "6c67154ad8355bed4bb2c24348f8ef466dcfcb3c2507d5de3c133860cdb2176f",
+    )
+    from agent.decision_agent import DEFAULT_POLICY_CONTEXT
+
+    rules = " ".join(DEFAULT_POLICY_CONTEXT.get("rules") or [])
+    check(
+        "policy never tells the agent to do nothing when neither path works",
+        "neither path is currently usable" in rules
+        and "Propose ESCALATE when neither path" in rules
+        and "DO_NOTHING when the active path is healthy, or when neither" not in rules,
     )
     bundle = prompt_bundle()
     check(

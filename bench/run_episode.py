@@ -12,6 +12,7 @@ if __name__ == "__main__":
 
 import json
 import re
+import signal
 import time
 import uuid
 from datetime import datetime, timezone
@@ -206,6 +207,327 @@ def _routes_on_path(snapshot, path):
     return found.get("r1") == path and found.get("r4") == path
 
 
+# Independent post-action recovery statuses. Command success is never one of these.
+RECOVERY_RECOVERED = "recovered"
+RECOVERY_FAILED = "failed"
+RECOVERY_PARTIAL = "partial"
+RECOVERY_UNAVAILABLE = "measurement_unavailable"
+RECOVERY_NOT_ATTEMPTED = "not_attempted"
+
+
+def _row_by_id(results, test_id):
+    for row in results or []:
+        if isinstance(row, dict) and row.get("test_id") == test_id:
+            return row
+    return None
+
+
+def traffic_conditions(results):
+    """Connectivity and performance fields from an OAM result list.
+
+    Errored or missing probes yield None for that metric and are listed under
+    infrastructure_errors. A missing metric is not treated as healthy.
+    """
+    infra = {}
+    for row in results or []:
+        if isinstance(row, dict) and row.get("test_id") and row.get("error"):
+            infra[row["test_id"]] = row["error"]
+    t1 = _row_by_id(results, "T1_e2e_ping")
+    t10 = _row_by_id(results, "T10_speed")
+    connectivity = latency_ms = loss = throughput = None
+    if isinstance(t1, dict) and not t1.get("error"):
+        connectivity = t1.get("connectivity")
+        if isinstance(t1.get("latency_ms"), (int, float)):
+            latency_ms = float(t1["latency_ms"])
+        if isinstance(t1.get("packet_loss_percent"), (int, float)):
+            loss = float(t1["packet_loss_percent"])
+    if isinstance(t10, dict) and not t10.get("error"):
+        try:
+            throughput = float(t10.get("mbit_per_sec"))
+        except (TypeError, ValueError):
+            throughput = None
+    return {
+        "connectivity": connectivity,
+        "latency_ms": latency_ms,
+        "packet_loss_percent": loss,
+        "throughput_mbit": throughput,
+        "infrastructure_errors": infra,
+    }
+
+
+def pre_remediation_observations(oam_bundle):
+    """Snapshot of pre-action OAM used for recovery comparison."""
+    results = (oam_bundle or {}).get("results") if isinstance(oam_bundle, dict) else None
+    if results is None and isinstance(oam_bundle, list):
+        results = oam_bundle
+    conditions = traffic_conditions(results or [])
+    return {
+        "recorded": bool(results),
+        "oam_started_at": (oam_bundle or {}).get("started_at") if isinstance(oam_bundle, dict) else None,
+        "oam_completed_at": (oam_bundle or {}).get("completed_at") if isinstance(oam_bundle, dict) else None,
+        **conditions,
+    }
+
+
+def _classify_recovery(results, noise_id="N0"):
+    """Map measured results to recovery_status without using command success.
+
+    Required recovery tests with errors or absences are measurement_unavailable,
+    never recovered. Partial means connectivity is back but performance is not.
+    """
+    from bench.signature_checks import (
+        RECOVERY_T10_MIN_MBIT,
+        REQUIRED_RECOVERY_TESTS,
+        degraded_tests,
+    )
+    from bench.outcomes import signature
+
+    results = list(results or [])
+    by_id = {
+        row.get("test_id"): row
+        for row in results
+        if isinstance(row, dict) and row.get("test_id")
+    }
+    infra = {
+        tid: row.get("error")
+        for tid, row in by_id.items()
+        if row.get("error")
+    }
+    missing_required = []
+    for tid in REQUIRED_RECOVERY_TESTS:
+        row = by_id.get(tid)
+        if row is None or row.get("error"):
+            missing_required.append(tid)
+    conditions = traffic_conditions(results)
+    outcomes = signature(results, noise_id=noise_id)
+    t10 = by_id.get("T10_speed")
+    samples = []
+    if isinstance(t10, dict) and not t10.get("error"):
+        try:
+            mbit = float(t10.get("mbit_per_sec"))
+        except (TypeError, ValueError):
+            mbit = None
+        if mbit is not None:
+            samples = [mbit]
+    degraded = degraded_tests(outcomes, t10_samples=samples)
+    if missing_required:
+        status = RECOVERY_UNAVAILABLE
+        traffic_recovered = None
+    elif not degraded:
+        status = RECOVERY_RECOVERED
+        traffic_recovered = True
+    elif conditions.get("connectivity") is True or (
+        outcomes.get("T1_e2e_ping") == "ok" and "T1_e2e_ping" not in degraded
+    ):
+        status = RECOVERY_PARTIAL
+        traffic_recovered = False
+    else:
+        status = RECOVERY_FAILED
+        traffic_recovered = False
+    return {
+        "results": results,
+        "outcomes": outcomes,
+        "degraded": degraded,
+        "missing_evidence": missing_required,
+        "infrastructure_errors": infra,
+        "t10_min_mbit": RECOVERY_T10_MIN_MBIT,
+        "post_action": {
+            "connectivity": conditions["connectivity"],
+            "latency_ms": conditions["latency_ms"],
+            "packet_loss_percent": conditions["packet_loss_percent"],
+            "throughput_mbit": conditions["throughput_mbit"],
+        },
+        "recovery_status": status,
+        "traffic_recovered": traffic_recovered,
+    }
+
+
+def measure_traffic_recovery(net, noise_id="N0", ping_count=None, speed_seconds=None):
+    """Independent post-remediation OAM. Command success is not recovery.
+
+    Reuses the recovery test set from the observability matrix (T1/T4/T8
+    healthy and T10 ≥ 4 Mbit when measured). Infrastructure failures yield
+    measurement_unavailable with traffic_recovered=None.
+    """
+    from bench.signature_checks import RECOVERY_TESTS
+
+    if ping_count is None:
+        ping_count = getattr(oam, "EPISODE_PING_COUNT", 10)
+    if speed_seconds is None:
+        speed_seconds = getattr(oam, "EPISODE_SPEED_SECONDS", 3)
+    started_at = datetime.now(timezone.utc).isoformat()
+    t0 = time.monotonic()
+    try:
+        battery = oam.run_all(
+            net,
+            test_ids=list(RECOVERY_TESTS),
+            ping_count=ping_count,
+            speed_seconds=speed_seconds,
+        )
+    except Exception as exc:
+        duration = time.monotonic() - t0
+        completed_at = datetime.now(timezone.utc).isoformat()
+        err = f"{type(exc).__name__}: {exc}"
+        return {
+            "started_at": started_at,
+            "completed_at": completed_at,
+            "duration_seconds": duration,
+            "results": [],
+            "outcomes": {},
+            "degraded": list(RECOVERY_TESTS),
+            "missing_evidence": list(RECOVERY_TESTS),
+            "infrastructure_errors": {"battery": err},
+            "t10_min_mbit": None,
+            "post_action": {
+                "connectivity": None,
+                "latency_ms": None,
+                "packet_loss_percent": None,
+                "throughput_mbit": None,
+            },
+            "recovery_status": RECOVERY_UNAVAILABLE,
+            "traffic_recovered": None,
+            "error": err,
+        }
+    duration = time.monotonic() - t0
+    completed_at = datetime.now(timezone.utc).isoformat()
+    results = list(battery.get("results") or [])
+    classified = _classify_recovery(results, noise_id=noise_id)
+    classified.update({
+        "started_at": battery.get("started_at") or started_at,
+        "completed_at": battery.get("completed_at") or completed_at,
+        "duration_seconds": duration,
+        "battery_cost": battery.get("cost"),
+    })
+    return classified
+
+
+def _iso_span_seconds(started_at, completed_at):
+    try:
+        started = datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
+        ended = datetime.fromisoformat(str(completed_at).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return (ended - started).total_seconds()
+
+
+def route_state_result(before_snapshot, after_snapshot):
+    """Whether path routes/links/qdiscs changed between two execution snapshots."""
+    if before_snapshot is None or after_snapshot is None:
+        return {
+            "route_state_changed": None,
+            "before": None,
+            "after": None,
+            "error": "missing snapshot for route-state comparison",
+        }
+    before = execution_fingerprint(before_snapshot)
+    after = execution_fingerprint(after_snapshot)
+    return {
+        "route_state_changed": before != after,
+        "before": before,
+        "after": after,
+        "error": None,
+    }
+
+
+def attach_post_action_recovery(
+    record,
+    net,
+    *,
+    read_state=None,
+    links=None,
+    noise_id=None,
+    measure_fn=None,
+):
+    """Record independent recovery after an authorized execution attempt.
+
+    Runs for every execution_attempted episode (including DO_NOTHING, where
+    executed=False). Never sets traffic_recovered from remediation_succeeded.
+    """
+    record = record if isinstance(record, dict) else {}
+    noise_id = noise_id or record.get("noise_id") or "N0"
+    measure_fn = measure_fn or measure_traffic_recovery
+    pre = record.get("pre_remediation")
+    if pre is None:
+        record["pre_remediation"] = pre_remediation_observations(record.get("oam"))
+    if not record.get("execution_attempted"):
+        record["recovery_status"] = RECOVERY_NOT_ATTEMPTED
+        record["traffic_recovered"] = None
+        record["route_state_changed"] = None
+        record["recovery_time_seconds"] = None
+        record["recovery_measurement_duration_seconds"] = None
+        record.setdefault("post_oam", None)
+        return record
+
+    live_net = net is not None and callable(getattr(net, "get", None))
+    after_snapshot = None
+    route_error = None
+    if live_net and callable(read_state):
+        try:
+            after_snapshot = read_state(net, links) if links is not None else read_state(net)
+        except TypeError:
+            try:
+                after_snapshot = read_state()
+            except Exception as exc:
+                route_error = f"{type(exc).__name__}: {exc}"
+        except Exception as exc:
+            route_error = f"{type(exc).__name__}: {exc}"
+    approved = dict(record.get("network_snapshot") or {})
+    baseline = record.get("execution_baseline") or {}
+    if baseline.get("qdiscs") is not None:
+        approved["qdiscs"] = baseline.get("qdiscs")
+    route = route_state_result(approved if approved.get("routes") else None, after_snapshot)
+    if route_error and route.get("error"):
+        route["error"] = route_error
+    elif route_error:
+        route["error"] = route_error
+        route["route_state_changed"] = None
+    record["route_state"] = route
+    record["route_state_changed"] = route.get("route_state_changed")
+
+    if not live_net:
+        record["post_oam"] = {
+            "recovery_status": RECOVERY_UNAVAILABLE,
+            "traffic_recovered": None,
+            "infrastructure_errors": {"net": "post-action measurement net unavailable"},
+            "error": "post-action measurement net unavailable",
+        }
+        record["recovery_status"] = RECOVERY_UNAVAILABLE
+        record["traffic_recovered"] = None
+        record["recovery_time_seconds"] = None
+        record["recovery_measurement_duration_seconds"] = None
+        return record
+
+    try:
+        post = measure_fn(net, noise_id=noise_id)
+    except Exception as exc:
+        err = f"{type(exc).__name__}: {exc}"
+        post = {
+            "recovery_status": RECOVERY_UNAVAILABLE,
+            "traffic_recovered": None,
+            "infrastructure_errors": {"measure": err},
+            "error": err,
+            "post_action": {
+                "connectivity": None,
+                "latency_ms": None,
+                "packet_loss_percent": None,
+                "throughput_mbit": None,
+            },
+        }
+    record["post_oam"] = post
+    record["recovery_status"] = post.get("recovery_status")
+    record["traffic_recovered"] = post.get("traffic_recovered")
+    record["recovery_measurement_duration_seconds"] = post.get("duration_seconds")
+    if post.get("recovery_status") == RECOVERY_RECOVERED:
+        span = _iso_span_seconds(
+            record.get("remediation_started_at") or post.get("started_at"),
+            post.get("completed_at"),
+        )
+        record["recovery_time_seconds"] = span if span is not None else post.get("duration_seconds")
+    else:
+        record["recovery_time_seconds"] = None
+    return record
+
+
 def apply_authorized_action(gate_decision, proposal, execute_fn, approved_snapshot, read_state):
     """Single boundary between a gate decision and remediation.
 
@@ -336,13 +658,33 @@ def run_episode(
     parts = dict(default_components())
     if _components:
         parts.update(_components)
+    real_reset = parts["reset_all"] is inj.reset_all
     episode_id = str(uuid.uuid4())
     started = datetime.now(timezone.utc).isoformat()
-    noise_applied = parts["apply_noise"](net, noise_id, links)
+    noise_applied = None
     correlation_ids = []
+    record = None
 
     try:
-        parts["reset_all"](net)
+        # Noise is inside the try so a partial/failed setup still hits cleanup.
+        noise_applied = parts["apply_noise"](net, noise_id, links)
+        try:
+            pre_reset = parts["reset_all"](net)
+        except TopologyContaminated:
+            raise
+        except Exception as exc:
+            raise TopologyContaminated(
+                f"pre-episode reset: {type(exc).__name__}: {exc}",
+                None,
+                record=record,
+            ) from exc
+        # Background traffic is on here, so only errors and residual count.
+        require_clean_topology(
+            pre_reset,
+            "pre-episode reset",
+            real_reset=real_reset,
+            check_health=False,
+        )
         if compound_id:
             comp = parts["inject_compound"](net, compound_id, seed=seed)
             correlation_ids = comp["correlation_ids"]
@@ -395,6 +737,13 @@ def run_episode(
             "remediation_succeeded": False,
             "safeguard_missing": None,
             "state_verified": False,
+            "pre_remediation": pre_remediation_observations(oam_bundle),
+            "traffic_recovered": None,
+            "recovery_status": RECOVERY_NOT_ATTEMPTED,
+            "route_state_changed": None,
+            "recovery_time_seconds": None,
+            "recovery_measurement_duration_seconds": None,
+            "post_oam": None,
         }
 
         telemetry_ok, telemetry_errors = validate_record("telemetry", snapshot)
@@ -472,6 +821,7 @@ def run_episode(
                 record.get("agent_proposal") or {},
                 oam_results,
             )
+        record["remediation_started_at"] = datetime.now(timezone.utc).isoformat()
         record.update(apply_authorized_action(
             record.get("gate_decision"),
             record.get("agent_proposal") or {},
@@ -479,15 +829,130 @@ def run_episode(
             approved,
             lambda: parts["read_state"](net, links),
         ))
+        record["remediation_completed_at"] = datetime.now(timezone.utc).isoformat()
         result_ok, result_errors = validate_record("execution_result", _execution_view(record))
         if not result_ok:
             record["remediation_succeeded"] = False
             record["execution_error"] = "invalid execution result: " + "; ".join(result_errors)
+        # Independent post-action OAM: executed=True is never traffic recovery.
+        attach_post_action_recovery(
+            record,
+            net,
+            read_state=parts["read_state"],
+            links=links,
+            noise_id=record.get("noise_id") or "N0",
+        )
         record["completed_at"] = datetime.now(timezone.utc).isoformat()
         return record
     finally:
-        parts["clear_noise"](net, noise_applied, links)
-        parts["reset_all"](net, baseline=True)
+        # E6: cancel batch/episode SIGALRM before teardown so a timeout cannot
+        # interrupt cleanup and let the next episode run on a dirty topology.
+        if hasattr(signal, "SIGALRM"):
+            try:
+                signal.alarm(0)
+            except Exception:
+                pass
+        clear_error = None
+        teardown = None
+        try:
+            parts["clear_noise"](net, noise_applied or {}, links)
+        except Exception as exc:
+            clear_error = f"clear_noise: {type(exc).__name__}: {exc}"
+        try:
+            teardown = parts["reset_all"](net, baseline=True)
+        except TopologyContaminated:
+            raise
+        except TimeoutError as exc:
+            problem = f"timeout during teardown: {exc}"
+            if clear_error:
+                problem = f"{problem}; {clear_error}"
+            if isinstance(record, dict):
+                record["teardown"] = teardown_summary(
+                    {"errors": [{"error": problem}], "residual": {}, "healthy": False},
+                    problem,
+                )
+            raise TopologyContaminated(
+                f"episode teardown: {problem}",
+                None,
+                record=record,
+            ) from exc
+        except Exception as exc:
+            problem = f"{type(exc).__name__}: {exc}"
+            if clear_error:
+                problem = f"{problem}; {clear_error}"
+            if isinstance(record, dict):
+                record["teardown"] = teardown_summary(
+                    {"errors": [{"error": problem}], "residual": {}, "healthy": False},
+                    problem,
+                )
+            raise TopologyContaminated(
+                f"episode teardown: {problem}",
+                None,
+                record=record,
+            ) from exc
+        problem = teardown_problem(teardown, real_reset, check_health=True)
+        if clear_error:
+            problem = f"{problem}; {clear_error}" if problem else clear_error
+        if isinstance(record, dict):
+            record["teardown"] = teardown_summary(teardown, problem)
+        if problem:
+            # Never run another episode on a topology that may still carry
+            # this one's fault. Preserve the partial episode record.
+            raise TopologyContaminated(f"episode teardown: {problem}", teardown, record=record)
+
+
+class TopologyContaminated(RuntimeError):
+    """Reset or cleanup failed. The topology may still carry a fault.
+
+    Runners must stop instead of recording an infra error and continuing.
+    """
+
+    def __init__(self, message, report=None, record=None):
+        super().__init__(message)
+        self.report = report
+        self.record = record
+
+
+def teardown_problem(report, real_reset, check_health=True):
+    """Why a reset report shows a possibly contaminated topology, or None.
+
+    Explicit errors or residual state always fail closed, including stub
+    resets used in offline tests. Missing reports and missing health checks
+    fail only for the authoritative injector reset.
+    """
+    if not isinstance(report, dict):
+        return "reset returned no report" if real_reset else None
+    problems = []
+    if report.get("errors"):
+        problems.append("reset errors " + json.dumps(report["errors"], default=str)[:300])
+    if report.get("residual"):
+        problems.append("residual changes " + json.dumps(report["residual"], default=str)[:300])
+    if check_health and report.get("healthy") is False:
+        problems.append(f"hostA->hostB loss {report.get('loss_percent')}% after reset")
+    if check_health and real_reset and "healthy" not in report:
+        problems.append("reset report has no health check")
+    return "; ".join(problems) or None
+
+
+def require_clean_topology(report, where, *, real_reset=True, check_health=True, record=None):
+    """Raise TopologyContaminated when a reset/cleanup report is unsafe."""
+    problem = teardown_problem(report, real_reset, check_health=check_health)
+    if problem:
+        raise TopologyContaminated(f"{where}: {problem}", report, record=record)
+    return report
+
+
+def teardown_summary(report, problem):
+    report = report if isinstance(report, dict) else {}
+    return {
+        "clean": problem is None,
+        "problem": problem,
+        "cleared": len(report.get("cleared") or []),
+        "errors": report.get("errors") or [],
+        "residual": report.get("residual") or {},
+        "healthy": report.get("healthy"),
+        "loss_percent": report.get("loss_percent"),
+    }
 
 
 def aggregate_episode_costs(directory=None):
@@ -633,6 +1098,10 @@ def _reads(*snapshots):
     return read
 
 
+from bench.outcomes import using_test_thresholds  # offline checks grade with test-only limits
+
+
+@using_test_thresholds
 def _self_check():
     """Offline check of the execution boundary. Does not touch Mininet."""
     import inspect
@@ -670,6 +1139,146 @@ def _self_check():
     allowed = once("allow", healthy, after=on_backup)
     assert calls == [proposal], calls
     assert allowed["state_verified"] is True and allowed["remediation_succeeded"] is True, allowed
+    # C4: command success is not traffic recovery; statuses stay distinct.
+    saved_run_all = oam.run_all
+
+    def _recovery_rows(mbit=8.0, loss=0.0, connectivity=True, t1_error=None, t10_error=None, omit=()):
+        rows = []
+        if "T1_e2e_ping" not in omit:
+            rows.append({
+                "test_id": "T1_e2e_ping",
+                "packet_loss_percent": loss,
+                "latency_ms": 10.0,
+                "connectivity": connectivity,
+                "error": t1_error,
+            })
+        if "T4_mtu" not in omit:
+            rows.append({"test_id": "T4_mtu", "df_ping_ok": True, "error": None})
+        if "T8_tcp_vs_ping" not in omit:
+            rows.append({"test_id": "T8_tcp_vs_ping", "ping_ok": True, "tcp_ok": True, "error": None})
+        if "T10_speed" not in omit:
+            rows.append({"test_id": "T10_speed", "mbit_per_sec": mbit, "error": t10_error})
+        return rows
+
+    def _fake_recovery(_net, test_ids=None, **_kwargs):
+        return {
+            "started_at": "2026-01-01T00:00:01+00:00",
+            "completed_at": "2026-01-01T00:00:04+00:00",
+            "results": _recovery_rows(),
+            "cost": {"total_duration_seconds": 3.0},
+        }
+
+    oam.run_all = _fake_recovery
+    try:
+        recovered = measure_traffic_recovery(object(), noise_id="N0")
+        assert recovered["traffic_recovered"] is True and recovered["recovery_status"] == RECOVERY_RECOVERED, recovered
+        assert recovered["post_action"]["connectivity"] is True
+        assert recovered["post_action"]["throughput_mbit"] == 8.0
+        assert recovered["post_action"]["packet_loss_percent"] == 0.0
+        assert isinstance(recovered.get("duration_seconds"), (int, float))
+        # Slow T10 with healthy connectivity → partial, not command-based success.
+        oam.run_all = lambda _net, test_ids=None, **_kwargs: {
+            "results": _recovery_rows(mbit=1.0),
+            "started_at": "2026-01-01T00:00:01+00:00",
+            "completed_at": "2026-01-01T00:00:04+00:00",
+        }
+        partial = measure_traffic_recovery(object(), noise_id="N0")
+        assert partial["recovery_status"] == RECOVERY_PARTIAL and partial["traffic_recovered"] is False, partial
+        assert "T10_speed" in partial["degraded"]
+        # Hard loss / no connectivity → failed recovery.
+        oam.run_all = lambda _net, test_ids=None, **_kwargs: {
+            "results": _recovery_rows(loss=100.0, connectivity=False, mbit=0.0),
+        }
+        failed = measure_traffic_recovery(object(), noise_id="N0")
+        assert failed["recovery_status"] == RECOVERY_FAILED and failed["traffic_recovered"] is False, failed
+        # Infra / timeout on a required probe → unavailable, never recovered.
+        oam.run_all = lambda _net, test_ids=None, **_kwargs: {
+            "results": _recovery_rows(t1_error="TimeoutError: ping timed out"),
+        }
+        timed_out = measure_traffic_recovery(object(), noise_id="N0")
+        assert timed_out["recovery_status"] == RECOVERY_UNAVAILABLE, timed_out
+        assert timed_out["traffic_recovered"] is None
+        assert "T1_e2e_ping" in timed_out["missing_evidence"]
+        assert "T1_e2e_ping" in timed_out["infrastructure_errors"]
+        # Missing required evidence → unavailable.
+        oam.run_all = lambda _net, test_ids=None, **_kwargs: {
+            "results": _recovery_rows(omit=("T8_tcp_vs_ping",)),
+        }
+        missing = measure_traffic_recovery(object(), noise_id="N0")
+        assert missing["recovery_status"] == RECOVERY_UNAVAILABLE and missing["traffic_recovered"] is None, missing
+        assert "T8_tcp_vs_ping" in missing["missing_evidence"]
+        # Battery exception → unavailable (not failed recovery).
+        def _boom(_net, test_ids=None, **_kwargs):
+            raise RuntimeError("iperf server down")
+
+        oam.run_all = _boom
+        crashed = measure_traffic_recovery(object(), noise_id="N0")
+        assert crashed["recovery_status"] == RECOVERY_UNAVAILABLE and crashed["traffic_recovered"] is None, crashed
+        assert crashed.get("error")
+        # Integration: attach_post_action_recovery keeps remediation vs traffic distinct.
+        oam.run_all = _fake_recovery
+
+        class _Net:
+            def get(self, _name):
+                return object()
+
+        synthetic = {
+            "noise_id": "N0",
+            "execution_attempted": True,
+            "remediation_succeeded": True,
+            "remediation_started_at": "2026-01-01T00:00:00+00:00",
+            "oam": {"results": _recovery_rows(mbit=0.5, loss=40.0, connectivity=True)},
+            "network_snapshot": _snapshot(),
+            "execution_baseline": {"qdiscs": None, "error": None},
+        }
+        attach_post_action_recovery(
+            synthetic,
+            _Net(),
+            read_state=lambda *_a, **_k: _snapshot(r1_via="10.0.13.2", r4_via="10.0.34.1"),
+        )
+        assert synthetic["remediation_succeeded"] is True
+        assert synthetic["traffic_recovered"] is True
+        assert synthetic["recovery_status"] == RECOVERY_RECOVERED
+        assert synthetic["route_state_changed"] is True
+        assert synthetic["pre_remediation"]["connectivity"] is True
+        assert synthetic["pre_remediation"]["throughput_mbit"] == 0.5
+        assert isinstance(synthetic.get("recovery_time_seconds"), (int, float))
+        assert synthetic["post_oam"]["post_action"]["throughput_mbit"] == 8.0
+        # Failed remediation still preserves an independent post measurement.
+        broken = {
+            "noise_id": "N0",
+            "execution_attempted": True,
+            "remediation_succeeded": False,
+            "execution_error": "partial remediation",
+            "remediation_started_at": "2026-01-01T00:00:00+00:00",
+            "oam": {"results": _recovery_rows()},
+            "network_snapshot": _snapshot(),
+            "execution_baseline": {"qdiscs": None},
+        }
+        oam.run_all = lambda _net, test_ids=None, **_kwargs: {"results": _recovery_rows(loss=100.0, connectivity=False)}
+        attach_post_action_recovery(broken, _Net(), read_state=lambda *_a, **_k: _snapshot())
+        assert broken["remediation_succeeded"] is False
+        assert broken["recovery_status"] == RECOVERY_FAILED
+        assert broken["traffic_recovered"] is False
+        # No execution attempt → not_attempted; never invent recovery.
+        idle = {"execution_attempted": False, "oam": {"results": _recovery_rows()}}
+        attach_post_action_recovery(idle, _Net(), read_state=lambda *_a, **_k: _snapshot())
+        assert idle["recovery_status"] == RECOVERY_NOT_ATTEMPTED
+        assert idle["traffic_recovered"] is None
+        # Infra failure during attach must not become traffic_recovered=False.
+        oam.run_all = _boom
+        unknown = {
+            "noise_id": "N0",
+            "execution_attempted": True,
+            "remediation_succeeded": True,
+            "network_snapshot": _snapshot(),
+            "execution_baseline": {"qdiscs": None},
+        }
+        attach_post_action_recovery(unknown, _Net(), read_state=lambda *_a, **_k: _snapshot())
+        assert unknown["traffic_recovered"] is None
+        assert unknown["recovery_status"] == RECOVERY_UNAVAILABLE
+    finally:
+        oam.run_all = saved_run_all
 
     one_sided = once("allow", healthy, after=_snapshot(r1_via="10.0.13.2"))
     assert one_sided["execution_attempted"] is True and one_sided["remediation_succeeded"] is False
@@ -911,6 +1520,7 @@ def _self_check():
 
     def quiet_reset(net, baseline=False):
         events.append("reset+baseline" if baseline else "reset")
+        return {"errors": [], "residual": {}, "healthy": True, "loss_percent": 0.0}
 
     def quiet_inject(net, fault_id, seed=None):
         events.append("inject")
@@ -922,7 +1532,15 @@ def _self_check():
 
     def quiet_tests(net):
         events.append("tests")
-        return {"results": [{"test_id": "T7_route_check"}]}
+        return {
+            "results": [
+                {"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0, "latency_ms": 10.0, "connectivity": True, "error": None},
+                {"test_id": "T4_mtu", "df_ping_ok": True, "error": None},
+                {"test_id": "T8_tcp_vs_ping", "ping_ok": True, "tcp_ok": True, "error": None},
+                {"test_id": "T10_speed", "mbit_per_sec": 50.0, "error": None},
+                {"test_id": "T7_route_check", "active": "primary", "error": None},
+            ]
+        }
 
     def quiet_read(net, links=None):
         return full
@@ -944,6 +1562,7 @@ def _self_check():
             "target": "HostA_to_HostB",
             "reason": "healthy",
             "proposed_path": ["r1", "r2", "r4"],
+            "causes": [{"cause_id": "H0", "predicted_tests": []}],
         }
 
     def local_gate(record):
@@ -985,6 +1604,58 @@ def _self_check():
     assert walked == ["inject", "telemetry", "tests", "agent", "gate", "execute"], walked
     assert events[:2] == ["noise", "reset"], events
     assert events[-2:] == ["clear", "reset+baseline"], events
+
+    # H4: failed reset/cleanup fails closed and preserves the partial record.
+    assert teardown_problem({"errors": [{"error": "stuck"}], "residual": {}}, False) is not None
+    assert teardown_problem({"errors": [], "residual": {}, "healthy": True}, True) is None
+    dirty_calls = {"n": 0}
+
+    def dirty_reset(net, baseline=False):
+        dirty_calls["n"] += 1
+        if baseline:
+            return {"errors": [{"error": "link stuck"}], "residual": {"c1": ["qdisc"]}, "healthy": False, "loss_percent": 100.0}
+        return {"errors": [], "residual": {}, "healthy": True, "loss_percent": 0.0}
+
+    try:
+        run_episode(
+            object(),
+            {},
+            fault_id="H0",
+            run_oam=False,
+            agent_fn=local_agent,
+            gate_fn=local_gate,
+            execute_fn=local_execute,
+            _components=dict(fakes, reset_all=dirty_reset),
+        )
+        raise AssertionError("contaminated teardown must raise")
+    except TopologyContaminated as exc:
+        assert exc.record is not None, "partial episode record must be preserved"
+        assert exc.record.get("episode_id")
+        assert "episode teardown" in str(exc)
+        assert dirty_calls["n"] >= 2
+
+    def dirty_pre(net, baseline=False):
+        # Teardown after the failed pre-reset must still be allowed to finish
+        # cleanly so the original contamination error propagates.
+        if baseline:
+            return {"errors": [], "residual": {}, "healthy": True, "loss_percent": 0.0}
+        return {"errors": [{"error": "pre residual"}], "residual": {"x": 1}}
+
+    try:
+        run_episode(
+            object(),
+            {},
+            fault_id="H0",
+            run_oam=False,
+            agent_fn=local_agent,
+            gate_fn=local_gate,
+            execute_fn=local_execute,
+            _components=dict(fakes, reset_all=dirty_pre),
+        )
+        raise AssertionError("contaminated pre-reset must raise")
+    except TopologyContaminated as exc:
+        assert "pre-episode reset" in str(exc), exc
+        assert exc.record is None
 
     import tempfile
 
@@ -1086,7 +1757,7 @@ def _self_check():
     saved_report = outcomes._REPORT
     outcomes._REPORT = Path(tempfile.gettempdir()) / f"absent-{uuid.uuid4().hex}.json"
     try:
-        limits = {level: outcomes.load_yaml_thresholds(level)["T1_e2e_ping"]["max_latency_ms"] for level in ("N0", "N2")}
+        limits = {level: outcomes.load_test_thresholds(level)["T1_e2e_ping"]["max_latency_ms"] for level in ("N0", "N2")}
         assert limits["N0"] < 180.0 < limits["N2"], limits
         at_n0 = gate_decide(None, predicted_ok, healthy, slow_ping, mode="pilot_v0", run_missing_tests=False)
         at_n2 = gate_decide(None, predicted_ok, healthy, slow_ping, mode="pilot_v0", run_missing_tests=False, noise_id="N2")
@@ -1135,8 +1806,17 @@ def _self_check():
     assert cfg["frozen"] is True and cfg["learned_grader"] is False and cfg["budget_seconds"] == 8.0
     assert cfg.get("require_signatures") is False
     t1_ok = [{"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0, "latency_ms": 10.0}]
+    noop_ok = [
+        {"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0, "latency_ms": 10.0, "connectivity": True, "error": None},
+        {"test_id": "T4_mtu", "df_ping_ok": True, "error": None},
+        {"test_id": "T8_tcp_vs_ping", "ping_ok": True, "tcp_ok": True, "error": None},
+        {"test_id": "T10_speed", "mbit_per_sec": 50.0, "error": None},
+    ]
     vacuous = gate_decide(None, predicted_ok, healthy, t1_ok, mode="full", run_missing_tests=False)
-    assert vacuous["decision"] == "allow" and vacuous["reason"] == "all checks passed", vacuous
+    # consistency_scope=discriminating: no covering separator exists, so a
+    # risky action escalates (protocol v1 §5 fail-safe).
+    assert vacuous["decision"] == "escalate", vacuous
+    assert vacuous["reason"] == "insufficient evidence: no discriminating test", vacuous
     assert vacuous.get("snapshot_fingerprint")
     assert vacuous["log"]["learned_grader"] is False
     assert vacuous["log"]["frozen"] is True
@@ -1170,7 +1850,9 @@ def _self_check():
         budget_seconds=0.1,
     )
     assert tight["decision"] == "escalate", tight
-    assert tight["reason"] in {"no affordable discriminating test", "inseparable", "no discrimination"}, tight
+    assert tight["reason"] in {"no affordable discriminating test", "inseparable", "no discrimination"} or tight[
+        "reason"
+    ].startswith("insufficient evidence"), tight
     v0_same = gate_decide(
         None,
         predicted_ok,
@@ -1184,20 +1866,23 @@ def _self_check():
     assert tight["decision"] != "allow"
 
     idle = _cause_proposal("DO_NOTHING", "H0")
-    idle_ok = gate_decide(None, idle, healthy, t1_ok, mode="full", run_missing_tests=False)
+    idle_ok = gate_decide(None, idle, healthy, noop_ok, mode="full", run_missing_tests=False)
     assert idle_ok["decision"] == "allow" and idle_ok["reason"] == "healthy no-op", idle_ok
     t1_loss = [{"test_id": "T1_e2e_ping", "packet_loss_percent": 30.0, "latency_ms": 40.0}]
     idle_loss = gate_decide(None, idle, lossy_snap, t1_loss, mode="full", run_missing_tests=False)
     assert idle_loss["decision"] != "allow", idle_loss
-    t8_acl = [{"test_id": "T8_tcp_vs_ping", "ping_ok": True, "tcp_ok": False}]
+    t8_acl = list(noop_ok)
+    t8_acl[2] = {"test_id": "T8_tcp_vs_ping", "ping_ok": True, "tcp_ok": False, "error": None}
     idle_acl = gate_decide(None, idle, healthy, t8_acl, mode="full", run_missing_tests=False)
     assert idle_acl["decision"] != "allow", idle_acl
     idle_snap_loss = gate_decide(None, idle, lossy_snap, [], mode="full", run_missing_tests=False)
     assert idle_snap_loss["decision"] != "allow", idle_snap_loss
     h0_snap = _snapshot()
     h0_snap["metrics"] = {"active_path": "primary", "packet_loss_percent": 0.0, "connectivity": True}
+    # Incomplete evidence: snapshot alone must never authorize DO_NOTHING.
     idle_empty = gate_decide(None, idle, h0_snap, [], mode="full", run_missing_tests=False)
-    assert idle_empty["decision"] == "allow" and idle_empty["reason"] == "healthy no-op", idle_empty
+    assert idle_empty["decision"] == "escalate", idle_empty
+    assert idle_empty["reason"].startswith("no-op not justified"), idle_empty
 
     oam._check_costs()
     priced = {
@@ -1235,10 +1920,10 @@ def _self_check():
     assert connected["agent_cost"]["prompt_tokens"] is None
     assert connected["agent_cost"]["latency_seconds"] >= 0
     assert connected["gate_cost"]["latency_seconds"] >= 0
-    assert connected["oam_cost"]["test_count"] == 1
+    assert connected["oam_cost"]["test_count"] == 5
     assert connected["oam_cost"]["total_additional_bytes"] is None
     compared = connected["gate_decision"]["cost"]
-    assert compared["full_battery"]["test_count"] == 1
+    assert compared["full_battery"]["test_count"] == 5
     assert compared["selected_tests"]["test_count"] == 0
     assert compared["selected_tests"]["total_duration_seconds"] == 0.0
     assert compared["tests_executed"]["total_duration_seconds"] is None
@@ -1416,7 +2101,11 @@ def _self_check():
     assert f1_ok["passed"], f1_ok
     f1_gate = gate_decide(None, f1_vocab, healthy, f1_obs, mode="full", run_missing_tests=False)
     assert f1_gate["reason"] != "consistency failed", f1_gate
-    assert (f1_gate.get("checks") or {}).get("consistency", {}).get("passed") is True, f1_gate
+    # Healthy snapshot: no alternative needs a different fix, so there is no
+    # discriminating test; consistency_scope=discriminating escalates (fail-safe).
+    f1_consistency = (f1_gate.get("checks") or {}).get("consistency", {})
+    assert f1_consistency.get("scope") == "discriminating" and f1_consistency.get("discriminating_tests") == [], f1_gate
+    assert f1_gate["decision"] == "escalate" and "no discriminating test" in f1_gate["reason"], f1_gate
     f1_wrong_t7 = dict(
         f1_vocab,
         causes=[{
@@ -1431,7 +2120,8 @@ def _self_check():
     assert not f1_t7["passed"], f1_t7
     assert any(row.get("test_id") == "T7_route_check" and row.get("observed") == "primary" for row in f1_t7["mismatches"]), f1_t7
     f1_t7_gate = gate_decide(None, f1_wrong_t7, healthy, f1_obs, mode="full", run_missing_tests=False)
-    assert f1_t7_gate["decision"] == "block" and f1_t7_gate["reason"] == "consistency failed", f1_t7_gate
+    # T7 is not a discriminating test here: a wrong side-prediction cannot block.
+    assert f1_t7_gate["decision"] == "escalate" and f1_t7_gate["reason"] != "consistency failed", f1_t7_gate
     f1_t9 = check_consistency(
         {
             **f1_vocab,
@@ -1458,11 +2148,11 @@ def _self_check():
         parse_t2_prediction,
         parse_t6_prediction,
     )
-    from bench.outcomes import HOP_NAMES, grade_result, load_yaml_thresholds
+    from bench.outcomes import HOP_NAMES, grade_result, load_test_thresholds
     from gate.grader import grade_test
 
     ip_by_hop = {name: ip for ip, name in HOP_NAMES.items()}
-    n0_limits = load_yaml_thresholds("N0")
+    n0_limits = load_test_thresholds("N0")
 
     def _hop_row(name, outcome="ok"):
         if outcome == "down":
@@ -1610,7 +2300,9 @@ def _self_check():
         mode="full",
         run_missing_tests=False,
     )
-    assert unrun_gate["decision"] == "block" and unrun_gate["reason"] == "consistency failed", unrun_gate
+    # Unchecked predictions are missing evidence: escalate, not block.
+    assert unrun_gate["decision"] == "escalate", unrun_gate
+    assert unrun_gate["reason"].startswith("insufficient evidence"), unrun_gate
     assert unrun_gate["checks"]["consistency"]["reason"] == "no checked predictions"
 
     from agent.validate import validate_proposal as _validate_proposal
@@ -1640,7 +2332,7 @@ def _self_check():
     assert overlap_wrong == 1 and overlap_wrong_matched == 0
     assert prediction_matches("T2_hop_ping", "r2-r4=down", f1_grade) is True
     assert grade_test("T2_hop_ping", f1_grade, "r2-r4=down", use_model=False) == 1.0
-    assert grade_test("T2_hop_ping", f1_grade, "r2-r4=ok", use_model=False) == 0.5
+    assert grade_test("T2_hop_ping", f1_grade, "r2-r4=ok", use_model=False) == 0.0
     cons_t2 = check_consistency(
         {"causes": [{"cause_id": "F1", "predicted_tests": [{"test_id": "T2_hop_ping", "expected": "r2-r4=down"}]}]},
         [t2_f1],
@@ -1653,7 +2345,7 @@ def _self_check():
     model_path = model_dir / "grader_model.json"
     model_path.write_text(json.dumps({"T1_e2e_ping|loss": 0.91}), encoding="utf-8")
     assert grade_test("T1_e2e_ping", "ok", "loss", use_model=True, model_path=model_path) == 0.91
-    assert grade_test("T1_e2e_ping", "ok", "loss", use_model=True, model_path=model_dir / "missing.json") == 0.5
+    assert grade_test("T1_e2e_ping", "ok", "loss", use_model=True, model_path=model_dir / "missing.json") == 0.0
     assert grade_test("T1_e2e_ping", "loss", "loss", use_model=True, model_path=model_path) == 1.0
     assert model_path.resolve() != (Path(__file__).resolve().parent.parent / "results" / "grader_model.json").resolve()
     repo = Path(__file__).resolve().parent.parent
@@ -1689,10 +2381,10 @@ def _self_check():
             {"dst_ip": "10.0.4.2", "packet_loss_percent": 0.0},
         ],
     }
-    idle_f12 = gate_decide(None, idle, f12_snap, t1_ok + [t2_backup_down], mode="full", run_missing_tests=False)
+    idle_f12 = gate_decide(None, idle, f12_snap, noop_ok + [t2_backup_down], mode="full", run_missing_tests=False)
     assert idle_f12["decision"] == "allow" and idle_f12["reason"] == "healthy no-op", idle_f12
     f12_reroute = gate_decide(
-        None, _cause_proposal("REROUTE", "F12"), f12_snap, t1_ok + [t2_backup_down], mode="full", run_missing_tests=False
+        None, _cause_proposal("REROUTE", "F12"), f12_snap, noop_ok + [t2_backup_down], mode="full", run_missing_tests=False
     )
     assert f12_reroute["decision"] == "block" and f12_reroute["reason"] == "safety failed", f12_reroute
 

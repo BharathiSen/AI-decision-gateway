@@ -10,18 +10,42 @@ from baselines.common import (
 _DECISIONS = {"allow", "block", "escalate"}
 
 
-def run_method(method, proposal, snapshot, test_results, net=None, budget_seconds=None):
+def run_method(method, proposal, snapshot, test_results, net=None, budget_seconds=None, noise_id=None):
     """Run one method on the shared proposal, snapshot, and OAM results.
 
     The true fault id is not an input. net is used only when a method
     needs to run extra OAM tests. B0 does not change the network here.
+    noise_id selects grading thresholds for B4/B5, the same ones the gate uses.
     """
     name = (method or "").upper()
     proposal = proposal or {}
     snapshot = snapshot or {}
     test_results = list(test_results or [])
     cap = DEFAULT_BUDGET_SECONDS if budget_seconds is None else budget_seconds
+    if name not in METHODS:
+        raise ValueError(f"unknown method {method!r}")
+    from bench.outcomes import ThresholdsUnavailable
 
+    try:
+        result = _dispatch(name, proposal, snapshot, test_results, net, cap, noise_id)
+    except ThresholdsUnavailable as exc:
+        # Unaccepted calibration: no arm grades OAM. Fail closed, say why.
+        result = {
+            "method": name,
+            "decision": "escalate",
+            "action": proposal.get("action"),
+            "tests_run": [],
+            "reason": f"thresholds unavailable: {exc}",
+            "threshold_status": exc.status,
+        }
+
+    result = attach_contract(result, proposal, budget_seconds=cap)
+    if result.get("decision") not in _DECISIONS or "method" not in result or "action" not in result:
+        raise ValueError(f"{name} returned an incomplete decision record: {result!r}")
+    return result
+
+
+def _dispatch(name, proposal, snapshot, test_results, net, cap, noise_id):
     if name == "B0":
         from baselines.b0_ungated import decide
         result = decide(proposal, snapshot, test_results)
@@ -33,22 +57,48 @@ def run_method(method, proposal, snapshot, test_results, net=None, budget_second
         result = decide(proposal, snapshot, test_results, net=net, run_battery=net is not None)
     elif name == "B3":
         from baselines.b3_ml_classifier import decide
-        result = decide(proposal, snapshot, test_results, net=net, budget_seconds=cap)
+        result = decide(
+            proposal,
+            snapshot,
+            test_results,
+            net=net,
+            budget_seconds=cap,
+            noise_id=noise_id or "N0",
+        )
     elif name == "B4":
         from baselines.b4_llm_checker import decide
-        result = decide(proposal, snapshot, test_results, net=net)
+        result = decide(
+            proposal,
+            snapshot,
+            test_results,
+            net=net,
+            noise_id=noise_id or "N0",
+            budget_seconds=cap,
+        )
     elif name == "B5":
         from baselines.b5_adaptive import decide_b5
-        result = decide_b5(net, proposal, snapshot, test_results, run_tests=net is not None)
-    else:
-        raise ValueError(f"unknown method {method!r}")
+        from bench.outcomes import load_thresholds
 
-    result = attach_contract(result, proposal, budget_seconds=cap)
-    if result.get("decision") not in _DECISIONS or "method" not in result or "action" not in result:
-        raise ValueError(f"{name} returned an incomplete decision record: {result!r}")
+        thresholds = load_thresholds(noise_id or "N0")
+        result = decide_b5(
+            net,
+            proposal,
+            snapshot,
+            test_results,
+            run_tests=net is not None,
+            thresholds=thresholds,
+            noise_id=noise_id or "N0",
+            budget_seconds=cap,
+        )
+    else:
+        raise ValueError(f"unknown method {name!r}")
     return result
 
 
+from bench.outcomes import using_test_thresholds  # offline checks grade with test-only limits
+
+
+@using_test_thresholds
 def _self_check():
     from gate.selector import held_out_ids, _load_matrix
     from baselines.ablations import (
@@ -152,11 +202,50 @@ def _self_check():
     assert b5["decision"] == "escalate" and b5["reason"] == "no cause"
     b5_bad = run_method("B5", {"action": "NOT_AN_ACTION"}, healthy, [])
     assert b5_bad["decision"] == "block"
-    idle = {"action": "DO_NOTHING", "target": "HostA_to_HostB", "reason": "ok"}
-    b5_idle = run_method("B5", idle, healthy, [{"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0, "latency_ms": 10.0}])
+    idle = {
+        "action": "DO_NOTHING",
+        "target": "HostA_to_HostB",
+        "reason": "ok",
+        "causes": [{"cause_id": "H0", "predicted_tests": []}],
+    }
+    noop_ok = [
+        {"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0, "latency_ms": 10.0, "connectivity": True, "error": None},
+        {"test_id": "T4_mtu", "df_ping_ok": True, "error": None},
+        {"test_id": "T8_tcp_vs_ping", "ping_ok": True, "tcp_ok": True, "error": None},
+        {"test_id": "T10_speed", "mbit_per_sec": 50.0, "error": None},
+    ]
+    b5_idle = run_method("B5", idle, healthy, noop_ok)
     assert b5_idle["decision"] == "allow" and b5_idle["reason"] == "healthy no-op", b5_idle
     b5_idle_loss = run_method("B5", idle, healthy, [{"test_id": "T1_e2e_ping", "packet_loss_percent": 30.0, "latency_ms": 10.0}])
     assert b5_idle_loss["decision"] != "allow", b5_idle_loss
+    b5_idle_incomplete = run_method("B5", idle, healthy, [{"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0, "latency_ms": 10.0}])
+    assert b5_idle_incomplete["decision"] != "allow", b5_idle_incomplete
+    b5_no_cause = run_method(
+        "B5",
+        {"action": "DO_NOTHING", "target": "HostA_to_HostB", "reason": "ok"},
+        healthy,
+        noop_ok,
+    )
+    assert b5_no_cause["decision"] == "escalate" and "missing cause" in b5_no_cause["reason"], b5_no_cause
+    # H5: B3/B4/B5 receive the same noise_id thresholds / budget contract.
+    b3_n1 = run_method("B3", shared, healthy, t1_loss, noise_id="N1")
+    assert b3_n1.get("noise_id") == "N1"
+    b4_sel = run_method("B4", caused, healthy, t1_loss, noise_id="N0")
+    from gate.decide import decide as gate_decide
+
+    vf = gate_decide(
+        None,
+        caused,
+        healthy,
+        t1_loss,
+        mode="full",
+        run_missing_tests=False,
+        noise_id="N0",
+    )
+    assert list(b4_sel.get("selected_tests") or []) == list((vf.get("log") or {}).get("selected_tests") or []), (
+        b4_sel.get("selected_tests"),
+        (vf.get("log") or {}).get("selected_tests"),
+    )
 
     # Ablations exist and share decide()'s return shape.
     empty_oam = []
@@ -223,6 +312,16 @@ def _self_check():
     assert live["rolled_back"] is True
     assert net.path == "primary", net.path
     assert live["before_path"] == "primary"
+    # C4: B0 gets the same post-action recovery battery opportunity; command
+    # success is not traffic recovery.
+    assert live.get("post_oam") is not None, live
+    assert live.get("traffic_recovered") is not True, live
+    assert live.get("recovery_status") in (
+        "failed",
+        "partial",
+        "measurement_unavailable",
+        "recovered",
+    ), live
 
     idle = {"action": "DO_NOTHING", "target": "HostA_to_HostB", "reason": "ok"}
     oam_mod.run_in_node = fake_run
@@ -233,6 +332,8 @@ def _self_check():
     assert skipped["execution"].get("executed") is False
     assert skipped["harm"] is False
     assert skipped["rolled_back"] is False
+    assert skipped.get("post_oam") is not None, "DO_NOTHING still gets post-action measurement"
+    assert "recovery_status" in skipped
 
 
 if __name__ == "__main__":

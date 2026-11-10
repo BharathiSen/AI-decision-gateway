@@ -1,12 +1,28 @@
 """Grade OAM results into compact outcomes that can separate faults.
 
 Outcomes are strings the observability matrix and the consistency check
-both use. Thresholds come from config/thresholds.yaml (per traffic level),
-or from results/calibration_report.json proposed limits when that file
-exists (see calibration.grading_from_report in thresholds.yaml).
+both use.
+
+Research grading thresholds (protocol v1 §3, §8) come ONLY from a noise
+level that passed calibration acceptance (`calibrate_healthy.ready_to_write`):
+either `accepted_by_noise_level` in config/thresholds.yaml (written by
+`--write-thresholds` together with its acceptance evidence) or an accepted
+level in results/calibration_report.json. Grading re-checks that evidence
+with the same contract the writer used. A level without accepted thresholds
+is unavailable: `load_thresholds` raises `ThresholdsUnavailable`. There is
+no fallback to provisional or withdrawn values.
+
+Offline self-checks grade with bench/test_thresholds.yaml. Those numbers are
+test fixtures only and are used only inside `test_thresholds()` /
+`@using_test_thresholds`, which restore research mode on exit.
 """
 
+import contextlib
+import copy
+import functools
+import hashlib
 import json
+import math
 import re
 from pathlib import Path
 
@@ -14,7 +30,251 @@ import yaml
 
 _ROOT = Path(__file__).resolve().parent.parent
 _CONFIG = _ROOT / "config"
+_THRESHOLDS = _CONFIG / "thresholds.yaml"
 _REPORT = _ROOT / "results" / "calibration_report.json"
+_TEST_THRESHOLDS = Path(__file__).resolve().parent / "test_thresholds.yaml"
+
+# Every accepted level must define all of these. A partial set would let the
+# graders fall back to their built-in defaults for the missing tests.
+REQUIRED_THRESHOLDS = {
+    "T1_e2e_ping": ("max_loss_percent", "max_latency_ms"),
+    "T2_hop_ping": ("max_loss_percent", "max_latency_ms"),
+    "T8_tcp_vs_ping": ("tcp_must_succeed",),
+    "T10_speed": ("min_mbit",),
+}
+
+# Evidence fields bound into acceptance_sha256 with the threshold set.
+# Keep in sync with bench.calibrate_healthy.ACCEPTANCE_FIELDS.
+ACCEPTANCE_BINDING_FIELDS = (
+    "noise_id",
+    "full_battery",
+    "calibration_runs",
+    "eval_runs",
+    "used_evaluation_faults",
+    "episode_aligned_battery",
+    "eval_error_inclusive_false_alarm_rate",
+    "false_alarm_rate_target",
+    "first_try_t10_completeness",
+    "first_try_t10_target",
+)
+
+# Offline / historical analysis only. Never a research-grade mark.
+DIAGNOSTIC_UNACCEPTED_LABEL = "thresholds unaccepted — not research data"
+
+
+def acceptance_binding_hash(noise_id, acceptance, thresholds):
+    """SHA-256 binding noise identity, acceptance evidence, and thresholds."""
+    payload = {
+        "noise_id": noise_id,
+        "acceptance": {key: (acceptance or {}).get(key) for key in ACCEPTANCE_BINDING_FIELDS},
+        "thresholds": thresholds,
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+class ThresholdsUnavailable(RuntimeError):
+    """No accepted calibration for this noise level. Research grading refuses.
+
+    status is "unaccepted" (no level passed ready_to_write). reasons lists
+    why each source was rejected.
+    """
+
+    def __init__(self, noise_id, status, reasons):
+        self.noise_id = noise_id
+        self.status = status
+        self.reasons = list(reasons or [])
+        detail = "; ".join(self.reasons) or "no accepted calibration"
+        super().__init__(
+            f"thresholds {status} for {noise_id}: {detail}. Research grading is "
+            "unavailable until calibrate_healthy.py --write-thresholds passes ready_to_write"
+        )
+
+
+def _finite_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def threshold_set_errors(thresholds):
+    """Why a threshold set is not a complete, well-formed T1/T2/T8/T10 set. [] if it is."""
+    if not isinstance(thresholds, dict):
+        return ["threshold set is not a mapping"]
+    errors = []
+    for test_id, keys in REQUIRED_THRESHOLDS.items():
+        limits = thresholds.get(test_id)
+        if not isinstance(limits, dict):
+            errors.append(f"{test_id} missing")
+            continue
+        for key in keys:
+            value = limits.get(key)
+            if key == "tcp_must_succeed":
+                if not isinstance(value, bool):
+                    errors.append(f"{test_id}.{key} must be true or false")
+                continue
+            if not _finite_number(value):
+                errors.append(f"{test_id}.{key} must be a finite number")
+            elif key == "max_loss_percent" and not 0.0 <= value <= 100.0:
+                errors.append(f"{test_id}.{key} outside 0..100")
+            elif key in ("max_latency_ms", "min_mbit") and value <= 0.0:
+                errors.append(f"{test_id}.{key} must be positive")
+    return errors
+
+
+# --- test-only thresholds -------------------------------------------------
+
+_TEST_DEPTH = 0
+
+
+def test_mode_active():
+    return _TEST_DEPTH > 0
+
+
+@contextlib.contextmanager
+def test_thresholds():
+    """Grade with bench/test_thresholds.yaml inside this block only (offline checks)."""
+    global _TEST_DEPTH
+    _TEST_DEPTH += 1
+    try:
+        yield
+    finally:
+        _TEST_DEPTH -= 1
+
+
+@contextlib.contextmanager
+def research_mode():
+    """Temporarily leave test mode, e.g. to prove research grading refuses."""
+    global _TEST_DEPTH
+    saved, _TEST_DEPTH = _TEST_DEPTH, 0
+    try:
+        yield
+    finally:
+        _TEST_DEPTH = saved
+
+
+def using_test_thresholds(fn):
+    """Decorator for offline self-checks. Research mode is restored on return."""
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with test_thresholds():
+            return fn(*args, **kwargs)
+
+    return wrapper
+
+
+def load_test_thresholds(noise_id="N0"):
+    """Test fixture limits. Never valid for research grading."""
+    with _TEST_THRESHOLDS.open(encoding="utf-8") as f:
+        doc = yaml.safe_load(f) or {}
+    levels = doc.get("test_only_by_noise_level") or {}
+    if noise_id not in levels:
+        raise KeyError(f"no test-only thresholds for {noise_id}")
+    return copy.deepcopy(levels[noise_id])
+
+
+# --- research thresholds --------------------------------------------------
+
+def _read_yaml(path):
+    with Path(path).open(encoding="utf-8") as f:
+        doc = yaml.safe_load(f)
+    if not isinstance(doc, dict):
+        raise ValueError(f"{Path(path).name} is not a mapping")
+    return doc
+
+
+def _accepted(candidate, noise_id, where):
+    """(thresholds, []) when candidate passes ready_to_write for noise_id, else (None, reasons)."""
+    from bench.calibrate_healthy import acceptance_errors
+
+    if not isinstance(candidate, dict):
+        return None, [f"{where}: level is not a mapping"]
+    stated = candidate.get("noise_id")
+    if stated is not None and stated != noise_id:
+        return None, [f"{where}: acceptance is for {stated!r}, not {noise_id!r}"]
+    errors = acceptance_errors(candidate)
+    if errors:
+        return None, [f"{where}: " + "; ".join(errors)]
+    return copy.deepcopy(candidate["proposed_thresholds"]), []
+
+
+def threshold_status(noise_id="N0"):
+    """Research threshold status for one noise level. Never raises.
+
+    {"noise_id", "status": "accepted"|"unaccepted", "source", "thresholds", "reasons"}
+    """
+    reasons = []
+    try:
+        doc = _read_yaml(_THRESHOLDS)
+    except Exception as exc:
+        doc = {}
+        reasons.append(f"config/thresholds.yaml: {type(exc).__name__}: {exc}")
+    accepted = doc.get("accepted_by_noise_level")
+    entry = accepted.get(noise_id) if isinstance(accepted, dict) else None
+    if entry is None:
+        reasons.append("config/thresholds.yaml: no accepted level")
+    else:
+        try:
+            if not isinstance(entry, dict):
+                raise ValueError("accepted entry is not a mapping")
+            acceptance = entry.get("acceptance") or {}
+            thresholds = entry.get("thresholds")
+            candidate = dict(acceptance, proposed_thresholds=thresholds)
+            found, why = _accepted(candidate, noise_id, "config/thresholds.yaml")
+            if found is not None:
+                stored = entry.get("acceptance_sha256")
+                if not isinstance(stored, str) or not stored:
+                    found, why = None, ["config/thresholds.yaml: acceptance_sha256 missing"]
+                else:
+                    expected = acceptance_binding_hash(noise_id, acceptance, thresholds)
+                    if stored != expected:
+                        found, why = None, ["config/thresholds.yaml: acceptance_sha256 mismatch"]
+        except Exception as exc:
+            found, why = None, [f"config/thresholds.yaml: {type(exc).__name__}: {exc}"]
+        if found is not None:
+            return {"noise_id": noise_id, "status": "accepted", "source": "config/thresholds.yaml",
+                    "thresholds": found, "reasons": []}
+        reasons.extend(why)
+    calibration = doc.get("calibration") if isinstance(doc.get("calibration"), dict) else {}
+    if calibration.get("grading_from_report") is True:
+        try:
+            report = json.loads(_REPORT.read_text(encoding="utf-8"))
+            levels = report.get("levels") if isinstance(report, dict) else None
+            level = levels.get(noise_id) if isinstance(levels, dict) else None
+            if level is None:
+                raise ValueError("no level in report")
+            found, why = _accepted(level, noise_id, _REPORT.name)
+        except FileNotFoundError:
+            found, why = None, [f"{_REPORT.name}: missing"]
+        except Exception as exc:
+            found, why = None, [f"{_REPORT.name}: {type(exc).__name__}: {exc}"]
+        if found is not None:
+            return {"noise_id": noise_id, "status": "accepted", "source": _REPORT.name,
+                    "thresholds": found, "reasons": []}
+        reasons.extend(why)
+    return {"noise_id": noise_id, "status": "unaccepted", "source": None, "thresholds": None, "reasons": reasons}
+
+
+def load_research_thresholds(noise_id="N0"):
+    """Accepted thresholds for this level, or ThresholdsUnavailable. Ignores test mode."""
+    status = threshold_status(noise_id)
+    if status["status"] != "accepted":
+        raise ThresholdsUnavailable(noise_id, status["status"], status["reasons"])
+    return status["thresholds"]
+
+
+def require_accepted_thresholds(noise_ids):
+    """Preflight for research runners: None when every level is accepted, else a message."""
+    missing = []
+    for noise_id in sorted(set(noise_ids or [])):
+        status = threshold_status(noise_id)
+        if status["status"] != "accepted":
+            missing.append(f"{noise_id} ({'; '.join(status['reasons'])})")
+    if not missing:
+        return None
+    return (
+        "refusing: calibration thresholds are unaccepted for " + ", ".join(missing)
+        + ". Run calibrate_healthy.py on the VM and --write-thresholds once ready_to_write passes."
+    )
 
 HOP_NAMES = {
     "10.0.1.1": "hostA-r1",
@@ -37,36 +297,16 @@ _HEALTHY = {
 }
 
 
-def _thresholds_from_report(noise_id):
-    if not _REPORT.is_file():
-        return None
-    try:
-        doc = json.loads(_REPORT.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    level = (doc.get("levels") or {}).get(noise_id) or {}
-    proposed = level.get("proposed_thresholds")
-    if isinstance(proposed, dict) and proposed:
-        return proposed
-    return None
-
-
-def load_yaml_thresholds(noise_id="N0"):
-    """Placeholder limits from config/thresholds.yaml (calibration fit floors only)."""
-    with (_CONFIG / "thresholds.yaml").open(encoding="utf-8") as f:
-        doc = yaml.safe_load(f)
-    return doc["by_noise_level"].get(noise_id, doc["by_noise_level"]["N0"])
-
-
 def load_thresholds(noise_id="N0"):
-    with (_CONFIG / "thresholds.yaml").open(encoding="utf-8") as f:
-        doc = yaml.safe_load(f)
-    calibration = doc.get("calibration") or {}
-    if calibration.get("grading_from_report", True):
-        from_report = _thresholds_from_report(noise_id)
-        if from_report is not None:
-            return from_report
-    return load_yaml_thresholds(noise_id)
+    """Grading limits for one noise level.
+
+    Research mode (default): accepted calibration only, else
+    ThresholdsUnavailable. Test mode (offline self-checks only): the
+    test-only fixture limits.
+    """
+    if test_mode_active():
+        return load_test_thresholds(noise_id)
+    return load_research_thresholds(noise_id)
 
 
 def parse_qdisc_stats(text):
@@ -249,7 +489,16 @@ def _grade_t10(result, thresholds):
 
 
 def grade_result(result, thresholds=None, noise_id="N0"):
-    """Return one compact outcome string for a single OAM result dict."""
+    """Return one compact outcome string for a single OAM result dict.
+
+    Contract: a row with truthy `error` is infrastructure/measurement
+    failure, not a network observation. Return None (no grade). Callers
+    must treat that as missing evidence, never as ok/slow/loss/etc.
+    """
+    if not isinstance(result, dict):
+        return "unknown"
+    if result.get("error"):
+        return None
     if thresholds is None:
         thresholds = load_thresholds(noise_id)
     test_id = result.get("test_id")
@@ -275,10 +524,22 @@ def grade_result(result, thresholds=None, noise_id="N0"):
 
 
 def signature(test_results, thresholds=None, noise_id="N0"):
-    """Map test_id -> outcome for a battery of OAM results."""
+    """Map test_id -> outcome for a battery of OAM results.
+
+    Errored rows are omitted: missing from the map means unmeasured, not a
+    fabricated network grade. Valid rows keep their graded tokens.
+    """
     if thresholds is None:
         thresholds = load_thresholds(noise_id)
-    return {r["test_id"]: grade_result(r, thresholds) for r in test_results}
+    out = {}
+    for row in test_results or []:
+        if not isinstance(row, dict):
+            continue
+        tid = row.get("test_id")
+        if not tid or row.get("error"):
+            continue
+        out[tid] = grade_result(row, thresholds)
+    return out
 
 
 def healthy_outcome(test_id):
@@ -291,7 +552,10 @@ def is_degraded(test_id, outcome, thresholds=None):
     T2 is degraded when any hop is loss, down, or delay. T7 backup is a
     path choice, not a fault; blackhole and return_mismatch are faults.
     T8 may skip the TCP alarm when the traffic level says TCP need not succeed.
+    None means unmeasured/errored — not a network degradation.
     """
+    if outcome is None:
+        return False
     if test_id == "T2_hop_ping":
         return any(token in (outcome or "") for token in ("=loss", "=down", "=delay"))
     if test_id == "T7_route_check":

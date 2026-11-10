@@ -1,14 +1,17 @@
 """Inject each fault and compound, record the OAM outcomes, then try every
 remediation and measure whether traffic recovers.
 
-Run on the Mininet VM as root. A full run overwrites
-results/observability_matrix.csv, results/ground_truth.json and
-results/inseparable_pairs.json with measured data. A --fault run prints and
-writes nothing.
+Run on the Mininet VM as root. A full run writes a NEW directory given by
+--out-dir (matrix, ground_truth.json, inseparable_pairs.json and a run
+manifest with code provenance). It refuses results/ itself, protected paths
+and existing files, so the frozen results/ evidence is never overwritten.
+A --fault run prints and writes nothing.
 
-    sudo python3 bench/verify_fault_observability.py
+    sudo python3 bench/verify_fault_observability.py --out-dir results/labels/N0-s1 --noise N0 --seed 1
     sudo python3 bench/verify_fault_observability.py --fault F3 --fault C2
     python bench/verify_fault_observability.py --self-check    # offline
+
+Combine repeated runs with `python -m bench.label_audit results/labels/*`.
 """
 
 import argparse
@@ -358,17 +361,80 @@ def print_report(report):
         print(f"  {p['fault_a']} {p['fixes_a']} vs {p['fault_b']} {p['fixes_b']}")
 
 
+LABEL_OUTPUTS = ("observability_matrix.csv", "ground_truth.json", "inseparable_pairs.json", "label_run_manifest.json")
+
+
+def label_out_error(out_dir):
+    """Why a label run may not write into out_dir, or None.
+
+    The committed results/ files are frozen evidence. Every label run writes
+    a new directory; nothing is overwritten.
+    """
+    from bench.contracts import refuse_protected_path
+
+    if out_dir is None:
+        return (
+            "a full run writes measured labels; pass --out-dir results/labels/<run-id>. "
+            "The frozen results/ matrix and ground truth are never overwritten."
+        )
+    out_dir = Path(out_dir)
+    if out_dir.resolve() == RESULTS.resolve():
+        return f"--out-dir {out_dir} is results/ itself, which holds the frozen files"
+    for name in LABEL_OUTPUTS:
+        path = out_dir / name
+        try:
+            refuse_protected_path(path)
+        except ValueError as exc:
+            return str(exc)
+        if path.exists():
+            return f"{path} exists; label runs never overwrite. Use a new --out-dir."
+    return None
+
+
 def main(argv=None):
+    global NOISE_ID, SEED
+
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--fault", action="append", help="scenario id; repeatable. Prints only, writes nothing")
     parser.add_argument("--self-check", action="store_true", help="offline check of the runner with a fake network")
+    parser.add_argument("--out-dir", help="new directory for this label run (required for a full run)")
+    parser.add_argument("--noise", default="N0", help="traffic level applied during every scenario (N0/N1/N2)")
+    parser.add_argument("--seed", type=int, default=SEED, help="injection seed recorded in ground_truth.json")
     args = parser.parse_args(argv)
     if args.self_check:
         return _self_check()
 
+    from bench.traffic import load_noise_levels
+
+    if args.noise not in load_noise_levels():
+        print(f"Unknown noise level {args.noise!r}", file=sys.stderr)
+        return 2
+    from bench.outcomes import require_accepted_thresholds
+
+    refusal = require_accepted_thresholds([args.noise])
+    if refusal:
+        # Labels grade recovery signatures; never with unaccepted limits.
+        print(refusal, file=sys.stderr)
+        return 2
+    if not args.fault:
+        gap = label_out_error(args.out_dir)
+        if gap:
+            print("refusing: " + gap, file=sys.stderr)
+            return 2
+
     if not hasattr(os, "geteuid") or os.geteuid() != 0:
         print("verify_fault_observability.py must run as root on the Mininet VM.", file=sys.stderr)
         return 2
+
+    from bench.run_pilot import _git_revision, provenance_error, untracked_source_error
+
+    rev = _git_revision()
+    gap = provenance_error({"git_commit": rev.get("commit"), "git_tree_sha256": rev.get("tree_sha256")})
+    gap = gap or untracked_source_error(rev.get("untracked_source"))
+    if gap and not args.fault:
+        print(gap, file=sys.stderr)
+        return 2
+    NOISE_ID, SEED = args.noise, args.seed
 
     known = all_scenarios()
     scenarios = args.fault or known
@@ -380,17 +446,29 @@ def main(argv=None):
     from network.topology import create_network
     from bench.mininet_util import ensure_iperf3_server
 
+    from bench.traffic import apply_noise, clear_noise
+
     spec = load_expected()
     state = create_network()
     net = state["net"]
+    links = state.get("links")
     records = []
+    started = datetime.now(timezone.utc).isoformat()
     try:
         ensure_iperf3_server(net)
         inj.reset_all(net)
         for sid in scenarios:
-            print(f"scenario {sid} ...", flush=True)
-            record = measure_scenario(net, sid)
+            print(f"scenario {sid} ({NOISE_ID}) ...", flush=True)
+            applied = apply_noise(net, NOISE_ID, links)
+            try:
+                record = measure_scenario(net, sid)
+            finally:
+                clear_noise(net, applied, links)
+            record["noise_id"] = NOISE_ID
             records.append(record)
+            if record.get("residual") or any("reset" in str(err) for err in record.get("errors") or []):
+                print(f"  ! {sid} left residual state or failed to reset; stopping this label run.", flush=True)
+                break
             for tid, outcome in (record.get("signature") or {}).items():
                 print(f"  {tid}: {outcome}", flush=True)
             print(f"  raw: {record.get('raw')}", flush=True)
@@ -412,8 +490,27 @@ def main(argv=None):
     if args.fault:
         print("\nPartial run: nothing written.")
     else:
-        write_outputs(report)
-        print(f"\nWrote {RESULTS / 'observability_matrix.csv'} ({len(report['rows'])} rows), ground_truth.json, inseparable_pairs.json")
+        out_dir = Path(args.out_dir)
+        gap = label_out_error(out_dir)
+        if gap:
+            print("refusing to write: " + gap, file=sys.stderr)
+            return 2
+        write_outputs(report, results_dir=out_dir)
+        complete = len(records) == len(scenarios)
+        manifest = {
+            "started_at": started,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "noise_id": NOISE_ID,
+            "seed": SEED,
+            "scenarios_planned": list(scenarios),
+            "scenarios_measured": [r.get("scenario") for r in records],
+            "complete": complete,
+            "git_commit": rev.get("commit"),
+            "git_tree": rev.get("tree_sha256"),
+            "failures": list(failures),
+        }
+        (out_dir / "label_run_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+        print(f"\nWrote {out_dir} ({len(report['rows'])} matrix rows, {len(records)} scenarios, complete={complete})")
     if failures:
         print("\nObservability and remediation checks failed:")
         for err in failures:
@@ -428,6 +525,10 @@ def main(argv=None):
 # "primary" faults and the backup by "backup" faults.
 # ---------------------------------------------------------------------------
 
+from bench.outcomes import using_test_thresholds  # offline checks grade with test-only limits
+
+
+@using_test_thresholds
 def _self_check():
     import tempfile
 

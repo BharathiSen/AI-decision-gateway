@@ -54,8 +54,14 @@ def _harm(before, after):
 
 
 def run(net, proposal, measure=True):
-    """Execute, measure T1 harm, then restore the path that was active before."""
+    """Execute, measure post-action recovery (same battery as VeriFix), then restore.
+
+    Harm remains a T1 before/after comparison. Recovery status comes from the
+    independent post-remediation OAM battery and is never inferred from
+    execution.executed.
+    """
     from bench.tests import T1_e2e_ping
+    from bench.run_episode import measure_traffic_recovery, traffic_conditions
 
     before_path = None
     try:
@@ -68,6 +74,7 @@ def run(net, proposal, measure=True):
 
     before_t1 = None
     after_t1 = None
+    post_oam = None
     if measure:
         try:
             before_t1 = T1_e2e_ping(net)
@@ -80,13 +87,31 @@ def run(net, proposal, measure=True):
     except Exception as exc:
         execution = {"executed": False, "error": f"{type(exc).__name__}: {exc}"}
 
-    if measure and execution.get("executed"):
+    # Equivalent post-action opportunity: measure whenever asked, including
+    # DO_NOTHING (executed=False). Command failure does not skip measurement.
+    # Harm still uses T1; if the recovery battery lacks a usable T1 row, fall
+    # back to a dedicated T1 so infra gaps are not scored as harm.
+    if measure:
         try:
-            after_t1 = T1_e2e_ping(net)
+            post_oam = measure_traffic_recovery(net)
         except Exception as exc:
-            after_t1 = {"test_id": "T1_e2e_ping", "error": f"{type(exc).__name__}: {exc}"}
-    elif measure:
-        after_t1 = before_t1
+            post_oam = {
+                "recovery_status": "measurement_unavailable",
+                "traffic_recovered": None,
+                "error": f"{type(exc).__name__}: {exc}",
+                "infrastructure_errors": {"measure": f"{type(exc).__name__}: {exc}"},
+                "results": [],
+            }
+        after_t1 = None
+        for row in post_oam.get("results") or []:
+            if isinstance(row, dict) and row.get("test_id") == "T1_e2e_ping":
+                after_t1 = row
+                break
+        if after_t1 is None or after_t1.get("error"):
+            try:
+                after_t1 = T1_e2e_ping(net)
+            except Exception as exc:
+                after_t1 = {"test_id": "T1_e2e_ping", "error": f"{type(exc).__name__}: {exc}"}
 
     harm = _harm(before_t1, after_t1)
     rolled_back = False
@@ -101,8 +126,11 @@ def run(net, proposal, measure=True):
     tests_run = []
     if isinstance(before_t1, dict) and before_t1.get("test_id"):
         tests_run.append(before_t1["test_id"])
-    if isinstance(after_t1, dict) and after_t1.get("test_id") and execution.get("executed"):
-        tests_run.append(after_t1["test_id"])
+    for row in (post_oam or {}).get("results") or []:
+        tid = row.get("test_id") if isinstance(row, dict) else None
+        if tid and tid not in tests_run:
+            tests_run.append(tid)
+    post_conditions = traffic_conditions((post_oam or {}).get("results") or [])
 
     return {
         "method": "B0",
@@ -114,6 +142,15 @@ def run(net, proposal, measure=True):
         "before_path": before_path,
         "before_t1": before_t1,
         "after_t1": after_t1,
+        "post_oam": post_oam,
+        "traffic_recovered": (post_oam or {}).get("traffic_recovered"),
+        "recovery_status": (post_oam or {}).get("recovery_status"),
+        "post_action": (post_oam or {}).get("post_action") or {
+            "connectivity": post_conditions.get("connectivity"),
+            "latency_ms": post_conditions.get("latency_ms"),
+            "packet_loss_percent": post_conditions.get("packet_loss_percent"),
+            "throughput_mbit": post_conditions.get("throughput_mbit"),
+        },
         "rollback_error": rollback_error,
         "tests_run": tests_run,
     }

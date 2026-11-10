@@ -18,7 +18,12 @@ from agent.validate import MAX_EXPECTED_LEN
 from bench.analyze import extract_trace, format_trace, write_analysis
 from bench.contracts import PROTECTED_RESULTS as FROZEN_RESULTS, TEST_IDS, refuse_protected_path
 from bench.run_batch import config_fingerprint, provenance, software_version
-from bench.run_episode import _snapshot, apply_authorized_action
+from bench.run_episode import (
+    TopologyContaminated,
+    _snapshot,
+    apply_authorized_action,
+    require_clean_topology,
+)
 from bench.run_experiments import run_strategies, strategy_inputs
 from bench.run_pilot import STRESS_TICKET
 from gate.decide import decide
@@ -280,6 +285,10 @@ def run_suite():
     return results, failures
 
 
+from bench.outcomes import using_test_thresholds  # offline checks grade with test-only limits
+
+
+@using_test_thresholds
 def _self_check():
     before = _snapshot_frozen()
     failures = []
@@ -376,8 +385,14 @@ def live_accept():
     from bench import inject as inj
     from bench import tests as oam
     from bench.mininet_util import mn_cleanup, run_in_node
+    from bench.outcomes import require_accepted_thresholds
     from bench.run_episode import run_episode
     from network.topology import create_network
+
+    refusal = require_accepted_thresholds(["N0", "N2"])
+    if refusal:
+        print(refusal, file=sys.stderr)
+        return 2
 
     print(f"live-accept build: {LIVE_ACCEPT_BUILD}")
     before = _snapshot_frozen()
@@ -436,7 +451,7 @@ def live_accept():
         expect(ping_rec.get("ok") is True, f"traffic recovered after F1 {ping_rec}")
         expect(recovery_cmp.get("B0", {}).get("decision") and recovery_cmp.get("B5", {}).get("decision"), "F1 comparison")
 
-        inj.reset_all(net, baseline=True)
+        require_clean_topology(inj.reset_all(net, baseline=True), "accept after F1")
         print("  demo  trap F12", flush=True)
         trap = run_episode(
             net,
@@ -461,7 +476,7 @@ def live_accept():
         expect(trap_cmp.get("verifix", {}).get("decision") != "allow", f"VeriFix vs B0 {trap_cmp}")
         expect(trap_cmp.get("B5", {}).get("decision") in {"allow", "block", "escalate"}, f"B5 {trap_cmp.get('B5')}")
 
-        inj.reset_all(net, baseline=True)
+        require_clean_topology(inj.reset_all(net, baseline=True), "accept after F12")
         print("  demo  misleading H0", flush=True)
         healthy = run_episode(
             net,
@@ -490,9 +505,16 @@ def live_accept():
         net = state.get("net")
         if net is not None:
             try:
-                inj.reset_all(net, baseline=True)
-            except Exception:
-                pass
+                report = inj.reset_all(net, baseline=True)
+                problem = None
+                try:
+                    require_clean_topology(report, "accept final cleanup")
+                except TopologyContaminated as exc:
+                    problem = str(exc)
+                    failures.append(problem)
+                    print(f"  FAIL  {problem}", flush=True)
+            except Exception as exc:
+                failures.append(f"final reset: {type(exc).__name__}: {exc}")
             try:
                 net.stop()
             except Exception:

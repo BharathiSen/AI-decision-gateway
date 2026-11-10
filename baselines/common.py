@@ -1,12 +1,24 @@
-"""Shared baseline contract: permitted actions and comparable test budgets."""
+"""Shared baseline contract: permitted actions and comparable test budgets.
+
+Authoritative arm definitions and parity rules:
+  protocol/EXPERIMENT_PROTOCOL.md §2 (research freeze v1).
+
+Budget documentation (H5):
+- DEFAULT_BUDGET_SECONDS (8.0) caps newly executed OAM for B3/B4/B5/VeriFix.
+- B3 fills cheapest-first from the catalog until the cap.
+- B4/B5/VeriFix share covering separators; B4 differs only by catalog
+  predictions vs AI predictions.
+- B2 may exceed the cap (full battery) when run live; replay stays within
+  supplied evidence.
+- Scoring/labels and recovery measurement stay outside decide(); episode
+  recovery is shared via run_episode / B0 post-action OAM.
+"""
 
 from bench.tests import DEFAULT_ORDER
 from gate.selector import _load_costs
 
 METHODS = ("B0", "B1", "B2", "B3", "B4", "B5")
 PERMITTED_ACTIONS = ("REROUTE", "DO_NOTHING", "ESCALATE")
-# B3 information cap. Typical VeriFix selected cost is T5+T6+T7+T4+T1 = 6.5 s.
-# B2 is the uncapped full battery (~26.5 s). B4/B5 use the VeriFix selector.
 DEFAULT_BUDGET_SECONDS = 8.0
 BACKUP_PATH = ["r1", "r3", "r4"]
 

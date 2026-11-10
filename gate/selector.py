@@ -66,11 +66,11 @@ def separating_tests(fault_a, fault_b, matrix=None):
     return tests
 
 
-def pick_cheapest_separating_test(fault_a, fault_b, already_ran=None):
+def pick_cheapest_separating_test(fault_a, fault_b, already_ran=None, matrix=None):
     """Return test_id or None if no affordable separator exists."""
     already_ran = set(already_ran or [])
     costs = _load_costs()
-    candidates = [t for t in separating_tests(fault_a, fault_b) if t not in already_ran]
+    candidates = [t for t in separating_tests(fault_a, fault_b, matrix=matrix) if t not in already_ran]
     if not candidates:
         return None
 
@@ -83,3 +83,24 @@ def pick_cheapest_separating_test(fault_a, fault_b, already_ran=None):
 
     candidates.sort(key=cost)
     return candidates[0]
+
+
+def covering_separating_tests(candidates, fixes=None, matrix=None):
+    """Cheapest matrix separators covering all candidate pairs with different fixes.
+
+    Selection is model-independent: the agent cause id is only a set member.
+    Predictions must not be consulted before this set is frozen.
+    """
+    fixes = fixes or _load_fixes()
+    ids = sorted({cid for cid in (candidates or []) if isinstance(cid, str) and cid})
+    chosen = []
+    pairs = []
+    for i, fault_a in enumerate(ids):
+        for fault_b in ids[i + 1 :]:
+            if needs_different_fixes(fault_a, fault_b, fixes=fixes):
+                pairs.append((fault_a, fault_b))
+    for fault_a, fault_b in pairs:
+        tid = pick_cheapest_separating_test(fault_a, fault_b, already_ran=chosen, matrix=matrix)
+        if tid and tid not in chosen:
+            chosen.append(tid)
+    return chosen

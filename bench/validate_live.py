@@ -246,6 +246,10 @@ def write_report(payload, path=None):
     return path
 
 
+from bench.outcomes import using_test_thresholds  # offline checks grade with test-only limits
+
+
+@using_test_thresholds
 def _self_check():
     before = _snapshot_frozen()
     hidden = held_out_ids()
@@ -346,9 +350,24 @@ def _self_check():
 
     risky_exec = apply_authorized_action(risky_out, risky, execute, healthy, lambda: healthy)
     assert risky_unseen_refused(risky_out, risky_exec, calls), (risky_out, risky_exec)
-    calm = dict(risky, action="DO_NOTHING", proposed_path=["r1", "r2", "r4"])
-    calm_out = decide(None, calm, healthy, [], mode="full", run_missing_tests=False)
-    assert calm_out.get("decision") == "allow"
+    # Healthy no-op requires a catalog cause that permits DO_NOTHING (H0) and
+    # complete NOOP_EVIDENCE_TESTS — not a held-out U1 claim with empty OAM.
+    noop_evidence = [
+        {"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0, "latency_ms": 10.0, "connectivity": True, "error": None},
+        {"test_id": "T4_mtu", "df_ping_ok": True, "error": None},
+        {"test_id": "T8_tcp_vs_ping", "ping_ok": True, "tcp_ok": True, "error": None},
+        {"test_id": "T10_speed", "mbit_per_sec": 50.0, "error": None},
+    ]
+    calm = {
+        "action": "DO_NOTHING",
+        "target": "HostA_to_HostB",
+        "reason": "healthy",
+        "proposed_path": ["r1", "r2", "r4"],
+        "causes": [{"cause_id": "H0", "predicted_tests": []}],
+    }
+    calm_out = decide(None, calm, healthy, noop_evidence, mode="full", run_missing_tests=False)
+    assert calm_out.get("decision") == "allow", calm_out
+    assert "healthy no-op" in (calm_out.get("reason") or ""), calm_out
 
     try:
         write_report({"no": True}, FROZEN_RESULTS[0])
@@ -371,12 +390,19 @@ def live_validate():
     from bench import inject as inj
     from bench import tests as oam
     from bench.mininet_util import mn_cleanup, run_in_node
+    from bench.outcomes import require_accepted_thresholds
     from bench.run_batch import run_one
     from bench.run_episode import apply_authorized_action, read_execution_state
     from gate.decide import decide
     from network.topology import create_network
     from telemetry.collector import collect_current_state
     from network.topology_large import create_large_network
+
+    noise_ids = sorted({case["noise_id"] for case in DIAMOND_CASES} | {GRID_CASE["noise_id"]})
+    refusal = require_accepted_thresholds(noise_ids)
+    if refusal:
+        print(refusal, file=sys.stderr)
+        return 2
 
     print(f"live-validate build: {LIVE_VALIDATE_BUILD}")
     before = _snapshot_frozen()

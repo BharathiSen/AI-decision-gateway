@@ -23,7 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from bench.contracts import PROTECTED_RESULTS as FROZEN_RESULTS, refuse_protected_path
-from bench.run_episode import run_episode, save_episode  # save_episode kept for orphan-json recovery in self-check
+from bench.run_episode import TopologyContaminated, run_episode, save_episode  # save_episode kept for orphan-json recovery in self-check
 from bench.scenarios import generate_matrix, raw_path, resume_pending, write_raw
 from gate.selector import held_out_ids
 
@@ -370,6 +370,9 @@ def run_one(net, links, scenario, timeout_seconds=0):
     try:
         record = run_with_timeout(_run, timeout_seconds)
         return attach_dataset_fields(record, scenario, extra={"status": "ok"})
+    except TopologyContaminated:
+        # Stop the batch: the next scenario would run on a dirty topology.
+        raise
     except TimeoutError as exc:
         return partial_record(scenario, "timeout", exc)
     except ValueError as exc:
@@ -677,6 +680,14 @@ def overnight(args):
         save_state(out_dir, batch_state)
         print("interrupted; raw JSONL preserved", file=sys.stderr)
         return 130
+    except TopologyContaminated as exc:
+        save_state(out_dir, batch_state)
+        print(
+            f"stopping: reset or cleanup failed ({exc}). The failed scenario is not recorded. "
+            "Restart Mininet (sudo mn -c), then rerun with --resume.",
+            file=sys.stderr,
+        )
+        return 4
     finally:
         inj.reset_all(net, baseline=True)
         net.stop()

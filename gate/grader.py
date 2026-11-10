@@ -11,7 +11,13 @@ _MODEL = Path(__file__).resolve().parent.parent / "results" / "grader_model.json
 
 
 def grade_test(test_id, observation, predicted_expected, use_model=True, model_path=None):
-    """Return confidence 0..1 that observation supports prediction."""
+    """Return confidence 0..1 that observation supports prediction.
+
+    Exact matches score 1.0. Without a trained reliability model, a non-match
+    scores 0.0 (never a soft 0.5 that could eliminate alternatives alone).
+    A model file, when trained on repeated measurements, may supply a value
+    in (0, 1) for graded reliability.
+    """
     from bench.contracts import prediction_matches
 
     if prediction_matches(test_id, predicted_expected, observation):
@@ -20,8 +26,9 @@ def grade_test(test_id, observation, predicted_expected, use_model=True, model_p
     if use_model and path.exists():
         data = json.loads(path.read_text(encoding="utf-8"))
         key = f"{test_id}|{(predicted_expected or '').lower()}"
-        return float(data.get(key, 0.5))
-    return 0.5
+        if key in data:
+            return float(data[key])
+    return 0.0
 
 
 def train_grader(samples):

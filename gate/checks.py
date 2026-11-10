@@ -81,6 +81,12 @@ def check_consistency(proposal, test_results, primary_cause_id=None, thresholds=
             unchecked += 1
             rows.append(record)
             continue
+        # Errored rows are unavailable measurement, not negative evidence.
+        if obs.get("error"):
+            record["reason"] = f"test unavailable: {obs.get('error')}"
+            unchecked += 1
+            rows.append(record)
+            continue
         obs_str = _summarize_observation(obs, thresholds)
         record["observed"] = obs_str
         checked += 1
@@ -183,34 +189,38 @@ def path_links_up(snapshot, choice):
     return not down, down
 
 
-# Traffic tests that can justify a no-op. T2 backup-down and T10 speed-floor
-# must not veto DO_NOTHING when end-to-end ICMP/TCP/MTU still work (F12, H0).
-NOOP_EVIDENCE_TESTS = ("T1_e2e_ping", "T4_mtu", "T8_tcp_vs_ping")
+# Traffic tests that must all be present and healthy to justify a no-op.
+# Incomplete batteries and degraded T10 (performance) refuse DO_NOTHING.
+NOOP_EVIDENCE_TESTS = ("T1_e2e_ping", "T4_mtu", "T8_tcp_vs_ping", "T10_speed")
 
 
 def noop_justified(snapshot, test_results, thresholds=None):
-    """True when leaving the network unchanged is supported by evidence."""
+    """True when leaving the network unchanged is supported by complete evidence."""
     from bench.outcomes import grade_result, is_degraded, load_thresholds
 
     thresholds = thresholds or load_thresholds("N0")
-    seen = False
+    metrics = (snapshot or {}).get("metrics") or {}
+    max_loss = (thresholds.get("T1_e2e_ping") or {}).get("max_loss_percent", 5.0)
+    loss = metrics.get("packet_loss_percent")
+    loss_known = isinstance(loss, (int, float)) and not isinstance(loss, bool)
+    # Contradiction needs an explicit broken reading; a missing number is not one.
+    snapshot_broken = metrics.get("connectivity") is False or (loss_known and loss > max_loss)
+    by_id = {}
     for row in test_results or []:
-        tid = row.get("test_id")
-        if tid not in NOOP_EVIDENCE_TESTS:
+        if not isinstance(row, dict):
             continue
-        seen = True
+        tid = row.get("test_id")
+        if tid in NOOP_EVIDENCE_TESTS:
+            by_id[tid] = row
+    # Completeness: every required test must be present and measured.
+    for tid in NOOP_EVIDENCE_TESTS:
+        row = by_id.get(tid)
+        if row is None or row.get("error"):
+            return False
         if is_degraded(tid, grade_result(row, thresholds), thresholds):
             return False
-    if seen:
-        return True
-    metrics = (snapshot or {}).get("metrics") or {}
-    if metrics.get("connectivity") is False:
-        return False
-    loss = metrics.get("packet_loss_percent")
-    if loss is None:
-        return False
-    max_loss = (thresholds.get("T1_e2e_ping") or {}).get("max_loss_percent", 5.0)
-    return loss <= max_loss
+    # Healthy OAM next to a broken snapshot is contradictory evidence.
+    return not snapshot_broken
 
 
 def check_safety(proposal, network_snapshot):

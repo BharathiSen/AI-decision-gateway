@@ -58,9 +58,11 @@ faults:
 
 compounds:
   C1:
-    correct: [DO_NOTHING, ESCALATE]
+    correct: [ESCALATE]
+    notes: "F3+F11; measured valid_fixes=[ESCALATE]. Sprint 2 multi-seed consensus replaces single-trial GT."
   C2:
-    correct: [DO_NOTHING]
+    correct: [ESCALATE]
+    notes: "F6+F12 neither path usable; measured valid_fixes=[ESCALATE]. Never DO_NOTHING."
   C3:
     correct: [REROUTE]
   C4:

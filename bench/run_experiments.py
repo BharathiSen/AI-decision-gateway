@@ -52,11 +52,10 @@ NO_VALID_PROPOSAL = "no valid proposal"
 
 
 def _correct(fault_id):
-    if fault_id in FIXES.get("faults", {}):
-        return set(FIXES["faults"][fault_id].get("correct", []))
-    if fault_id in FIXES.get("compounds", {}):
-        return set(FIXES["compounds"][fault_id].get("correct", []))
-    return set()
+    """Measured correct actions (bench/labels.py), not the gate's catalog table."""
+    from bench.labels import correct_actions
+
+    return correct_actions(fault_id)
 
 
 def _wrong(proposal, fault_id):
@@ -187,13 +186,16 @@ def b5_safe_proposal(proposal):
     return cleaned
 
 
-def run_b5_independent(proposal, snapshot, test_results, net=None, budget_seconds=None):
-    """B5 on a sanitized proposal. Empty input is escalate, not invented DO_NOTHING."""
+def run_b5_independent(proposal, snapshot, test_results, net=None, budget_seconds=None, noise_id=None):
+    """B5 on a sanitized proposal. Empty input is escalate, not invented DO_NOTHING.
+
+    noise_id grades B5 with the same traffic-level thresholds as the gate.
+    """
     cap = DEFAULT_BUDGET_SECONDS if budget_seconds is None else float(budget_seconds)
     cleaned = b5_safe_proposal(proposal)
     if not cleaned:
         return invalid_gate_outcome("B5", cap)
-    return run_method("B5", cleaned, snapshot, test_results, net=net, budget_seconds=cap)
+    return run_method("B5", cleaned, snapshot, test_results, net=net, budget_seconds=cap, noise_id=noise_id)
 
 
 def _contract(result, proposal, method, budget_seconds):
@@ -255,13 +257,20 @@ def _decision_view(row):
 
 
 def episode_recovery(record):
-    """Actual execution outcome from the episode, not from a strategy."""
+    """Actual execution/recovery outcome from the episode, not from a strategy."""
     record = record or {}
     return {
         "execution_attempted": record.get("execution_attempted"),
         "remediation_succeeded": record.get("remediation_succeeded"),
         "state_verified": record.get("state_verified"),
         "execution_error": record.get("execution_error"),
+        "traffic_recovered": record.get("traffic_recovered"),
+        "recovery_status": record.get("recovery_status"),
+        "route_state_changed": record.get("route_state_changed"),
+        "recovery_time_seconds": record.get("recovery_time_seconds"),
+        "recovery_measurement_duration_seconds": record.get(
+            "recovery_measurement_duration_seconds"
+        ),
     }
 
 
@@ -274,7 +283,17 @@ def score_decisions(decisions, proposal, fault_id, invalid=False):
 
 
 def compare_episode(record, net=None, budget_seconds=None):
-    """Paired decisions on one episode, with recovery recorded separately."""
+    """Paired decisions on one episode, with recovery recorded separately.
+
+    When calibration is unaccepted, offline replay still runs as diagnostic
+    analysis only and is labeled accordingly — never as research grades.
+    """
+    from bench.outcomes import (
+        DIAGNOSTIC_UNACCEPTED_LABEL,
+        test_mode_active,
+        threshold_status,
+    )
+
     inputs = strategy_inputs(record)
     invalid = inputs["proposal"] is None
     gate_proposal = {} if invalid else inputs["proposal"]
@@ -296,9 +315,10 @@ def compare_episode(record, net=None, budget_seconds=None):
         inputs["test_results"],
         net=net,
         budget_seconds=cap,
+        noise_id=inputs["noise_id"],
     )
     views = {name: _decision_view(row) for name, row in decisions.items()}
-    return {
+    out = {
         "episode_id": (record or {}).get("episode_id"),
         "paired": True,
         "budget_seconds": cap,
@@ -307,7 +327,20 @@ def compare_episode(record, net=None, budget_seconds=None):
         "recovery": episode_recovery(record),
         "invalid_proposal": invalid,
         "scores": score_decisions(decisions, gate_proposal, (record or {}).get("fault_id", "H0"), invalid),
+        "research_grade": True,
     }
+    if not test_mode_active():
+        status = threshold_status(inputs["noise_id"] or "N0")
+        if status.get("status") != "accepted":
+            out["research_grade"] = False
+            out["analysis_mode"] = "diagnostic"
+            out["label"] = DIAGNOSTIC_UNACCEPTED_LABEL
+            out["threshold_status"] = status
+            for row in out["decisions"].values():
+                if isinstance(row, dict):
+                    row["label"] = DIAGNOSTIC_UNACCEPTED_LABEL
+                    row["research_grade"] = False
+    return out
 
 
 def replay_episode(record, net=None):
@@ -321,6 +354,8 @@ def replay_episode(record, net=None):
 
 
 def aggregate(episode_dir):
+    from bench.outcomes import DIAGNOSTIC_UNACCEPTED_LABEL, test_mode_active, threshold_status
+
     episode_dir = Path(episode_dir)
     files = sorted(episode_dir.glob("*.json"))
     files = [f for f in files if f.name != "_batch_state.json"]
@@ -331,7 +366,9 @@ def aggregate(episode_dir):
         "permitted_actions": list(PERMITTED_ACTIONS),
         "methods": {},
         "recovery": {"recorded": 0, "attempted": 0, "succeeded": 0},
+        "research_grade": True,
     }
+    diagnostic = False
 
     for path in files:
         try:
@@ -340,6 +377,10 @@ def aggregate(episode_dir):
             continue
         if not isinstance(record, dict):
             continue
+        if not test_mode_active():
+            noise = record.get("noise_id") or "N0"
+            if threshold_status(noise).get("status") != "accepted":
+                diagnostic = True
         methods = replay_episode(record, net=None)
         summary["count"] += 1
         rec = episode_recovery(record)
@@ -357,6 +398,10 @@ def aggregate(episode_dir):
 
     for _name, bucket in summary["methods"].items():
         bucket["false_allow_rate"] = bucket["false_allow"] / bucket["total"] if bucket["total"] else None
+    if diagnostic:
+        summary["research_grade"] = False
+        summary["analysis_mode"] = "diagnostic"
+        summary["label"] = DIAGNOSTIC_UNACCEPTED_LABEL
     return summary
 
 
@@ -394,8 +439,14 @@ def live_compare():
     from bench import inject as inj
     from bench import tests as oam
     from bench.mininet_util import mn_cleanup, run_in_node
+    from bench.outcomes import require_accepted_thresholds
     from network.topology import create_network
     from telemetry.collector import collect_current_state
+
+    refusal = require_accepted_thresholds(["N0"])
+    if refusal:
+        print(refusal, file=sys.stderr)
+        return 2
 
     mn_cleanup()
     state = create_network()
@@ -462,7 +513,12 @@ def live_compare():
         failures.append(f"{type(exc).__name__}: {exc}")
         print(f"  FAIL  {type(exc).__name__}: {exc}")
     finally:
-        inj.reset_all(net, baseline=True)
+        from bench.run_episode import TopologyContaminated, require_clean_topology
+
+        try:
+            require_clean_topology(inj.reset_all(net, baseline=True), "strategy comparison cleanup")
+        except TopologyContaminated as exc:
+            failures.append(str(exc))
         net.stop()
         mn_cleanup()
 
@@ -473,6 +529,10 @@ def live_compare():
     return 0
 
 
+from bench.outcomes import using_test_thresholds  # offline checks grade with test-only limits
+
+
+@using_test_thresholds
 def _self_check():
     """Offline Stage 14 checks. Does not write results/experiment_summary.json."""
     import tempfile
@@ -579,44 +639,124 @@ def _self_check():
         escalated = run_b5_independent(malformed, snap, oam, net=None)
         assert escalated["decision"] == "escalate" and escalated["reason"] == NO_VALID_PROPOSAL, escalated
     calm = dict(snap, metrics={"packet_loss_percent": 0.0, "latency_ms": 10, "active_path": "primary", "connectivity": True})
-    for label, unsafe in (("F11", True), ("F12", False)):
-        invalid_noop = {
-            "episode_id": f"invalid-noop-{label}",
-            "fault_id": label,
-            "noise_id": "N0",
-            "agent_proposal": None,
-            "agent_error": "invalid agent output",
-            "agent_error_class": "invalid_output",
-            "agent_raw": {"parsed": {
-                "action": "DO_NOTHING",
-                "target": "HostA_to_HostB",
-                "proposed_path": ["r1", "r2", "r4"],
-                "causes": [{"cause_id": "F12"}],
-            }},
-            "network_snapshot": calm,
-            "oam": {"results": []},
-            "execution_attempted": False,
-        }
-        replay = compare_episode(invalid_noop, net=None)
-        assert replay["invalid_proposal"] is True
-        assert replay["decisions"]["B5"]["decision"] == "allow", replay["decisions"]["B5"]
-        b5_score = replay["scores"]["B5"]
-        assert b5_score["evaluated_action"] == "DO_NOTHING"
-        assert b5_score["false_allow"] is unsafe, (label, b5_score)
-        assert b5_score["correct_allow"] is (not unsafe), (label, b5_score)
-        for name in GATE_ARMS:
-            row = replay["decisions"][name]
-            assert row["decision"] == "escalate" and row["reason"] == NO_VALID_PROPOSAL, (name, row)
-            assert replay["scores"][name]["false_allow"] is False, name
-        live = run_b5_independent(raw_proposal(invalid_noop), calm, [], net=None)
-        assert live["decision"] == "allow" and live["action"] == "DO_NOTHING", live
-        assert score_arm(live["decision"], live["action"], label) == b5_score
-        tmp_one = Path(tempfile.mkdtemp())
-        (tmp_one / "one.json").write_text(json.dumps(invalid_noop), encoding="utf-8")
-        rolled_b5 = aggregate(tmp_one)["methods"]["B5"]
-        assert rolled_b5["false_allow"] == int(unsafe), (label, rolled_b5)
-        (tmp_one / "one.json").unlink()
-        tmp_one.rmdir()
+    noop_evidence = [
+        {"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0, "latency_ms": 10.0, "connectivity": True, "error": None},
+        {"test_id": "T4_mtu", "df_ping_ok": True, "error": None},
+        {"test_id": "T8_tcp_vs_ping", "ping_ok": True, "tcp_ok": True, "error": None},
+        {"test_id": "T10_speed", "mbit_per_sec": 50.0, "error": None},
+    ]
+    # F11: cause-permit forbids DO_NOTHING — B5 must escalate (never false-allow).
+    invalid_f11 = {
+        "episode_id": "invalid-noop-F11",
+        "fault_id": "F11",
+        "noise_id": "N0",
+        "agent_proposal": None,
+        "agent_error": "invalid agent output",
+        "agent_error_class": "invalid_output",
+        "agent_raw": {"parsed": {
+            "action": "DO_NOTHING",
+            "target": "HostA_to_HostB",
+            "proposed_path": ["r1", "r2", "r4"],
+            "causes": [{"cause_id": "F11"}],
+        }},
+        "network_snapshot": calm,
+        "oam": {"results": noop_evidence},
+        "execution_attempted": False,
+    }
+    replay_f11 = compare_episode(invalid_f11, net=None)
+    assert replay_f11["invalid_proposal"] is True
+    assert replay_f11["decisions"]["B5"]["decision"] == "escalate", replay_f11["decisions"]["B5"]
+    b5_f11 = replay_f11["scores"]["B5"]
+    assert b5_f11["false_allow"] is False and b5_f11["correct_allow"] is False, b5_f11
+    for name in GATE_ARMS:
+        row = replay_f11["decisions"][name]
+        assert row["decision"] == "escalate" and row["reason"] == NO_VALID_PROPOSAL, (name, row)
+        assert replay_f11["scores"][name]["false_allow"] is False, name
+    live_f11 = run_b5_independent(raw_proposal(invalid_f11), calm, noop_evidence, net=None)
+    assert live_f11["decision"] == "escalate", live_f11
+    assert "not permitted" in (live_f11.get("reason") or ""), live_f11
+    assert score_arm(live_f11["decision"], live_f11.get("action"), "F11") == b5_f11
+    tmp_f11 = Path(tempfile.mkdtemp())
+    (tmp_f11 / "one.json").write_text(json.dumps(invalid_f11), encoding="utf-8")
+    assert aggregate(tmp_f11)["methods"]["B5"]["false_allow"] == 0
+    (tmp_f11 / "one.json").unlink()
+    tmp_f11.rmdir()
+
+    # Wrong cause: true fault F11, claimed primary cause F12 (whose catalog fix
+    # permits DO_NOTHING), complete healthy no-op evidence. B5 trusts the
+    # claimed cause and ALLOWs; the evaluator must count a false ALLOW.
+    wrong_cause_f11 = dict(
+        invalid_f11,
+        episode_id="wrong-cause-F11",
+        agent_raw={"parsed": {
+            "action": "DO_NOTHING",
+            "target": "HostA_to_HostB",
+            "proposed_path": ["r1", "r2", "r4"],
+            "causes": [{"cause_id": "F12"}],
+        }},
+    )
+    assert "DO_NOTHING" not in _correct("F11"), _correct("F11")
+    replay_wc = compare_episode(wrong_cause_f11, net=None)
+    assert replay_wc["invalid_proposal"] is True
+    assert replay_wc["decisions"]["B5"]["decision"] == "allow", replay_wc["decisions"]["B5"]
+    b5_wc = replay_wc["scores"]["B5"]
+    assert b5_wc["evaluated_action"] == "DO_NOTHING", b5_wc
+    assert b5_wc["proposal_wrong"] is True and b5_wc["false_allow"] is True, b5_wc
+    assert b5_wc["correct_allow"] is False, b5_wc
+    for name in GATE_ARMS:
+        row = replay_wc["decisions"][name]
+        assert row["decision"] == "escalate" and row["reason"] == NO_VALID_PROPOSAL, (name, row)
+        assert replay_wc["scores"][name]["false_allow"] is False, name
+    live_wc = run_b5_independent(raw_proposal(wrong_cause_f11), calm, noop_evidence, net=None)
+    assert live_wc["decision"] == "allow" and live_wc["action"] == "DO_NOTHING", live_wc
+    assert score_arm(live_wc["decision"], live_wc["action"], "F11") == b5_wc
+    # Aggregate counts it: one wrong-cause false ALLOW, one correct F11 escalation.
+    tmp_wc = Path(tempfile.mkdtemp())
+    (tmp_wc / "wrong.json").write_text(json.dumps(wrong_cause_f11), encoding="utf-8")
+    (tmp_wc / "f11.json").write_text(json.dumps(invalid_f11), encoding="utf-8")
+    rolled_wc = aggregate(tmp_wc)["methods"]["B5"]
+    assert rolled_wc["false_allow"] == 1 and rolled_wc["total"] == 2, rolled_wc
+    assert rolled_wc["false_allow_rate"] == 0.5, rolled_wc
+    for leftover in ("wrong.json", "f11.json"):
+        (tmp_wc / leftover).unlink()
+    tmp_wc.rmdir()
+
+    # F12: DO_NOTHING is permitted with complete healthy noop evidence.
+    invalid_f12 = {
+        "episode_id": "invalid-noop-F12",
+        "fault_id": "F12",
+        "noise_id": "N0",
+        "agent_proposal": None,
+        "agent_error": "invalid agent output",
+        "agent_error_class": "invalid_output",
+        "agent_raw": {"parsed": {
+            "action": "DO_NOTHING",
+            "target": "HostA_to_HostB",
+            "proposed_path": ["r1", "r2", "r4"],
+            "causes": [{"cause_id": "F12"}],
+        }},
+        "network_snapshot": calm,
+        "oam": {"results": noop_evidence},
+        "execution_attempted": False,
+    }
+    replay_f12 = compare_episode(invalid_f12, net=None)
+    assert replay_f12["invalid_proposal"] is True
+    assert replay_f12["decisions"]["B5"]["decision"] == "allow", replay_f12["decisions"]["B5"]
+    b5_f12 = replay_f12["scores"]["B5"]
+    assert b5_f12["evaluated_action"] == "DO_NOTHING"
+    assert b5_f12["false_allow"] is False and b5_f12["correct_allow"] is True, b5_f12
+    for name in GATE_ARMS:
+        row = replay_f12["decisions"][name]
+        assert row["decision"] == "escalate" and row["reason"] == NO_VALID_PROPOSAL, (name, row)
+        assert replay_f12["scores"][name]["false_allow"] is False, name
+    live_f12 = run_b5_independent(raw_proposal(invalid_f12), calm, noop_evidence, net=None)
+    assert live_f12["decision"] == "allow" and live_f12["action"] == "DO_NOTHING", live_f12
+    assert score_arm(live_f12["decision"], live_f12["action"], "F12") == b5_f12
+    tmp_f12 = Path(tempfile.mkdtemp())
+    (tmp_f12 / "one.json").write_text(json.dumps(invalid_f12), encoding="utf-8")
+    assert aggregate(tmp_f12)["methods"]["B5"]["false_allow"] == 0
+    (tmp_f12 / "one.json").unlink()
+    tmp_f12.rmdir()
     rejected = dict(record, agent_error="stale observation", agent_error_class="invalid_output")
     rejected_cmp = compare_episode(rejected, net=None)
     assert rejected_cmp["invalid_proposal"] is True

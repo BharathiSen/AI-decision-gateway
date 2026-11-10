@@ -48,19 +48,63 @@ def recover_shell(node):
 RUN_DIR = Path("/tmp")
 
 
-def run_in_node(node, command, timeout=60.0):
+def _kill_node_pid(node, pid):
+    """Terminate one timed-out command PID inside the node (not shell-wide)."""
+    if pid is None or not hasattr(node, "popen"):
+        return
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return
+    if pid <= 1:
+        return
+    for args in (
+        ["kill", "-TERM", "--", str(pid)],
+        ["kill", "-KILL", "--", str(pid)],
+    ):
+        try:
+            proc = node.popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                proc.wait(timeout=2)
+            except Exception:
+                pass
+        except Exception:
+            pass
+        if args[1] == "-TERM":
+            time.sleep(0.05)
+
+
+def run_in_node(node, command, timeout=60.0, structured=False):
     """Run a command and return its output from a file, not the Mininet PTY.
 
     node.cmd() can return on the previous command's prompt while this one
     is still running, so the output file is read empty. Completion is the
     marker file the shell writes after the command exits, not the prompt.
     The host shares /tmp with the node.
+
+    On timeout, only the recorded command PID is signalled (TERM then KILL).
+    No shell-wide pkill/killall.
+
+    When structured=True, return
+    {"output", "exit_code", "timed_out", "error"} so callers can tell
+    measurement failures from observed network outcomes:
+      timeout / read_failure / missing_completion / empty_output /
+      command_failure (nonzero exit with no output).
+    Nonzero exit with usable output leaves error=None; callers grade the
+    network from the text (ping loss often exits 1).
     """
     stem = (RUN_DIR / f"adg-{node.name}-{uuid.uuid4().hex}").as_posix()
     path = Path(f"{stem}.out")
     done = Path(f"{stem}.done")
+    pid_path = Path(f"{stem}.pid")
     recover_shell(node)
-    line = f"bash -c {shlex.quote(command)} > {path} 2>&1; echo $? > {done}"
+    # Record the command PID so a timeout can kill only that process.
+    line = (
+        f"bash -c {shlex.quote(command)} > {path} 2>&1 & "
+        f"echo $! > {pid_path}; "
+        f"wait $(cat {pid_path}); "
+        f"echo $? > {done}"
+    )
     try:
         node.cmd(line)
     except UnicodeDecodeError:
@@ -69,16 +113,59 @@ def run_in_node(node, command, timeout=60.0):
     deadline = time.monotonic() + timeout
     while not done.exists() and time.monotonic() < deadline:
         time.sleep(0.05)
+    timed_out = not done.exists()
+    timed_out_pid = None
+    if timed_out:
+        try:
+            timed_out_pid = int(pid_path.read_text(encoding="utf-8", errors="replace").strip().splitlines()[0])
+        except (OSError, ValueError, IndexError):
+            timed_out_pid = None
+        _kill_node_pid(node, timed_out_pid)
+        # Brief wait for the shell to write done/exit after kill.
+        kill_deadline = time.monotonic() + 0.5
+        while not done.exists() and time.monotonic() < kill_deadline:
+            time.sleep(0.05)
+    exit_code = None
+    if done.exists():
+        try:
+            raw_code = done.read_text(encoding="utf-8", errors="replace").strip().splitlines()[0].strip()
+            exit_code = int(raw_code)
+        except (OSError, ValueError, IndexError):
+            exit_code = None
+    read_failed = False
     try:
-        return path.read_text(encoding="utf-8", errors="replace")
+        output = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return ""
-    finally:
-        for leftover in (path, done):
-            try:
-                leftover.unlink(missing_ok=True)
-            except OSError:
-                pass
+        output = ""
+        read_failed = True
+    for leftover in (path, done, pid_path):
+        try:
+            leftover.unlink(missing_ok=True)
+        except OSError:
+            pass
+    if not structured:
+        return output
+    blank = not (output or "").strip()
+    error = None
+    if timed_out:
+        error = "timeout"
+    elif read_failed:
+        error = "read_failure"
+    elif blank and exit_code == 0:
+        error = "empty_output"
+    elif blank and exit_code is None:
+        error = "missing_completion"
+    elif blank and exit_code not in (0, None):
+        error = "command_failure"
+    result = {
+        "output": output,
+        "exit_code": exit_code,
+        "timed_out": timed_out,
+        "error": error,
+    }
+    if timed_out and timed_out_pid is not None:
+        result["killed_pid"] = timed_out_pid
+    return result
 
 
 def stop_iperf_clients(net, host="hostA"):

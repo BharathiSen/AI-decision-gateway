@@ -22,7 +22,8 @@ Run on the Mininet VM as root:
     sudo python3 bench/validate_faults.py
     sudo python3 bench/validate_faults.py --fault F6 --noise N2 --iterations 3
 
-Writes results/fault_validation.json.
+Writes the report to --out (a new file). The committed
+results/fault_validation.json is historical evidence and is never overwritten.
 """
 
 import argparse
@@ -62,9 +63,10 @@ def scenario_ids():
 
 
 def loss_limit(noise_id):
-    with (ROOT / "config" / "thresholds.yaml").open() as f:
-        doc = yaml.safe_load(f)
-    return float(doc["by_noise_level"][noise_id]["T1_e2e_ping"]["max_loss_percent"])
+    """Accepted T1 loss limit. Raises ThresholdsUnavailable when calibration is unaccepted."""
+    from bench.outcomes import load_thresholds
+
+    return float(load_thresholds(noise_id)["T1_e2e_ping"]["max_loss_percent"])
 
 
 def _inject(net, scenario, seed):
@@ -160,7 +162,24 @@ def main():
     parser.add_argument("--fault", action="append", help="Fault or compound id (repeatable); default all")
     parser.add_argument("--noise", action="append", choices=[*NOISE_IDS, "all"], help="Default all")
     parser.add_argument("--iterations", type=int, default=10)
+    parser.add_argument("--out", default=None, help="new report file (required when the default exists)")
     args = parser.parse_args()
+
+    out = Path(args.out) if args.out else OUT
+    from bench.contracts import refuse_protected_path
+
+    try:
+        refuse_protected_path(out)
+    except ValueError as exc:
+        print(f"refusing: {exc}", file=sys.stderr)
+        sys.exit(2)
+    if out.exists():
+        print(
+            f"refusing: {out} exists (historical evidence is never overwritten). "
+            "Pass --out results/fault_validation/<run-id>.json",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     if os.geteuid() != 0:
         print("validate_faults.py must run as root (sudo) on the Mininet VM.", file=sys.stderr)
@@ -177,6 +196,13 @@ def main():
         print(f"Unknown ids: {unknown}; known: {known}", file=sys.stderr)
         sys.exit(2)
     noise_ids = list(NOISE_IDS) if not args.noise or "all" in args.noise else args.noise
+    from bench.outcomes import require_accepted_thresholds
+
+    refusal = require_accepted_thresholds(noise_ids)
+    if refusal:
+        # Fault validity grades T1 loss; it must not use unaccepted limits.
+        print(refusal, file=sys.stderr)
+        sys.exit(2)
 
     print("Cleaning stale Mininet state (mn -c)...", flush=True)
     mn_cleanup()
@@ -225,12 +251,15 @@ def main():
     report["pass"] = all(
         item["failed"] == 0 for level in report["noise_levels"].values() for item in level.values()
     )
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    if out.exists():
+        print(f"refusing to overwrite {out}, which appeared during the run", file=sys.stderr)
+        sys.exit(2)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    print(f"wrote {out}", flush=True)
     for noise_id, lines in report["noise_cleanup_residual"].items():
         if lines:
             print(f"note: clear_noise({noise_id}) left {len(lines)} difference(s), e.g. {lines[0]}")
-    print(f"\nwrote {OUT.relative_to(ROOT)}")
     if not report["pass"]:
         print("Fault validation: FAIL")
         sys.exit(1)
