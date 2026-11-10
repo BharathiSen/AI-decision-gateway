@@ -426,6 +426,17 @@ def T8_tcp_vs_ping(net):
     t0 = time.monotonic()
     ping = T1_e2e_ping(net, count=5, interval=0.2)
     hostB = net.get("hostB").IP()
+    # D2: listener absence is infrastructure, not a TCP/network fault grade.
+    from bench import mininet_util as mu
+
+    listener_up = None
+    try:
+        listener_up = bool(mu.wait_for_listener(net, 5201, host="hostB", timeout=0.5))
+    except Exception as exc:
+        listener_up = None
+        listener_error = f"{type(exc).__name__}: {exc}"
+    else:
+        listener_error = None
     # Write-only connect. nc would print iperf3's binary handshake, and
     # Mininet's UTF-8 shell decoder crashes on the leading 0xff byte.
     tcp = _run_probe(
@@ -443,11 +454,18 @@ def T8_tcp_vs_ping(net):
         error = "empty_output"
     elif error is None and not has_exit and tcp_out.strip() and "succeeded" not in tcp_out.lower():
         error = "tcp_probe_unparseable"
+    # Known infra: no listener (or listener check failed) when connect also fails.
+    if error is None and not tcp_ok:
+        if listener_up is False:
+            error = "listener_unavailable"
+        elif listener_error:
+            error = f"listener_check_failed: {listener_error}"
     return {
         "test_id": "T8_tcp_vs_ping",
         "ping_ok": False if error else ping["connectivity"],
         "tcp_ok": False if error else tcp_ok,
         "tcp_raw": tcp_out,
+        "listener_up": listener_up,
         "duration_seconds": time.monotonic() - t0,
         "probes": list(ping.get("probes") or []) + [{"kind": "tcp_connect", "packets": 1}],
         "error": error,
@@ -1119,7 +1137,9 @@ def _check_costs():
         stdout = None
 
         def cmd(self, line):
-            out, done = re.search(r"> (\S+\.out) 2>&1; echo \$\? > (\S+\.done)", line).groups()
+            out, pid, done = _parse_run_in_node_paths(line)
+            if pid:
+                Path(pid).write_text("4242\n", encoding="utf-8")
 
             def _finish():
                 time.sleep(0.3)
@@ -1129,12 +1149,41 @@ def _check_costs():
             threading.Thread(target=_finish, daemon=True).start()
             return ""
 
+    class _TimeoutNode:
+        """Never completes; exposes popen so the timed-out PID can be killed."""
+        name = "hostA"
+        stdout = None
+        kills = []
+
+        def cmd(self, line):
+            out, pid, done = _parse_run_in_node_paths(line)
+            Path(pid).write_text("7777\n", encoding="utf-8")
+            Path(out).write_text("partial\n", encoding="utf-8")
+            # Leave done missing so run_in_node times out.
+            return ""
+
+        def popen(self, args, stdout=None, stderr=None):
+            self.kills.append(list(args))
+
+            class _Proc:
+                def wait(self, timeout=None):
+                    return 0
+
+            return _Proc()
+
     saved_dir = mu.RUN_DIR
     mu.RUN_DIR = Path(tempfile.gettempdir())
     try:
         late = mu.run_in_node(_EarlyNode(), "ping -c 5 10.0.1.1", timeout=5)
         assert "0% packet loss" in late, late
         assert not list(mu.RUN_DIR.glob("adg-hostA-*")), "run_in_node left files behind"
+        # D3: timeout kills only the recorded PID (TERM then KILL), not a shell-wide pattern.
+        timed = mu.run_in_node(_TimeoutNode(), "sleep 30", timeout=0.2, structured=True)
+        assert timed["timed_out"] and timed["error"] == "timeout", timed
+        assert timed.get("killed_pid") == 7777, timed
+        assert ["kill", "-TERM", "--", "7777"] in _TimeoutNode.kills, _TimeoutNode.kills
+        assert ["kill", "-KILL", "--", "7777"] in _TimeoutNode.kills, _TimeoutNode.kills
+        assert not any("pkill" in arg for args in _TimeoutNode.kills for arg in args), _TimeoutNode.kills
     finally:
         mu.RUN_DIR = saved_dir
 
@@ -1296,6 +1345,19 @@ def _check_t10_receiver():
     print("T10 receiver parsing: PASS")
 
 
+def _parse_run_in_node_paths(line):
+    """out/pid/done paths from the current run_in_node wrapper command."""
+    match = re.search(
+        r"> (\S+\.out) 2>&1 & echo \$! > (\S+\.pid); wait \$\(cat \2\); echo \$\? > (\S+\.done)",
+        line,
+    )
+    if match:
+        return match.groups()
+    match = re.search(r"> (\S+\.out) 2>&1; echo \$\? > (\S+\.done)", line)
+    out, done = match.groups()
+    return out, None, done
+
+
 def _check_h2_measurement_errors():
     """Network outcomes must not share grading with measurement failures."""
     import tempfile
@@ -1311,9 +1373,18 @@ def _check_h2_measurement_errors():
             self._writer = writer
 
         def cmd(self, line):
-            out, done = re.search(r"> (\S+\.out) 2>&1; echo \$\? > (\S+\.done)", line).groups()
+            out, pid, done = _parse_run_in_node_paths(line)
+            if pid:
+                Path(pid).write_text("4242\n", encoding="utf-8")
             self._writer(out, done)
             return ""
+
+        def popen(self, args, stdout=None, stderr=None):
+            class _Proc:
+                def wait(self, timeout=None):
+                    return 0
+
+            return _Proc()
 
     saved_dir = mu.RUN_DIR
     mu.RUN_DIR = Path(tempfile.gettempdir())
@@ -1353,6 +1424,7 @@ def _check_h2_measurement_errors():
             structured=True,
         )
         assert timed["timed_out"] and timed["error"] == "timeout" and timed["output"], timed
+        assert timed.get("killed_pid") == 4242, timed
 
         def write_read_fail(out, done):
             Path(out).mkdir()
@@ -1449,6 +1521,7 @@ def _check_h2_measurement_errors():
         globals()["run_in_node"] = saved
 
     # T8: empty / timeout are measurement failures, not ping_ok_tcp_fail.
+    # D2: listener down + connect fail is infrastructure, not TCP network fault.
     def fake_t8(node, command, timeout=60.0, structured=False, mode="empty"):
         if "ping " in command:
             return ok_ping
@@ -1460,25 +1533,32 @@ def _check_h2_measurement_errors():
             return {"output": "exit:1\n", "exit_code": 0, "timed_out": False, "error": None}
         return {"output": "exit:0\n", "exit_code": 0, "timed_out": False, "error": None}
 
-    for mode, want_err, want_tcp in (
-        ("empty", "empty_output", False),
-        ("timeout", "timeout", False),
-        ("tcp_fail", None, False),
-        ("ok", None, True),
+    import bench.mininet_util as mu_t8
+
+    saved_listener = mu_t8.wait_for_listener
+    for mode, want_err, want_tcp, listener_up in (
+        ("empty", "empty_output", False, True),
+        ("timeout", "timeout", False, True),
+        ("tcp_fail", None, False, True),
+        ("tcp_fail", "listener_unavailable", False, False),
+        ("ok", None, True, True),
     ):
         globals()["run_in_node"] = (
             lambda node, command, timeout=60.0, structured=False, _m=mode: fake_t8(
                 node, command, timeout=timeout, structured=structured, mode=_m
             )
         )
+        mu_t8.wait_for_listener = lambda net, port, host="hostB", timeout=0.5, _up=listener_up: _up
         try:
             row = T8_tcp_vs_ping(_Net())
-            assert row["error"] == want_err, (mode, row)
-            assert row["tcp_ok"] is want_tcp, (mode, row)
+            assert row["error"] == want_err, (mode, listener_up, row)
+            assert row["tcp_ok"] is want_tcp, (mode, listener_up, row)
+            assert row.get("listener_up") is listener_up, row
             if want_err:
                 assert row["ping_ok"] is False, row
         finally:
             globals()["run_in_node"] = saved
+            mu_t8.wait_for_listener = saved_listener
 
     # T10: timeout with a partial bitrate stays measurement failure.
     partial = (

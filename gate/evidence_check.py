@@ -243,6 +243,13 @@ def main():
         assert allowed["decision"] == "allow" and allowed["log"]["eliminated"], allowed
         refuted = decide(None, copy.deepcopy(f3_pred), lossy, [_t2("r4", backup_hop="r4"), T1_OK], run_missing_tests=False)
         assert refuted["decision"] == "block" and refuted["reason"] == "consistency failed", refuted
+        # H6: a non-match with the alternative alone must not eliminate when the
+        # observation does not support the primary hypothesis.
+        unsupported = with_predictions([{"test_id": "T2_hop_ping", "expected": "primary:r1-r2=loss"}])
+        odd = decide(None, unsupported, lossy, [_t2("r2"), T1_OK], run_missing_tests=False)
+        assert not (odd.get("log") or {}).get("eliminated"), odd.get("log")
+        comps = (odd.get("log") or {}).get("comparisons") or []
+        assert comps and all(row.get("supports_primary") is False for row in comps), comps
 
     # (7) Candidate set + covering are independent of which cause is primary.
     # Swap primary with only that id listed as an AI cause (not both pre-listed).

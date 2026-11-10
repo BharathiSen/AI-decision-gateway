@@ -667,9 +667,12 @@ def run_episode(
     try:
         pre_reset = parts["reset_all"](net)
         # Background traffic is on here, so only errors and residual count.
-        problem = teardown_problem(pre_reset, real_reset, check_health=False)
-        if problem:
-            raise TopologyContaminated(f"pre-episode reset: {problem}", pre_reset)
+        require_clean_topology(
+            pre_reset,
+            "pre-episode reset",
+            real_reset=real_reset,
+            check_health=False,
+        )
         if compound_id:
             comp = parts["inject_compound"](net, compound_id, seed=seed)
             correlation_ids = comp["correlation_ids"]
@@ -843,7 +846,7 @@ def run_episode(
             record["teardown"] = teardown_summary(teardown, problem)
         if problem:
             # Never run another episode on a topology that may still carry
-            # this one's fault. The caller stops; the operator resets.
+            # this one's fault. Preserve the partial episode record.
             raise TopologyContaminated(f"episode teardown: {problem}", teardown, record=record)
 
 
@@ -860,7 +863,12 @@ class TopologyContaminated(RuntimeError):
 
 
 def teardown_problem(report, real_reset, check_health=True):
-    """Why a reset report shows a possibly contaminated topology, or None."""
+    """Why a reset report shows a possibly contaminated topology, or None.
+
+    Explicit errors or residual state always fail closed, including stub
+    resets used in offline tests. Missing reports and missing health checks
+    fail only for the authoritative injector reset.
+    """
     if not isinstance(report, dict):
         return "reset returned no report" if real_reset else None
     problems = []
@@ -873,6 +881,14 @@ def teardown_problem(report, real_reset, check_health=True):
     if check_health and real_reset and "healthy" not in report:
         problems.append("reset report has no health check")
     return "; ".join(problems) or None
+
+
+def require_clean_topology(report, where, *, real_reset=True, check_health=True, record=None):
+    """Raise TopologyContaminated when a reset/cleanup report is unsafe."""
+    problem = teardown_problem(report, real_reset, check_health=check_health)
+    if problem:
+        raise TopologyContaminated(f"{where}: {problem}", report, record=record)
+    return report
 
 
 def teardown_summary(report, problem):
@@ -1449,6 +1465,7 @@ def _self_check():
 
     def quiet_reset(net, baseline=False):
         events.append("reset+baseline" if baseline else "reset")
+        return {"errors": [], "residual": {}, "healthy": True, "loss_percent": 0.0}
 
     def quiet_inject(net, fault_id, seed=None):
         events.append("inject")
@@ -1532,6 +1549,58 @@ def _self_check():
     assert walked == ["inject", "telemetry", "tests", "agent", "gate", "execute"], walked
     assert events[:2] == ["noise", "reset"], events
     assert events[-2:] == ["clear", "reset+baseline"], events
+
+    # H4: failed reset/cleanup fails closed and preserves the partial record.
+    assert teardown_problem({"errors": [{"error": "stuck"}], "residual": {}}, False) is not None
+    assert teardown_problem({"errors": [], "residual": {}, "healthy": True}, True) is None
+    dirty_calls = {"n": 0}
+
+    def dirty_reset(net, baseline=False):
+        dirty_calls["n"] += 1
+        if baseline:
+            return {"errors": [{"error": "link stuck"}], "residual": {"c1": ["qdisc"]}, "healthy": False, "loss_percent": 100.0}
+        return {"errors": [], "residual": {}, "healthy": True, "loss_percent": 0.0}
+
+    try:
+        run_episode(
+            object(),
+            {},
+            fault_id="H0",
+            run_oam=False,
+            agent_fn=local_agent,
+            gate_fn=local_gate,
+            execute_fn=local_execute,
+            _components=dict(fakes, reset_all=dirty_reset),
+        )
+        raise AssertionError("contaminated teardown must raise")
+    except TopologyContaminated as exc:
+        assert exc.record is not None, "partial episode record must be preserved"
+        assert exc.record.get("episode_id")
+        assert "episode teardown" in str(exc)
+        assert dirty_calls["n"] >= 2
+
+    def dirty_pre(net, baseline=False):
+        # Teardown after the failed pre-reset must still be allowed to finish
+        # cleanly so the original contamination error propagates.
+        if baseline:
+            return {"errors": [], "residual": {}, "healthy": True, "loss_percent": 0.0}
+        return {"errors": [{"error": "pre residual"}], "residual": {"x": 1}}
+
+    try:
+        run_episode(
+            object(),
+            {},
+            fault_id="H0",
+            run_oam=False,
+            agent_fn=local_agent,
+            gate_fn=local_gate,
+            execute_fn=local_execute,
+            _components=dict(fakes, reset_all=dirty_pre),
+        )
+        raise AssertionError("contaminated pre-reset must raise")
+    except TopologyContaminated as exc:
+        assert "pre-episode reset" in str(exc), exc
+        assert exc.record is None
 
     import tempfile
 
@@ -2208,7 +2277,7 @@ def _self_check():
     assert overlap_wrong == 1 and overlap_wrong_matched == 0
     assert prediction_matches("T2_hop_ping", "r2-r4=down", f1_grade) is True
     assert grade_test("T2_hop_ping", f1_grade, "r2-r4=down", use_model=False) == 1.0
-    assert grade_test("T2_hop_ping", f1_grade, "r2-r4=ok", use_model=False) == 0.5
+    assert grade_test("T2_hop_ping", f1_grade, "r2-r4=ok", use_model=False) == 0.0
     cons_t2 = check_consistency(
         {"causes": [{"cause_id": "F1", "predicted_tests": [{"test_id": "T2_hop_ping", "expected": "r2-r4=down"}]}]},
         [t2_f1],
@@ -2221,7 +2290,7 @@ def _self_check():
     model_path = model_dir / "grader_model.json"
     model_path.write_text(json.dumps({"T1_e2e_ping|loss": 0.91}), encoding="utf-8")
     assert grade_test("T1_e2e_ping", "ok", "loss", use_model=True, model_path=model_path) == 0.91
-    assert grade_test("T1_e2e_ping", "ok", "loss", use_model=True, model_path=model_dir / "missing.json") == 0.5
+    assert grade_test("T1_e2e_ping", "ok", "loss", use_model=True, model_path=model_dir / "missing.json") == 0.0
     assert grade_test("T1_e2e_ping", "loss", "loss", use_model=True, model_path=model_path) == 1.0
     assert model_path.resolve() != (Path(__file__).resolve().parent.parent / "results" / "grader_model.json").resolve()
     repo = Path(__file__).resolve().parent.parent

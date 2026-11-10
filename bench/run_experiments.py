@@ -472,7 +472,12 @@ def live_compare():
         failures.append(f"{type(exc).__name__}: {exc}")
         print(f"  FAIL  {type(exc).__name__}: {exc}")
     finally:
-        inj.reset_all(net, baseline=True)
+        from bench.run_episode import TopologyContaminated, require_clean_topology
+
+        try:
+            require_clean_topology(inj.reset_all(net, baseline=True), "strategy comparison cleanup")
+        except TopologyContaminated as exc:
+            failures.append(str(exc))
         net.stop()
         mn_cleanup()
 

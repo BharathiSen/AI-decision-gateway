@@ -417,8 +417,28 @@ def decide(
             exp_primary = primary_pred["expected"]
             confidence = grade_test(tid, obs, exp_primary, use_model=learned_grader)
             comparison["confidence"] = confidence
-            if obs != exp_alt and confidence >= min_conf:
-                ruled_out.append({"alternative": alt, "test_id": tid, "observed": obs, "confidence": confidence})
+            # H6: eliminate only when evidence positively supports the primary
+            # and contradicts the alternative. A non-match with the alternative
+            # alone is not proof. Confidence without primary support cannot rule out.
+            from bench.contracts import prediction_matches
+
+            supports_primary = prediction_matches(tid, exp_primary, obs)
+            contradicts_alt = not prediction_matches(tid, exp_alt, obs)
+            comparison["supports_primary"] = supports_primary
+            comparison["contradicts_alternative"] = contradicts_alt
+            if (
+                supports_primary
+                and contradicts_alt
+                and confidence >= min_conf
+            ):
+                ruled_out.append({
+                    "alternative": alt,
+                    "test_id": tid,
+                    "observed": obs,
+                    "confidence": confidence,
+                    "supports_primary": True,
+                    "contradicts_alternative": True,
+                })
                 log["eliminated"].append(alt)
                 rules.append(f"eliminate {alt} via {tid}")
 
