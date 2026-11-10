@@ -22,7 +22,6 @@ from bench.run_episode import save_episode
 from gate.decide import decide
 
 ROOT = Path(__file__).resolve().parent.parent
-FIXES = yaml.safe_load((ROOT / "config" / "correct_fixes.yaml").read_text(encoding="utf-8"))
 COSTS = yaml.safe_load((ROOT / "config" / "costs.yaml").read_text(encoding="utf-8"))["tests"]
 MATRIX_PATH = ROOT / "results" / "observability_matrix.csv"
 PILOT_OUT = ROOT / "results" / "pilot"
@@ -97,11 +96,10 @@ def _build_snapshot(oam_bundle):
 
 
 def _correct_set(fault_id):
-    if fault_id in FIXES.get("faults", {}):
-        return set(FIXES["faults"][fault_id].get("correct", []))
-    if fault_id in FIXES.get("compounds", {}):
-        return set(FIXES["compounds"][fault_id].get("correct", []))
-    return set()
+    """Measured labels only. Never score against config/correct_fixes.yaml."""
+    from bench.labels import correct_actions
+
+    return correct_actions(fault_id)
 
 
 def _stub_proposal(snapshot):

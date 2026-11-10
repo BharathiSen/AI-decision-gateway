@@ -102,18 +102,27 @@ def _test_cost(test_id, costs):
 
 
 def _candidate_set(primary, ai_causes, symptoms, hidden):
-    """AI hypotheses plus catalog alternatives. Held-out ids never enter the set."""
+    """Symptom top-k plus AI cause ids as set members only.
+
+    The catalog top-k does not exclude the primary, so swapping which cause
+    the model ranked first cannot reshape the symptom-derived set. Held-out
+    ids never enter except as primary (later escalated as outside catalog).
+    """
     stages = pipeline_interfaces()
+    hidden = set(hidden or [])
+    # exclude=[]: symptom ranking is independent of the model's preferred cause.
     alts = [
         fid
-        for fid in stages["candidate_generation"](symptoms, exclude=[primary])
+        for fid in stages["candidate_generation"](symptoms, exclude=[])
         if fid not in hidden
     ]
-    extra_ai = [cid for cid in ai_causes[1:] if cid not in hidden and cid != primary and cid not in alts]
     seen = []
-    for cid in [primary] + extra_ai + alts:
-        if cid not in seen:
-            seen.append(cid)
+    for cid in list(ai_causes or []) + alts:
+        if not cid or cid in seen:
+            continue
+        if cid in hidden and cid != primary:
+            continue
+        seen.append(cid)
     return seen
 
 

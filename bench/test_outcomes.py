@@ -143,6 +143,39 @@ def test_grades():
     check("T10 slow", grade_result({"test_id": "T10_speed", "mbit_per_sec": 0.4}, THRESHOLDS) == "slow")
     check("T10 ok", grade_result({"test_id": "T10_speed", "mbit_per_sec": 8}, THRESHOLDS) == "ok")
 
+    # D4: errored rows never become network grades; valid rows unchanged.
+    timed = {"test_id": "T10_speed", "mbit_per_sec": 8.38, "error": "timeout"}
+    empty = {
+        "test_id": "T1_e2e_ping",
+        "packet_loss_percent": 0.0,
+        "latency_ms": 10.0,
+        "connectivity": True,
+        "error": "empty_output",
+    }
+    cmd_fail = {
+        "test_id": "T2_hop_ping",
+        "error": "command_failure",
+        "hops_primary": [_hop("10.0.24.2", loss=20)],
+        "hops_backup": _healthy_backup(),
+    }
+    check("T10 timeout with residual bitrate is ungraded", grade_result(timed, THRESHOLDS) is None)
+    check("empty_output with residual fields is ungraded", grade_result(empty, THRESHOLDS) is None)
+    check("command_failure with partial hops is ungraded", grade_result(cmd_fail, THRESHOLDS) is None)
+    check("valid slow throughput still grades slow", grade_result({"test_id": "T10_speed", "mbit_per_sec": 0.4}, THRESHOLDS) == "slow")
+    check("valid healthy throughput still grades ok", grade_result({"test_id": "T10_speed", "mbit_per_sec": 8}, THRESHOLDS) == "ok")
+    check("None outcome is not degraded", not is_degraded("T10_speed", None))
+    sig = signature([
+        {"test_id": "T10_speed", "mbit_per_sec": 8.0},
+        timed,
+        empty,
+        {"test_id": "T8_tcp_vs_ping", "ping_ok": True, "tcp_ok": True},
+    ], THRESHOLDS)
+    check(
+        "signature omits errored rows and keeps valid grades",
+        sig == {"T10_speed": "ok", "T8_tcp_vs_ping": "both_ok"},
+        str(sig),
+    )
+
     alarms = evaluate_against_thresholds([
         {"test_id": "T1_e2e_ping", "packet_loss_percent": 0, "latency_ms": 20},
         {"test_id": "T10_speed", "mbit_per_sec": 9.5},
@@ -153,6 +186,8 @@ def test_grades():
         {"test_id": "T5_if_errors", "interfaces": {"r4/r4-eth0": {"rx_errors": 2, "tx_errors": 0}}},
     ])
     check("loss and errors alarm", "T1_loss_high" in alarms and "T5_if_errors_degraded" in alarms, str(alarms))
+    alarms = evaluate_against_thresholds([timed, empty])
+    check("errored rows do not raise threshold alarms", alarms == [], str(alarms))
     check("blackhole is degraded", is_degraded("T7_route_check", "blackhole"))
     check("primary route is not degraded", not is_degraded("T7_route_check", "primary"))
 

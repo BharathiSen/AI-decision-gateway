@@ -249,7 +249,16 @@ def _grade_t10(result, thresholds):
 
 
 def grade_result(result, thresholds=None, noise_id="N0"):
-    """Return one compact outcome string for a single OAM result dict."""
+    """Return one compact outcome string for a single OAM result dict.
+
+    Contract: a row with truthy `error` is infrastructure/measurement
+    failure, not a network observation. Return None (no grade). Callers
+    must treat that as missing evidence, never as ok/slow/loss/etc.
+    """
+    if not isinstance(result, dict):
+        return "unknown"
+    if result.get("error"):
+        return None
     if thresholds is None:
         thresholds = load_thresholds(noise_id)
     test_id = result.get("test_id")
@@ -275,10 +284,22 @@ def grade_result(result, thresholds=None, noise_id="N0"):
 
 
 def signature(test_results, thresholds=None, noise_id="N0"):
-    """Map test_id -> outcome for a battery of OAM results."""
+    """Map test_id -> outcome for a battery of OAM results.
+
+    Errored rows are omitted: missing from the map means unmeasured, not a
+    fabricated network grade. Valid rows keep their graded tokens.
+    """
     if thresholds is None:
         thresholds = load_thresholds(noise_id)
-    return {r["test_id"]: grade_result(r, thresholds) for r in test_results}
+    out = {}
+    for row in test_results or []:
+        if not isinstance(row, dict):
+            continue
+        tid = row.get("test_id")
+        if not tid or row.get("error"):
+            continue
+        out[tid] = grade_result(row, thresholds)
+    return out
 
 
 def healthy_outcome(test_id):
@@ -291,7 +312,10 @@ def is_degraded(test_id, outcome, thresholds=None):
     T2 is degraded when any hop is loss, down, or delay. T7 backup is a
     path choice, not a fault; blackhole and return_mismatch are faults.
     T8 may skip the TCP alarm when the traffic level says TCP need not succeed.
+    None means unmeasured/errored — not a network degradation.
     """
+    if outcome is None:
+        return False
     if test_id == "T2_hop_ping":
         return any(token in (outcome or "") for token in ("=loss", "=down", "=delay"))
     if test_id == "T7_route_check":

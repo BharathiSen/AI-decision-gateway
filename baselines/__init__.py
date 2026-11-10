@@ -15,7 +15,7 @@ def run_method(method, proposal, snapshot, test_results, net=None, budget_second
 
     The true fault id is not an input. net is used only when a method
     needs to run extra OAM tests. B0 does not change the network here.
-    noise_id selects grading thresholds for B5, the same ones the gate uses.
+    noise_id selects grading thresholds for B4/B5, the same ones the gate uses.
     """
     name = (method or "").upper()
     proposal = proposal or {}
@@ -37,7 +37,14 @@ def run_method(method, proposal, snapshot, test_results, net=None, budget_second
         result = decide(proposal, snapshot, test_results, net=net, budget_seconds=cap)
     elif name == "B4":
         from baselines.b4_llm_checker import decide
-        result = decide(proposal, snapshot, test_results, net=net)
+        result = decide(
+            proposal,
+            snapshot,
+            test_results,
+            net=net,
+            noise_id=noise_id or "N0",
+            budget_seconds=cap,
+        )
     elif name == "B5":
         from baselines.b5_adaptive import decide_b5
         from bench.outcomes import load_thresholds

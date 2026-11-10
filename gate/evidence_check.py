@@ -107,6 +107,8 @@ def main():
         _errored(T4_OK, "ping dns"),
         _errored(T8_OK, "RuntimeError: nc missing"),
         _errored(T10_OK, "iperf timeout"),
+        _errored(T10_OK, "timeout"),
+        _errored(T10_OK, "empty_output"),
     ):
         rows = [broken if row["test_id"] == broken["test_id"] else row for row in healthy]
         assert not noop_justified(_snapshot(), rows), broken
@@ -181,13 +183,12 @@ def main():
     assert "no prediction for discriminating test" in side_out["reason"], side_out
     # (2) No prediction for the discriminating test: missing evidence, escalate.
     assert tid in side_out["checks"]["consistency"]["missing_predictions"]
-    # (2b) Malformed selected prediction (missing expected): never authorize.
-    # Proposal validation blocks schema-invalid predictions before consistency.
+    # (2b) Schema-invalid prediction (missing expected key) → BLOCK, never authorize.
+    # Distinct from (2)/(4): well-formed proposals missing selected evidence → ESCALATE.
     malformed = with_predictions([{"test_id": tid}])
     malformed_out = decide(None, malformed, lossy, [observed], run_missing_tests=False)
-    assert malformed_out["decision"] in {"block", "escalate"}, malformed_out
-    assert malformed_out["decision"] != "allow"
-    assert "missing expected" in malformed_out["reason"] or "malformed" in malformed_out["reason"] or "no prediction" in malformed_out["reason"], malformed_out
+    assert malformed_out["decision"] == "block", malformed_out
+    assert "invalid proposal" in malformed_out["reason"] and "missing expected" in malformed_out["reason"], malformed_out
     # (3) A contradicted prediction on the discriminating test: negative evidence, block.
     wrong = with_predictions([{"test_id": tid, "expected": alt_token}])
     wrong_out = decide(None, wrong, lossy, [observed], run_missing_tests=False)
@@ -243,16 +244,29 @@ def main():
         refuted = decide(None, copy.deepcopy(f3_pred), lossy, [_t2("r4", backup_hop="r4"), T1_OK], run_missing_tests=False)
         assert refuted["decision"] == "block" and refuted["reason"] == "consistency failed", refuted
 
-    # (7) Covering selection is independent of which candidate is primary.
+    # (7) Candidate set + covering are independent of which cause is primary.
+    # Swap primary with only that id listed as an AI cause (not both pre-listed).
     ok, _errs, frozen = load_frozen_context("N0")
     assert ok
     symptoms = _symptoms_from_snapshot(lossy)
-    cands_a = _candidate_set("F3", ["F3", "F11"], symptoms, frozen["held_out"] or set())
-    cands_b = _candidate_set("F11", ["F11", "F3"], symptoms, frozen["held_out"] or set())
-    assert set(cands_a) == set(cands_b)
+    cands_a = _candidate_set("F3", ["F3"], symptoms, frozen["held_out"] or set())
+    cands_b = _candidate_set("F11", ["F11"], symptoms, frozen["held_out"] or set())
+    assert "F3" in cands_a and "F11" in cands_a
+    assert "F3" in cands_b and "F11" in cands_b
+    assert set(cands_a) == set(cands_b), (cands_a, cands_b)
     cover_a = covering_separating_tests(cands_a, fixes=frozen["fixes"], matrix=frozen["matrix"])
     cover_b = covering_separating_tests(cands_b, fixes=frozen["fixes"], matrix=frozen["matrix"])
     assert cover_a == cover_b and cover_a, (cover_a, cover_b)
+
+    # (7b) B4 parity: same selected tests as VeriFix; only prediction source differs.
+    from baselines.b4_llm_checker import decide as decide_b4
+
+    verifix = decide(None, copy.deepcopy(proposal), lossy, [observed, T1_OK], run_missing_tests=False)
+    b4 = decide_b4(copy.deepcopy(proposal), lossy, [observed, T1_OK], net=None, run_missing_tests=False, noise_id="N0")
+    assert list(verifix.get("log", {}).get("selected_tests") or []) == list(b4.get("selected_tests") or []), (
+        verifix.get("log", {}).get("selected_tests"),
+        b4.get("selected_tests"),
+    )
 
     # (8) The gate config must name a scope; a missing key fails closed.
     from gate import inputs as gin

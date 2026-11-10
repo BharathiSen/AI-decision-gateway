@@ -152,24 +152,56 @@ def _icmp_probe(count, data_bytes=_PING_DATA_BYTES):
     }
 
 
+def _as_run(run):
+    """Normalize run_in_node return for structured callers (and string mocks)."""
+    if isinstance(run, dict):
+        return run
+    return {
+        "output": "" if run is None else str(run),
+        "exit_code": None,
+        "timed_out": False,
+        "error": None,
+    }
+
+
+def _run_probe(node, command, timeout=60.0):
+    """Prefer structured run_in_node; fall back for older string-only mocks."""
+    try:
+        return _as_run(run_in_node(node, command, timeout=timeout, structured=True))
+    except TypeError:
+        return _as_run(run_in_node(node, command, timeout=timeout))
+
+
+def _probe_run_error(run):
+    """Shell/measurement failure from structured run_in_node, else None."""
+    run = _as_run(run)
+    if run.get("timed_out"):
+        return "timeout"
+    return run.get("error")
+
+
 def T1_e2e_ping(net, count=10, interval=0.2):
     t0 = time.monotonic()
-    out = run_in_node(
+    run = _run_probe(
         net.get("hostA"),
         f"ping -c {count} -i {interval} -W 1 {net.get('hostB').IP()}",
     )
+    out = run.get("output") or ""
     parsed = _parse_ping(out)
     parsed["connectivity"] = parsed["packet_loss_percent"] < 100.0
     parsed["duration_seconds"] = time.monotonic() - t0
     parsed["probes"] = [_icmp_probe(count)]
-    return {"test_id": "T1_e2e_ping", "error": ping_error(parsed["ping_status"]), **parsed}
+    error = _probe_run_error(run) or ping_error(parsed["ping_status"])
+    return {"test_id": "T1_e2e_ping", "error": error, **parsed}
 
 
 def _hop_ping(net, src, dst_ip, count=10, interval=0.2):
-    out = run_in_node(net.get(src), f"ping -c {count} -i {interval} -W 1 {dst_ip}")
+    run = _run_probe(net.get(src), f"ping -c {count} -i {interval} -W 1 {dst_ip}")
+    out = run.get("output") or ""
     p = _parse_ping(out)
     p["src"] = src
     p["dst_ip"] = dst_ip
+    p["error"] = _probe_run_error(run) or ping_error(p["ping_status"])
     return p
 
 
@@ -184,15 +216,19 @@ def T2_hop_ping(net, path="primary", count=10, interval=0.2):
     Backup hops are what separate a dead backup (F12) from a healthy
     primary. `hops` stays the requested path so existing callers still
     read a single path.
+
+    Any hop with a measurement/infrastructure `error` (timeout, read
+    failure, empty output, command failure, or ping tool failure) makes
+    the whole T2 row missing evidence — partial hop text is not graded.
     """
     t0 = time.monotonic()
     primary = _ping_hops(net, HOPS, count=count, interval=interval)
     backup = _ping_hops(net, HOPS_BACKUP, count=count, interval=interval)
     selected = primary if path != "backup" else backup
     failed = sorted({
-        f"{hop.get('src')}->{hop.get('dst_ip')}: {hop.get('ping_status')}"
+        f"{hop.get('src')}->{hop.get('dst_ip')}: {hop.get('error')}"
         for hop in primary + backup
-        if hop.get("ping_status") in PING_TOOL_FAILURES
+        if hop.get("error")
     })
     return {
         "test_id": "T2_hop_ping",
@@ -211,10 +247,11 @@ def T4_mtu(net):
     hostB = net.get("hostB").IP()
     payload = 1400
     count = 5
-    out = run_in_node(
+    run = _run_probe(
         net.get("hostA"),
         f"ping -c {count} -i 0.2 -M do -s {payload} -W 2 {hostB}",
     )
+    out = run.get("output") or ""
     # Match the loss number. A substring check treats "100% packet loss"
     # as success because it contains "0% packet loss".
     parsed = _parse_ping(out)
@@ -231,7 +268,7 @@ def T4_mtu(net):
         "raw": out,
         "duration_seconds": time.monotonic() - t0,
         "probes": [_icmp_probe(count, payload)],
-        "error": ping_error(status),
+        "error": _probe_run_error(run) or ping_error(status),
     }
 
 
@@ -391,19 +428,29 @@ def T8_tcp_vs_ping(net):
     hostB = net.get("hostB").IP()
     # Write-only connect. nc would print iperf3's binary handshake, and
     # Mininet's UTF-8 shell decoder crashes on the leading 0xff byte.
-    tcp_out = run_in_node(
+    tcp = _run_probe(
         net.get("hostA"),
         f"timeout 5 bash -c 'echo >/dev/tcp/{hostB}/5201' >/dev/null 2>&1; echo exit:$?",
     )
+    tcp_out = tcp.get("output") or ""
+    has_exit = "exit:" in tcp_out
     tcp_ok = "exit:0" in tcp_out or "succeeded" in tcp_out.lower()
+    error = ping.get("error")
+    if error is None:
+        error = _probe_run_error(tcp)
+    # Completed probe with no exit token and no usable text is not a TCP fault.
+    if error is None and not has_exit and not tcp_out.strip():
+        error = "empty_output"
+    elif error is None and not has_exit and tcp_out.strip() and "succeeded" not in tcp_out.lower():
+        error = "tcp_probe_unparseable"
     return {
         "test_id": "T8_tcp_vs_ping",
-        "ping_ok": ping["connectivity"],
-        "tcp_ok": tcp_ok,
+        "ping_ok": False if error else ping["connectivity"],
+        "tcp_ok": False if error else tcp_ok,
         "tcp_raw": tcp_out,
         "duration_seconds": time.monotonic() - t0,
         "probes": list(ping.get("probes") or []) + [{"kind": "tcp_connect", "packets": 1}],
-        "error": None,
+        "error": error,
     }
 
 
@@ -449,13 +496,18 @@ def T9_oneway_loss(net, count=10, interval=0.2):
     t0 = time.monotonic()
     a2b = _one_way_ping(net, "hostA", "hostB", count, interval)
     b2a = _one_way_ping(net, "hostB", "hostA", count, interval)
+    failed = []
+    for label, row in (("a2b", a2b), ("b2a", b2a)):
+        err = row.get("error")
+        if err:
+            failed.append(f"{label}: {err}")
     return {
         "test_id": "T9_oneway_loss",
         "hostA_to_hostB": a2b,
         "hostB_to_hostA": b2a,
         "duration_seconds": time.monotonic() - t0,
         "probes": [_icmp_probe(count * 2)],
-        "error": None,
+        "error": ("ping tool failure: " + "; ".join(failed)) if failed else None,
     }
 
 
@@ -575,6 +627,31 @@ def _parse_mbit_intervals(output):
     return found
 
 
+def _iperf_infra_error(out, mbit, run_meta=None):
+    """Infra/tool failure for T10. A real slow transfer keeps error=None.
+
+    Timeout or structured run error is always measurement failure, even when
+    a partial bitrate was parsed from incomplete output.
+    """
+    if run_meta and run_meta.get("timed_out"):
+        return "timeout"
+    if run_meta and run_meta.get("error"):
+        return run_meta["error"]
+    text = out or ""
+    low = text.lower()
+    if not text.strip():
+        return "empty_output"
+    if "connection refused" in low or "unable to connect" in low or "no route to host" in low:
+        return "iperf_connect_failed"
+    if "unable to send" in low or "error -" in low:
+        return "iperf_error"
+    if "interrupt -" in low and mbit is None:
+        return "iperf_interrupted"
+    if mbit is None:
+        return "iperf_unparseable"
+    return None
+
+
 def measure_speed_once(net, port=5201):
     """One one-second iperf3, the same shape as a working N0 T10 sample.
 
@@ -583,11 +660,12 @@ def measure_speed_once(net, port=5201):
     """
     dest = net.get("hostB").IP()
     port_arg = "" if int(port) == 5201 else f"-p {int(port)} "
-    out = run_in_node(
+    run = _run_probe(
         net.get("hostA"),
         f"{_IPERF_TIMEOUT} 8 iperf3 -c {dest} {port_arg}-t 1 --connect-timeout 2000",
     )
-    return _parse_mbit(out), out
+    out = run.get("output") or ""
+    return _parse_mbit(out), out, run
 
 
 # SIGINT, not the default SIGTERM: iperf3 writes to a file block-buffered,
@@ -599,14 +677,16 @@ _IPERF_TIMEOUT = "timeout -s INT -k 3"
 def T10_speed(net, duration=3, interval=None):
     t0 = time.monotonic()
     hostB = net.get("hostB").IP()
+    run_meta = None
     if interval:
-        mbit, out = measure_speed_once(net, port=5201)
+        mbit, out, run_meta = measure_speed_once(net, port=5201)
         intervals = [mbit] if mbit is not None else []
     else:
-        out = run_in_node(
+        run_meta = _run_probe(
             net.get("hostA"),
             f"{_IPERF_TIMEOUT} 20 iperf3 -c {hostB} -t {duration} --connect-timeout 2000",
         )
+        out = run_meta.get("output") or ""
         mbit = _summary_mbit(out, duration)
         intervals = []
     return {
@@ -616,7 +696,7 @@ def T10_speed(net, duration=3, interval=None):
         "raw": out[-2000:] if len(out) > 2000 else out,
         "duration_seconds": time.monotonic() - t0,
         "probes": [{"kind": "iperf3", "bytes": _summary_bytes(out, 1 if interval else duration)}],
-        "error": None,
+        "error": _iperf_infra_error(out, mbit, run_meta),
     }
 
 
@@ -804,6 +884,8 @@ def evaluate_against_thresholds(test_results, noise_id="N0"):
     for result in test_results:
         tid = result.get("test_id")
         outcome = grade_result(result, th)
+        if outcome is None:
+            continue
         if tid == "T1_e2e_ping":
             if outcome == "down" or "loss" in outcome:
                 alarms.append("T1_loss_high")
@@ -920,10 +1002,15 @@ def _check_costs():
         assert calls == ["ensure", "T8", "one_off", "listen:5201", "T10", "finish:server", "free:5201"], calls
         assert crashed["results"][-1]["error"] == "RuntimeError: iperf3 died"
         calls.clear()
-        TEST_FUNCS["T10_speed"] = lambda _net, **_k: {"test_id": "T10_speed", "mbit_per_sec": None}
+        TEST_FUNCS["T10_speed"] = lambda _net, **_k: {
+            "test_id": "T10_speed",
+            "mbit_per_sec": None,
+            "error": "empty_output",
+        }
         silent = run_all(object(), test_ids=["T10_speed"])["results"][0]
         assert silent["server_listening"] is True and silent["server_log"] == ""
-        assert silent["error"] is None
+        # Missing speed reading is infra/missing evidence, not a graded slow.
+        assert silent["error"] == "empty_output"
     finally:
         for name, fn in saved_mu.items():
             setattr(mu, name, fn)
@@ -958,7 +1045,7 @@ def _check_costs():
         def __init__(self, blob):
             self.blob = blob
 
-    def fake_snmp(node, command, timeout=60.0):
+    def fake_snmp(node, command, timeout=60.0, structured=False):
         if command == "cat /proc/net/netstat":
             return getattr(node, "netstat", "IpExt: InCsumErrors\nIpExt: 0\n")
         assert command == "cat /proc/net/snmp", command
@@ -1005,7 +1092,7 @@ def _check_costs():
         def intfList(self):
             return []
 
-    def fake_t5(node, command, timeout=60.0):
+    def fake_t5(node, command, timeout=60.0, structured=False):
         node.net.cmds.append((node.name, command))
         if "cat /proc/net/" in command:
             return "Ip: InHdrErrors\nIp: 0\nIpExt: InCsumErrors\nIpExt: 0\n"
@@ -1067,7 +1154,7 @@ def _check_one_way():
         def get(self, name):
             return hosts[name]
 
-    def fake_run(node, command, timeout=60.0):
+    def fake_run(node, command, timeout=60.0, structured=False):
         if command == "cat /proc/net/snmp":
             return (
                 "Ip: Forwarding DefaultTTL\nIp: 1 64\n"
@@ -1090,6 +1177,7 @@ def _check_one_way():
         assert a2b["round_trip_loss_percent"] == 20.0 and b2a["round_trip_loss_percent"] == 20.0, result
         assert a2b["one_way"] and a2b["packet_loss_percent"] == 0.0, a2b
         assert b2a["packet_loss_percent"] == 20.0 and b2a["requests_arrived"] == 8, b2a
+        assert result["error"] is None, result
         hosts["hostA"].in_echos = None
         fallback = _one_way_ping(_Net(), "hostB", "hostA", 10, 0.2)
         assert not fallback["one_way"] and fallback["packet_loss_percent"] == 20.0, fallback
@@ -1161,7 +1249,9 @@ def _check_ping_classification():
             (dns, False, False, "ping dns"),
             (missing, False, False, "ping command_error"),
         ):
-            globals()["run_in_node"] = lambda node, cmd, timeout=60.0, _t=text: _t
+            globals()["run_in_node"] = (
+                lambda node, cmd, timeout=60.0, structured=False, _t=text: _t
+            )
             row = T4_mtu(_Net())
             assert row["df_ping_ok"] is df_ok and row["mtu_evidence"] is mtu_evidence, row
             assert row["error"] == error, row
@@ -1192,7 +1282,328 @@ def _check_t10_receiver():
     assert _summary_mbit(v3b_f12 + "iperf3: error - unable to send control message\n", 3) is None
     unreachable = "iperf3: error - unable to connect to server - server may have stopped running: Network is unreachable\n"
     assert _summary_mbit(unreachable, 3) is None
+    # Infra/tool failures are tagged as error (missing evidence), not graded slow.
+    assert _iperf_infra_error("", None) == "empty_output"
+    assert _iperf_infra_error(unreachable, None) == "iperf_connect_failed"
+    assert _iperf_infra_error("iperf3: error - unable to send control message\n", None) == "iperf_error"
+    assert _iperf_infra_error("interrupt -\n", None) == "iperf_interrupted"
+    assert _iperf_infra_error(v3b_f12, 7.67) is None
+    assert _iperf_infra_error("no summary", None, {"timed_out": True}) == "timeout"
+    # Timeout/partial bitrate is measurement failure, never graded slow.
+    assert _iperf_infra_error(v3b_f12, 7.67, {"timed_out": True}) == "timeout"
+    assert _iperf_infra_error(v3b_f12, 7.67, {"error": "timeout", "timed_out": True}) == "timeout"
+    assert _iperf_infra_error("no receiver summary\n", None) == "iperf_unparseable"
     print("T10 receiver parsing: PASS")
+
+
+def _check_h2_measurement_errors():
+    """Network outcomes must not share grading with measurement failures."""
+    import tempfile
+    from pathlib import Path
+
+    import bench.mininet_util as mu
+
+    class _FileNode:
+        name = "hostA"
+        stdout = None
+
+        def __init__(self, writer):
+            self._writer = writer
+
+        def cmd(self, line):
+            out, done = re.search(r"> (\S+\.out) 2>&1; echo \$\? > (\S+\.done)", line).groups()
+            self._writer(out, done)
+            return ""
+
+    saved_dir = mu.RUN_DIR
+    mu.RUN_DIR = Path(tempfile.gettempdir())
+    try:
+        def write_ok(out, done, text="", code="0"):
+            Path(out).write_text(text, encoding="utf-8")
+            Path(done).write_text(f"{code}\n", encoding="utf-8")
+
+        empty = mu.run_in_node(_FileNode(lambda o, d: write_ok(o, d, "", "0")), "true", structured=True)
+        assert empty["error"] == "empty_output" and empty["exit_code"] == 0, empty
+
+        fail = mu.run_in_node(_FileNode(lambda o, d: write_ok(o, d, "", "1")), "false", structured=True)
+        assert fail["error"] == "command_failure" and fail["exit_code"] == 1, fail
+
+        # Nonzero exit with usable ping text is not a shell measurement failure.
+        ping_loss = (
+            "3 packets transmitted, 0 received, 100% packet loss, time 2030ms\n"
+        )
+        loss_run = mu.run_in_node(
+            _FileNode(lambda o, d: write_ok(o, d, ping_loss, "1")),
+            "ping",
+            structured=True,
+        )
+        assert loss_run["error"] is None and loss_run["exit_code"] == 1, loss_run
+
+        def write_timeout_partial(out, done):
+            Path(out).write_text(
+                "[  5]   0.00-1.00   sec  1.00 MBytes  8.00 Mbits/sec    0            sender\n",
+                encoding="utf-8",
+            )
+            # No .done → timed_out
+
+        timed = mu.run_in_node(
+            _FileNode(write_timeout_partial),
+            "iperf3",
+            timeout=0.2,
+            structured=True,
+        )
+        assert timed["timed_out"] and timed["error"] == "timeout" and timed["output"], timed
+
+        def write_read_fail(out, done):
+            Path(out).mkdir()
+            Path(done).write_text("0\n", encoding="utf-8")
+
+        read_fail = mu.run_in_node(
+            _FileNode(write_read_fail),
+            "true",
+            structured=True,
+        )
+        assert read_fail["error"] == "read_failure", read_fail
+        for leftover in mu.RUN_DIR.glob("adg-hostA-*.out"):
+            if leftover.is_dir():
+                leftover.rmdir()
+
+        def write_bad_done(out, done):
+            Path(out).write_text("", encoding="utf-8")
+            Path(done).write_text("not-an-int\n", encoding="utf-8")
+
+        missing = mu.run_in_node(
+            _FileNode(write_bad_done),
+            "true",
+            structured=True,
+        )
+        assert missing["error"] == "missing_completion", missing
+    finally:
+        for leftover in Path(tempfile.gettempdir()).glob("adg-hostA-*"):
+            try:
+                if leftover.is_dir():
+                    leftover.rmdir()
+                else:
+                    leftover.unlink()
+            except OSError:
+                pass
+        mu.RUN_DIR = saved_dir
+
+    class _Node:
+        def __init__(self, name, ip):
+            self.name, self._ip = name, ip
+
+        def IP(self):
+            return self._ip
+
+    class _Net:
+        def get(self, name):
+            return hosts[name]
+
+    hosts = {
+        "hostA": _Node("hostA", "10.0.1.2"),
+        "hostB": _Node("hostB", "10.0.4.2"),
+    }
+    ok_ping = (
+        "5 packets transmitted, 5 received, 0% packet loss, time 801ms\n"
+        "rtt min/avg/max/mdev = 40.1/41.0/42.0/0.6 ms\n"
+    )
+    tool_fail = "bash: line 1: ping: command not found\n"
+    lossy = "10 packets transmitted, 8 received, 20% packet loss, time 1800ms\n"
+
+    def fake_t9(node, command, timeout=60.0, structured=False):
+        if command == "cat /proc/net/snmp":
+            return "Ip: Forwarding\nIp: 1\nIcmp: InEchos\nIcmp: 0\n"
+        if node.name == "hostA":
+            return tool_fail
+        return ok_ping
+
+    saved = globals()["run_in_node"]
+    globals()["run_in_node"] = fake_t9
+    try:
+        t9 = T9_oneway_loss(_Net(), count=5)
+        assert t9["error"], t9
+        assert "a2b" in t9["error"] and "ping command_error" in t9["error"], t9
+        assert t9["hostA_to_hostB"]["error"] == "ping command_error", t9["hostA_to_hostB"]
+        assert t9["hostB_to_hostA"]["error"] is None, t9["hostB_to_hostA"]
+    finally:
+        globals()["run_in_node"] = saved
+
+    # Asymmetric network loss is still graded network evidence, not a tool error.
+    def fake_asym(node, command, timeout=60.0, structured=False):
+        if command == "cat /proc/net/snmp":
+            return "unreadable"
+        if node.name == "hostA":
+            return ok_ping
+        return lossy
+
+    globals()["run_in_node"] = fake_asym
+    try:
+        asym = T9_oneway_loss(_Net(), count=10)
+        assert asym["error"] is None, asym
+        assert asym["hostA_to_hostB"]["packet_loss_percent"] == 0.0, asym
+        assert asym["hostB_to_hostA"]["packet_loss_percent"] == 20.0, asym
+        assert asym["hostA_to_hostB"]["error"] is None
+        assert asym["hostB_to_hostA"]["error"] is None
+    finally:
+        globals()["run_in_node"] = saved
+
+    # T8: empty / timeout are measurement failures, not ping_ok_tcp_fail.
+    def fake_t8(node, command, timeout=60.0, structured=False, mode="empty"):
+        if "ping " in command:
+            return ok_ping
+        if mode == "timeout":
+            return {"output": "", "exit_code": None, "timed_out": True, "error": "timeout"}
+        if mode == "empty":
+            return {"output": "", "exit_code": 0, "timed_out": False, "error": "empty_output"}
+        if mode == "tcp_fail":
+            return {"output": "exit:1\n", "exit_code": 0, "timed_out": False, "error": None}
+        return {"output": "exit:0\n", "exit_code": 0, "timed_out": False, "error": None}
+
+    for mode, want_err, want_tcp in (
+        ("empty", "empty_output", False),
+        ("timeout", "timeout", False),
+        ("tcp_fail", None, False),
+        ("ok", None, True),
+    ):
+        globals()["run_in_node"] = (
+            lambda node, command, timeout=60.0, structured=False, _m=mode: fake_t8(
+                node, command, timeout=timeout, structured=structured, mode=_m
+            )
+        )
+        try:
+            row = T8_tcp_vs_ping(_Net())
+            assert row["error"] == want_err, (mode, row)
+            assert row["tcp_ok"] is want_tcp, (mode, row)
+            if want_err:
+                assert row["ping_ok"] is False, row
+        finally:
+            globals()["run_in_node"] = saved
+
+    # T10: timeout with a partial bitrate stays measurement failure.
+    partial = (
+        "[ ID] Interval           Transfer     Bitrate         Retr\n"
+        "[  5]   0.00-3.00   sec  4.38 MBytes  12.2 Mbits/sec    0            sender\n"
+        "[  5]   0.00-3.16   sec  3.25 MBytes  8.38 Mbits/sec                  receiver\n"
+    )
+
+    def fake_t10(node, command, timeout=60.0, structured=False):
+        return {
+            "output": partial,
+            "exit_code": None,
+            "timed_out": True,
+            "error": "timeout",
+        }
+
+    globals()["run_in_node"] = fake_t10
+    try:
+        t10 = T10_speed(_Net(), duration=3)
+        assert t10["error"] == "timeout", t10
+        assert t10["mbit_per_sec"] == 8.38, t10
+    finally:
+        globals()["run_in_node"] = saved
+
+    def fake_t10_connect(node, command, timeout=60.0, structured=False):
+        text = "iperf3: error - unable to connect to server: Connection refused\n"
+        return {"output": text, "exit_code": 1, "timed_out": False, "error": None}
+
+    globals()["run_in_node"] = fake_t10_connect
+    try:
+        t10c = T10_speed(_Net(), duration=3)
+        assert t10c["error"] == "iperf_connect_failed", t10c
+        assert t10c["mbit_per_sec"] is None, t10c
+    finally:
+        globals()["run_in_node"] = saved
+
+    # D1: T2 parent error from any hop structured measurement failure.
+    t2_nodes = {
+        name: _Node(name, "10.0.4.2" if name == "hostB" else "10.0.1.1")
+        for name in ("hostA", "r1", "r2", "r3", "r4", "hostB")
+    }
+
+    class _T2Net:
+        def get(self, name):
+            return t2_nodes[name]
+
+    ok_hop = (
+        "5 packets transmitted, 5 received, 0% packet loss, time 801ms\n"
+        "rtt min/avg/max/mdev = 1.0/1.0/1.0/0.0 ms\n"
+    )
+    loss_hop = "10 packets transmitted, 8 received, 20% packet loss, time 1800ms\n"
+    partial_timeout = (
+        "PING 10.0.24.2 (10.0.24.2) 56(84) bytes of data.\n"
+        "64 bytes from 10.0.24.2: icmp_seq=1 ttl=63 time=1.0 ms\n"
+        "3 packets transmitted, 1 received, 66% packet loss, time 2000ms\n"
+    )
+
+    def _structured(output="", exit_code=0, timed_out=False, error=None):
+        return {
+            "output": output,
+            "exit_code": exit_code,
+            "timed_out": timed_out,
+            "error": error,
+        }
+
+    def fake_t2(node, command, timeout=60.0, structured=False, by_dst=None):
+        dst = command.split()[-1]
+        meta = (by_dst or {}).get(dst)
+        if meta is None:
+            meta = _structured(ok_hop)
+        if structured:
+            return meta
+        return meta.get("output") or ""
+
+    def run_t2(by_dst):
+        globals()["run_in_node"] = (
+            lambda node, command, timeout=60.0, structured=False, _b=by_dst: fake_t2(
+                node, command, timeout=timeout, structured=structured, by_dst=_b
+            )
+        )
+        try:
+            return T2_hop_ping(_T2Net(), count=5)
+        finally:
+            globals()["run_in_node"] = saved
+
+    # Timeout with partial stats on one hop → T2 error, not graded loss.
+    t2_timeout = run_t2({
+        "10.0.24.2": _structured(partial_timeout, timed_out=True, error="timeout"),
+    })
+    assert t2_timeout["error"] and "timeout" in t2_timeout["error"], t2_timeout
+    assert any(h.get("error") == "timeout" for h in t2_timeout["hops_primary"]), t2_timeout
+
+    t2_read = run_t2({"10.0.12.2": _structured("", error="read_failure")})
+    assert t2_read["error"] and "read_failure" in t2_read["error"], t2_read
+
+    t2_empty = run_t2({
+        "10.0.13.2": _structured("", exit_code=0, error="empty_output"),
+    })
+    assert t2_empty["error"] and "empty_output" in t2_empty["error"], t2_empty
+
+    t2_cmd = run_t2({
+        "10.0.34.2": _structured("", exit_code=1, error="command_failure"),
+    })
+    assert t2_cmd["error"] and "command_failure" in t2_cmd["error"], t2_cmd
+
+    # One ok path + one errored hop still fails the whole T2 row.
+    mixed = run_t2({
+        "10.0.4.2": _structured("", exit_code=0, error="empty_output"),
+    })
+    assert mixed["error"] and "empty_output" in mixed["error"], mixed
+    assert any(
+        h.get("error") is None and h.get("ping_status") == "ok"
+        for h in mixed["hops_primary"]
+    ), mixed
+
+    healthy_t2 = run_t2({})
+    assert healthy_t2["error"] is None, healthy_t2
+    assert all(h.get("error") is None for h in healthy_t2["hops_primary"] + healthy_t2["hops_backup"])
+
+    lossy_t2 = run_t2({"10.0.24.2": _structured(loss_hop)})
+    assert lossy_t2["error"] is None, lossy_t2
+    bad = next(h for h in lossy_t2["hops_primary"] if h.get("dst_ip") == "10.0.24.2")
+    assert bad.get("packet_loss_percent") == 20.0 and bad.get("error") is None, bad
+
+    print("H2 measurement errors: PASS")
 
 
 if __name__ == "__main__":
@@ -1200,3 +1611,4 @@ if __name__ == "__main__":
     print("test cost: PASS")
     _check_ping_classification()
     _check_t10_receiver()
+    _check_h2_measurement_errors()

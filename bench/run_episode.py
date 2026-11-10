@@ -206,6 +206,49 @@ def _routes_on_path(snapshot, path):
     return found.get("r1") == path and found.get("r4") == path
 
 
+def measure_traffic_recovery(net, noise_id="N0", ping_count=None, speed_seconds=None):
+    """Post-remediation OAM: command success is not recovery.
+
+    Reuses the recovery test set and degraded_tests rule from the
+    observability matrix (T1/T4/T8 healthy and T10 ≥ 4 Mbit).
+    """
+    from bench.signature_checks import RECOVERY_T10_MIN_MBIT, RECOVERY_TESTS, degraded_tests
+    from bench.outcomes import signature
+
+    if ping_count is None:
+        ping_count = getattr(oam, "EPISODE_PING_COUNT", 10)
+    if speed_seconds is None:
+        speed_seconds = getattr(oam, "EPISODE_SPEED_SECONDS", 3)
+    battery = oam.run_all(
+        net,
+        test_ids=list(RECOVERY_TESTS),
+        ping_count=ping_count,
+        speed_seconds=speed_seconds,
+    )
+    results = list(battery.get("results") or [])
+    outcomes = signature(results, noise_id=noise_id)
+    t10 = next((row for row in results if row.get("test_id") == "T10_speed"), None)
+    samples = []
+    if isinstance(t10, dict) and not t10.get("error"):
+        try:
+            mbit = float(t10.get("mbit_per_sec"))
+        except (TypeError, ValueError):
+            mbit = None
+        if mbit is not None:
+            samples = [mbit]
+    degraded = degraded_tests(outcomes, t10_samples=samples)
+    missing = [row.get("test_id") for row in results if row.get("error")]
+    recovered = not degraded and not missing
+    return {
+        "results": results,
+        "outcomes": outcomes,
+        "degraded": degraded,
+        "missing_evidence": missing,
+        "t10_min_mbit": RECOVERY_T10_MIN_MBIT,
+        "traffic_recovered": recovered,
+    }
+
+
 def apply_authorized_action(gate_decision, proposal, execute_fn, approved_snapshot, read_state):
     """Single boundary between a gate decision and remediation.
 
@@ -489,6 +532,21 @@ def run_episode(
         if not result_ok:
             record["remediation_succeeded"] = False
             record["execution_error"] = "invalid execution result: " + "; ".join(result_errors)
+        # Measurement only: executed=True is not traffic recovery.
+        record["traffic_recovered"] = None
+        if (
+            record.get("execution_attempted")
+            and record.get("remediation_succeeded")
+            and net is not None
+            and callable(getattr(net, "get", None))
+        ):
+            try:
+                post = measure_traffic_recovery(net, noise_id=record.get("noise_id") or "N0")
+                record["post_oam"] = post
+                record["traffic_recovered"] = post.get("traffic_recovered")
+            except Exception as exc:
+                record["post_oam"] = {"error": f"{type(exc).__name__}: {exc}"}
+                record["traffic_recovered"] = False
         record["completed_at"] = datetime.now(timezone.utc).isoformat()
         return record
     finally:
@@ -730,6 +788,36 @@ def _self_check():
     allowed = once("allow", healthy, after=on_backup)
     assert calls == [proposal], calls
     assert allowed["state_verified"] is True and allowed["remediation_succeeded"] is True, allowed
+    # Command success is not traffic recovery: post-OAM grades recovery separately.
+    saved_run_all = oam.run_all
+
+    def _fake_recovery(_net, test_ids=None, **_kwargs):
+        return {
+            "results": [
+                {"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0, "latency_ms": 10.0, "connectivity": True, "error": None},
+                {"test_id": "T4_mtu", "df_ping_ok": True, "error": None},
+                {"test_id": "T8_tcp_vs_ping", "ping_ok": True, "tcp_ok": True, "error": None},
+                {"test_id": "T10_speed", "mbit_per_sec": 8.0, "error": None},
+            ]
+        }
+
+    oam.run_all = _fake_recovery
+    try:
+        recovered = measure_traffic_recovery(object(), noise_id="N0")
+        assert recovered["traffic_recovered"] is True and not recovered["degraded"], recovered
+        slow = {
+            "results": [
+                {"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0, "latency_ms": 10.0, "connectivity": True, "error": None},
+                {"test_id": "T4_mtu", "df_ping_ok": True, "error": None},
+                {"test_id": "T8_tcp_vs_ping", "ping_ok": True, "tcp_ok": True, "error": None},
+                {"test_id": "T10_speed", "mbit_per_sec": 1.0, "error": None},
+            ]
+        }
+        oam.run_all = lambda _net, test_ids=None, **_kwargs: slow
+        not_recovered = measure_traffic_recovery(object(), noise_id="N0")
+        assert not_recovered["traffic_recovered"] is False and "T10_speed" in not_recovered["degraded"], not_recovered
+    finally:
+        oam.run_all = saved_run_all
 
     one_sided = once("allow", healthy, after=_snapshot(r1_via="10.0.13.2"))
     assert one_sided["execution_attempted"] is True and one_sided["remediation_succeeded"] is False

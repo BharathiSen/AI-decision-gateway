@@ -491,6 +491,25 @@ def score_error_inclusive_alarms(bundles, thresholds, noise_id=None):
     return count
 
 
+FIRST_TRY_T10_TARGET = 0.95
+
+
+def first_try_t10_completeness(bundles):
+    """Share of runs whose T10 first reading is usable (not errored/missing/backfilled)."""
+    total = 0
+    ok = 0
+    for bundle in bundles:
+        rows = [r for r in bundle.get("results") or [] if r.get("test_id") == "T10_speed"]
+        if not rows:
+            continue
+        total += 1
+        if not _unusable(rows[0]):
+            ok += 1
+    if total == 0:
+        return None
+    return ok / total
+
+
 def _false_alarm_target():
     with THRESHOLDS_PATH.open(encoding="utf-8") as handle:
         doc = yaml.safe_load(handle)
@@ -507,11 +526,18 @@ def build_report(calibration, evaluation, noise_id, existing, full_battery, seed
     no_reading_runs, no_reading_tests = score_no_readings(evaluation)
     fit_no_reading_runs, _ = score_no_readings(calibration)
     inclusive = score_error_inclusive_alarms(evaluation, proposed, noise_id)
+    all_runs = list(calibration) + list(evaluation)
+    t10_completeness = first_try_t10_completeness(all_runs)
     battery_profile = _battery_profile(calibration)
-    average_runs = _average_latency_runs(list(calibration) + list(evaluation))
+    average_runs = _average_latency_runs(all_runs)
     if average_runs:
         notes = list(notes) + [
             f"{average_runs} saved run(s) have no per-reply RTTs; their ping latency is the average, not the median"
+        ]
+    if t10_completeness is not None and t10_completeness < FIRST_TRY_T10_TARGET:
+        notes = list(notes) + [
+            f"first-try T10 completeness {t10_completeness:.3f} < {FIRST_TRY_T10_TARGET}; "
+            "backfill must not count toward acceptance"
         ]
     return {
         "noise_id": noise_id,
@@ -528,7 +554,7 @@ def build_report(calibration, evaluation, noise_id, existing, full_battery, seed
         "fit_false_alarm_rate": fit_rate,
         "latency_average_runs": average_runs,
         "failed_read_runs": sum(
-            1 for bundle in list(calibration) + list(evaluation)
+            1 for bundle in all_runs
             if any(
                 result.get("test_id") in ("T2_hop_ping", "T9_oneway_loss") and _no_reading(result)
                 for result in bundle.get("results") or []
@@ -542,6 +568,8 @@ def build_report(calibration, evaluation, noise_id, existing, full_battery, seed
         "fit_no_reading_runs": fit_no_reading_runs,
         "eval_error_inclusive_alarms": inclusive,
         "eval_error_inclusive_false_alarm_rate": (inclusive / eval_runs) if eval_runs else None,
+        "first_try_t10_completeness": t10_completeness,
+        "first_try_t10_target": FIRST_TRY_T10_TARGET,
         "eval_alarm_tests": _alarm_tests(evaluation, proposed, noise_id),
         "eval_alarm_runs": _alarm_runs(evaluation, proposed, noise_id, first_index=len(calibration)),
         "false_alarm_rate_target": target,
@@ -553,6 +581,8 @@ def ready_to_write(report):
     # The error-inclusive rate is what episodes see: a failed probe on a
     # healthy network still stops a no-op. Older reports lack it.
     rate = report.get("eval_error_inclusive_false_alarm_rate", report.get("eval_false_alarm_rate"))
+    t10_target = report.get("first_try_t10_target", FIRST_TRY_T10_TARGET)
+    t10_completeness = report.get("first_try_t10_completeness")
     return (
         report.get("full_battery") is True
         and report.get("calibration_runs", 0) >= MIN_CALIBRATION_RUNS
@@ -561,6 +591,8 @@ def ready_to_write(report):
         and report.get("episode_aligned_battery") is True
         and rate is not None
         and rate <= target
+        and t10_completeness is not None
+        and t10_completeness >= t10_target
     )
 
 
@@ -572,10 +604,14 @@ def update_thresholds_yaml(reports, path=THRESHOLDS_PATH):
             continue
         rate = report.get("eval_error_inclusive_false_alarm_rate", report.get("eval_false_alarm_rate"))
         target = report.get("false_alarm_rate_target", _false_alarm_target())
+        t10 = report.get("first_try_t10_completeness")
+        t10_target = report.get("first_try_t10_target", FIRST_TRY_T10_TARGET)
         if not report.get("episode_aligned_battery"):
             refused.append(f"{noise} (legacy 3-ping/1s battery; re-collect to {SAMPLES_EPISODE_PATH.name})")
         elif rate is None or rate > target:
             refused.append(f"{noise} (false-alarm rate {rate} > target {target})")
+        elif t10 is None or t10 < t10_target:
+            refused.append(f"{noise} (first-try T10 completeness {t10} < {t10_target})")
         else:
             refused.append(noise)
     if refused:
@@ -765,9 +801,22 @@ def _self_check():
     assert _backfilled(t10_row) and _backfilled({"test_id": "T10_speed", "mbit_per_sec": 8.0, "checked": True})
     assert not _backfilled({"test_id": "T10_speed", "mbit_per_sec": 8.0, "raw": "ok"})
     assert score_no_readings([filled])[0] == 1, "a backfilled run is not a clean first reading"
+    assert first_try_t10_completeness([filled]) == 0.0, "backfill is not a first-try T10 reading"
     assert score_error_inclusive_alarms(mixed, existing, "N0") == 2
     inclusive_report = dict(report, eval_error_inclusive_false_alarm_rate=0.5, eval_false_alarm_rate=0.0)
     assert not ready_to_write(inclusive_report), "error-inclusive rate must gate --write-thresholds"
+    low_t10 = dict(
+        report,
+        full_battery=True,
+        calibration_runs=MIN_CALIBRATION_RUNS,
+        eval_runs=50,
+        episode_aligned_battery=True,
+        eval_error_inclusive_false_alarm_rate=0.0,
+        eval_false_alarm_rate=0.0,
+        first_try_t10_completeness=0.5,
+        first_try_t10_target=FIRST_TRY_T10_TARGET,
+    )
+    assert not ready_to_write(low_t10), "first-try T10 completeness must gate --write-thresholds"
 
     from bench.tests import _parse_mbit_intervals, _summary_mbit
     from bench.traffic import apply_noise
@@ -1281,7 +1330,7 @@ def fill_missing_speed(net, bundles, noise_id, sample_path=SAMPLES_PATH, batch=C
         server = start_one_off_iperf3(net, port=5201)
         listening = wait_for_listener(net, 5201)
         try:
-            mbit, raw = oam.measure_speed_once(net, port=5201)
+            mbit, raw, _run = oam.measure_speed_once(net, port=5201)
         finally:
             finish_one_off(server)
             free_tcp_port(net, 5201)

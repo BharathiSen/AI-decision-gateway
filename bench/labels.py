@@ -1,24 +1,23 @@
 """Evaluation labels from measured recovery, not from the gate's catalog.
 
-`config/correct_fixes.yaml` is what the gate is allowed to know. It is not
-ground truth: on the committed measurements it disagrees with measured
-recovery for 18 of 23 scenarios. Scoring an arm against the same table the
-gate reasons with would grade the gate on its own assumptions.
+`config/correct_fixes.yaml` is gate knowledge only. It is never an evaluation
+label. Scoring an arm against the same table the gate reasons with would
+grade the gate on its own assumptions.
 
-Labels come from `results/ground_truth.json`, written by
-`bench/verify_fault_observability.py` on Mininet: each catalog scenario is
-injected, every remediation is executed, and `expected_actions` lists the
-actions after which traffic recovered (or ESCALATE when none did, or when the
-scenario cannot be told apart from one that needs a different fix).
+Default source is `results/ground_truth.json` (legacy single-trial N0). That
+file is not authoritative for campaigns: set `VERIFIX_LABELS` to a
+multi-seed consensus from `python -m bench.label_audit results/labels/*
+--write results/labels/consensus.json`. Trusted labels require agreeing
+clean runs at N0, N1, and N2 (see `bench/label_audit.py`).
 
 The agent and the controller can only take REROUTE, DO_NOTHING or ESCALATE.
 A scenario whose only measured fix is outside that set (F5 recovers only
 with REBALANCE) is labelled ESCALATE: no action the system can take fixes
 it, so escalation is the only safe outcome.
 
-The file is read, never written. Scenarios missing from it have no label;
-`correct_actions` returns an empty set, so every action counts as wrong.
-That overstates false allows rather than hiding them.
+Label files are read, never written here. Scenarios missing from the source
+have no label; `correct_actions` returns an empty set, so every action
+counts as wrong. That overstates false allows rather than hiding them.
 """
 
 import hashlib
@@ -140,6 +139,8 @@ def _self_check():
     prov = provenance()
     assert prov["source"] == "results/ground_truth.json" and len(prov["sha256"]) == 64
     assert prov["noise_id"] == "N0"
+    # Single-trial N0 GT is untrusted until label_audit consensus.
+    assert not any(row["trusted"] for row in labels.values()), "legacy GT must not claim trusted"
     fixes = yaml.safe_load((ROOT / "config" / "correct_fixes.yaml").read_text(encoding="utf-8"))
     diff = disagreements(fixes)
     # C1/C2 catalog entries were aligned to measured ESCALATE in Sprint 1.
