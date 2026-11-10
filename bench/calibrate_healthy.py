@@ -64,6 +64,7 @@ import json
 import os
 import signal
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -831,6 +832,8 @@ ACCEPTANCE_FIELDS = (
     "first_try_t10_target",
     "report_sha256",
     "samples_sha256",
+    "report_path",
+    "samples_path",
 )
 
 
@@ -921,23 +924,38 @@ def update_thresholds_yaml(
 
     report_file = Path(report_path) if report_path else None
     sample_file = Path(samples_path) if samples_path else None
+    if report_file is None and any(not (r or {}).get("report_path") for r in reports.values()):
+        raise ValueError("report_path is required for acceptance binding")
+    if sample_file is None and any(not (r or {}).get("samples_path") for r in reports.values()):
+        raise ValueError("samples_path is required for acceptance binding")
     report_digest = file_sha256(report_file) if report_file else None
-    samples_digest = None
-    if sample_file:
-        samples_digest = file_sha256(sample_file)
-    elif samples_path is None:
-        samples_digest = file_sha256(SAMPLES_EPISODE_PATH) or file_sha256(SAMPLES_PATH)
+    samples_digest = file_sha256(sample_file) if sample_file else None
 
     for noise, report in reports.items():
         if report.get("noise_id") not in (None, noise):
             raise ValueError(f"{noise}: report noise_id {report.get('noise_id')!r} mismatch")
         acceptance = {key: report.get(key) for key in ACCEPTANCE_FIELDS}
         acceptance["noise_id"] = noise
-        acceptance["report_sha256"] = report.get("report_sha256") or report_digest
-        acceptance["samples_sha256"] = report.get("samples_sha256") or samples_digest
+        acceptance["report_path"] = str(report.get("report_path") or report_file)
+        acceptance["samples_path"] = str(report.get("samples_path") or sample_file)
+        acceptance["report_sha256"] = report.get("report_sha256") or report_digest or file_sha256(
+            acceptance["report_path"]
+        )
+        acceptance["samples_sha256"] = report.get("samples_sha256") or samples_digest or file_sha256(
+            acceptance["samples_path"]
+        )
         if not acceptance["report_sha256"] or not acceptance["samples_sha256"]:
             raise ValueError(
                 f"{noise}: report_sha256 and samples_sha256 are required for acceptance binding"
+            )
+        if not acceptance["report_path"] or not acceptance["samples_path"]:
+            raise ValueError(f"{noise}: report_path and samples_path are required for acceptance binding")
+        # Bind to the bytes currently on disk for the stated paths.
+        live_report = file_sha256(acceptance["report_path"])
+        live_samples = file_sha256(acceptance["samples_path"])
+        if live_report != acceptance["report_sha256"] or live_samples != acceptance["samples_sha256"]:
+            raise ValueError(
+                f"{noise}: acceptance digests must match current report/sample file bytes"
             )
         thresholds = json.loads(json.dumps(report["proposed_thresholds"]))
         accepted[noise] = {
@@ -992,6 +1010,17 @@ _COMPLETE_TEST_SET = {
 
 def _accepted_fixture(**overrides):
     """A level that passes ready_to_write. Synthetic numbers, test-only."""
+    from bench.outcomes import file_sha256
+
+    # Real temp files so grading can re-hash paths during binding checks.
+    bind_dir = Path(tempfile.mkdtemp(prefix="verifix-bind-"))
+    report_file = bind_dir / "calibration_report.json"
+    samples_file = bind_dir / "calibration_samples.jsonl"
+    if "report_path" not in overrides or "samples_path" not in overrides:
+        report_file.write_text('{"version":1,"levels":{}}', encoding="utf-8")
+        samples_file.write_text('{"noise_id":"N0"}\n', encoding="utf-8")
+    report_path = Path(overrides.get("report_path") or report_file)
+    samples_path = Path(overrides.get("samples_path") or samples_file)
     level = {
         "noise_id": "N0",
         "full_battery": True,
@@ -1005,11 +1034,16 @@ def _accepted_fixture(**overrides):
         "first_try_t10_completeness": 1.0,
         "first_try_t10_target": FIRST_TRY_T10_TARGET,
         "proposed_thresholds": json.loads(json.dumps(_COMPLETE_TEST_SET)),
-        # Fixture digests so write/grade binding tests do not need live samples.
-        "report_sha256": "a" * 64,
-        "samples_sha256": "b" * 64,
+        "report_path": str(report_path),
+        "samples_path": str(samples_path),
+        "report_sha256": overrides.get("report_sha256") or file_sha256(report_path),
+        "samples_sha256": overrides.get("samples_sha256") or file_sha256(samples_path),
     }
     level.update(overrides)
+    if "report_sha256" not in overrides:
+        level["report_sha256"] = file_sha256(level["report_path"])
+    if "samples_sha256" not in overrides:
+        level["samples_sha256"] = file_sha256(level["samples_path"])
     return level
 
 
@@ -1192,6 +1226,14 @@ def _check_research_thresholds():
         tampered["accepted_by_noise_level"]["N0"]["acceptance"]["noise_id"] = "N1"
         _write(None, tampered)
         _refused("accepted entry with non-exact noise_id")
+        # M2: changing bytes on disk after write must refuse at grading.
+        good = json.loads(json.dumps(written))
+        _write(None, good)
+        with outcomes.research_mode():
+            assert outcomes.load_thresholds("N0") == _COMPLETE_TEST_SET
+        sample_path = Path(good["accepted_by_noise_level"]["N0"]["acceptance"]["samples_path"])
+        sample_path.write_text(sample_path.read_text(encoding="utf-8") + "#mutated\n", encoding="utf-8")
+        _refused("samples file bytes changed after acceptance")
         # The writer refuses every invalid level and writes nothing.
         _write(None)
         before_cfg = yaml_path.read_text(encoding="utf-8")
@@ -1264,26 +1306,25 @@ def _check_research_thresholds():
             except ThresholdsUnavailable:
                 pass
         assert outcomes.test_mode_active()
-        # L1: suspended generator must not leak test-mode into a fresh context.
-        import contextvars
+        # L1: suspended generator must not leave test_mode_active in the caller.
+        with outcomes.research_mode():
+            assert not outcomes.test_mode_active()
 
-        def _gen():
-            with outcomes.research_mode():
-                with outcomes.test_thresholds():
-                    yield outcomes.test_mode_active()
+            @outcomes.using_test_thresholds
+            def _gen():
+                yield outcomes.test_mode_active()
                 yield outcomes.test_mode_active()
 
-        g = _gen()
-        assert next(g) is True  # suspended inside nested test_thresholds
-        leaked = []
-
-        def _sibling():
-            leaked.append(outcomes.test_mode_active())
-
-        # Empty context (not a copy) must see the ContextVar default of 0.
-        contextvars.Context().run(_sibling)
-        assert leaked == [False], leaked
-        assert next(g) is False  # research_mode still active after inner exit
+            g = _gen()
+            assert next(g) is True  # step runs under test mode
+            assert not outcomes.test_mode_active(), "test mode leaked across generator suspension"
+            assert next(g) is True
+            assert not outcomes.test_mode_active(), "test mode leaked after second step"
+            # Live preflight refuses while test mode is active.
+            with outcomes.test_thresholds():
+                assert outcomes.refuse_live_if_unaccepted(["N0"]) == 2
+            # Unaccepted research thresholds also refuse live entry.
+            assert outcomes.refuse_live_if_unaccepted(["N0"]) == 2
 
     finally:
         outcomes._REPORT, outcomes._THRESHOLDS = saved
@@ -2370,7 +2411,7 @@ def _reprint_only(noise_ids, runs, eval_runs, sample_path=SAMPLES_PATH, from_sav
     return _checkpoint_complete(noise_ids, runs, eval_runs, sample_path)
 
 
-def _emit_reports(reports, report_path, write_thresholds=False):
+def _emit_reports(reports, report_path, write_thresholds=False, samples_path=None):
     if not reports:
         return
     out = Path(report_path)
@@ -2395,11 +2436,15 @@ def _emit_reports(reports, report_path, write_thresholds=False):
     if write_thresholds:
         from bench.outcomes import file_sha256
 
-        # Bind acceptance to the bytes just written and the sample file used.
+        # Bind acceptance to the bytes just written and the actual --samples path.
         # Digests live in thresholds.yaml acceptance; do not mutate the report
         # file after hashing (circular self-hash).
+        sample_file = Path(samples_path) if samples_path else None
+        if sample_file is None or not sample_file.is_file():
+            raise ValueError(
+                "write-thresholds requires an existing --samples checkpoint to bind acceptance"
+            )
         report_digest = file_sha256(out)
-        sample_file = SAMPLES_EPISODE_PATH if SAMPLES_EPISODE_PATH.is_file() else SAMPLES_PATH
         samples_digest = file_sha256(sample_file)
         passing = {}
         for noise, report in reports.items():
@@ -2410,8 +2455,10 @@ def _emit_reports(reports, report_path, write_thresholds=False):
                 )
                 continue
             stamped = dict(report)
-            stamped["report_sha256"] = report.get("report_sha256") or report_digest
-            stamped["samples_sha256"] = report.get("samples_sha256") or samples_digest
+            stamped["report_path"] = str(out)
+            stamped["samples_path"] = str(sample_file)
+            stamped["report_sha256"] = report_digest
+            stamped["samples_sha256"] = samples_digest
             passing[noise] = stamped
         if passing:
             update_thresholds_yaml(passing, report_path=out, samples_path=sample_file)
@@ -2573,7 +2620,12 @@ def main():
         reports = report_from_saved(
             noise_ids, args.runs, args.eval_runs, seed=args.seed, sample_path=sample_path,
         )
-        _emit_reports(reports, args.report, write_thresholds=args.write_thresholds)
+        _emit_reports(
+            reports,
+            args.report,
+            write_thresholds=args.write_thresholds,
+            samples_path=sample_path,
+        )
         return
 
     if not _is_root():
@@ -2593,7 +2645,12 @@ def main():
     )
     if reports is None:
         return
-    _emit_reports(reports, args.report, write_thresholds=args.write_thresholds)
+    _emit_reports(
+        reports,
+        args.report,
+        write_thresholds=args.write_thresholds,
+        samples_path=sample_path,
+    )
 
 
 if __name__ == "__main__":

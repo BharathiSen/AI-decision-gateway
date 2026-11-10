@@ -186,11 +186,13 @@ def b5_safe_proposal(proposal):
     return cleaned
 
 
-def run_b5_independent(proposal, snapshot, test_results, net=None, budget_seconds=None, noise_id="N0"):
+def run_b5_independent(proposal, snapshot, test_results, net=None, budget_seconds=None, noise_id=None):
     """B5 on a sanitized proposal. Empty input is escalate, not invented DO_NOTHING.
 
     noise_id grades B5 with the same traffic-level thresholds as the gate.
     """
+    if noise_id is None:
+        raise ValueError("run_b5_independent requires noise_id (episode traffic level)")
     cap = DEFAULT_BUDGET_SECONDS if budget_seconds is None else float(budget_seconds)
     cleaned = b5_safe_proposal(proposal)
     if not cleaned:
@@ -204,8 +206,10 @@ def _contract(result, proposal, method, budget_seconds):
     return row
 
 
-def run_strategies(proposal, snapshot, test_results, net=None, noise_id="N0", budget_seconds=None):
+def run_strategies(proposal, snapshot, test_results, net=None, noise_id=None, budget_seconds=None):
     """Run B0–B5 and VeriFix on one shared input. No fault_id argument."""
+    if noise_id is None:
+        raise ValueError("run_strategies requires noise_id (episode traffic level)")
     cap = DEFAULT_BUDGET_SECONDS if budget_seconds is None else float(budget_seconds)
     proposal = proposal or {}
     snapshot = snapshot or {}
@@ -616,11 +620,11 @@ def _self_check():
         "oam": {"results": oam},
         "execution_attempted": False,
     }
-    live_b5 = run_b5_independent(raw_proposal(invalid_record), snap, oam, net=None)
+    live_b5 = run_b5_independent(raw_proposal(invalid_record), snap, oam, net=None, noise_id="N0")
     replay_b5 = compare_episode(invalid_record, net=None)["decisions"]["B5"]
     assert live_b5["decision"] == replay_b5["decision"] == "escalate", (live_b5, replay_b5)
     assert live_b5.get("reason") == replay_b5.get("reason") == "no valid proposal", (live_b5, replay_b5)
-    valid_live = run_b5_independent(proposal, snap, oam, net=None)
+    valid_live = run_b5_independent(proposal, snap, oam, net=None, noise_id="N0")
     valid_replay = compare_episode(record, net=None)["decisions"]["B5"]
     assert valid_live["decision"] == valid_replay["decision"], (valid_live, valid_replay)
 
@@ -638,7 +642,7 @@ def _self_check():
         {"action": "REROUTE", "target": "HostA_to_HostB", "proposed_path": ["r9"]},
     ):
         assert b5_safe_proposal(malformed) == {}, malformed
-        escalated = run_b5_independent(malformed, snap, oam, net=None)
+        escalated = run_b5_independent(malformed, snap, oam, net=None, noise_id="N0")
         assert escalated["decision"] == "escalate" and escalated["reason"] == NO_VALID_PROPOSAL, escalated
     calm = dict(snap, metrics={"packet_loss_percent": 0.0, "latency_ms": 10, "active_path": "primary", "connectivity": True})
     noop_evidence = [
@@ -674,7 +678,7 @@ def _self_check():
         row = replay_f11["decisions"][name]
         assert row["decision"] == "escalate" and row["reason"] == NO_VALID_PROPOSAL, (name, row)
         assert replay_f11["scores"][name]["false_allow"] is False, name
-    live_f11 = run_b5_independent(raw_proposal(invalid_f11), calm, noop_evidence, net=None)
+    live_f11 = run_b5_independent(raw_proposal(invalid_f11), calm, noop_evidence, net=None, noise_id="N0")
     assert live_f11["decision"] == "escalate", live_f11
     assert "not permitted" in (live_f11.get("reason") or ""), live_f11
     assert score_arm(live_f11["decision"], live_f11.get("action"), "F11") == b5_f11
@@ -709,7 +713,7 @@ def _self_check():
         row = replay_wc["decisions"][name]
         assert row["decision"] == "escalate" and row["reason"] == NO_VALID_PROPOSAL, (name, row)
         assert replay_wc["scores"][name]["false_allow"] is False, name
-    live_wc = run_b5_independent(raw_proposal(wrong_cause_f11), calm, noop_evidence, net=None)
+    live_wc = run_b5_independent(raw_proposal(wrong_cause_f11), calm, noop_evidence, net=None, noise_id="N0")
     assert live_wc["decision"] == "allow" and live_wc["action"] == "DO_NOTHING", live_wc
     assert score_arm(live_wc["decision"], live_wc["action"], "F11") == b5_wc
     # Aggregate counts it: one wrong-cause false ALLOW, one correct F11 escalation.
@@ -751,7 +755,7 @@ def _self_check():
         row = replay_f12["decisions"][name]
         assert row["decision"] == "escalate" and row["reason"] == NO_VALID_PROPOSAL, (name, row)
         assert replay_f12["scores"][name]["false_allow"] is False, name
-    live_f12 = run_b5_independent(raw_proposal(invalid_f12), calm, noop_evidence, net=None)
+    live_f12 = run_b5_independent(raw_proposal(invalid_f12), calm, noop_evidence, net=None, noise_id="N0")
     assert live_f12["decision"] == "allow" and live_f12["action"] == "DO_NOTHING", live_f12
     assert score_arm(live_f12["decision"], live_f12["action"], "F12") == b5_f12
     tmp_f12 = Path(tempfile.mkdtemp())

@@ -50,7 +50,7 @@ def _catalog_predictions(cause_id, test_ids, matrix):
     return preds
 
 
-def decide(proposal, snapshot, test_results, net=None, run_missing_tests=None, noise_id="N0", budget_seconds=None):
+def decide(proposal, snapshot, test_results, net=None, run_missing_tests=None, noise_id=None, budget_seconds=None):
     proposal = proposal or {}
     causes = [c for c in (proposal.get("causes") or []) if c.get("cause_id")]
     if not causes:

@@ -232,8 +232,12 @@ def run_offline_pilot(episodes=500, seed=1, save_episodes=True, episodes_dir=Non
             stats["wrong_proposals_non_h0"] += 1
 
         oam_results = oam_bundle["results"]
-        g = decide(None, proposal, snapshot, oam_results, mode="pilot_v0", run_missing_tests=False)
-        b = run_method("B5", proposal, snapshot, oam_results)
+        # Offline sim is N0-only today; still pass the episode noise explicitly (H3).
+        noise_id = "N0"
+        g = decide(
+            None, proposal, snapshot, oam_results, mode="pilot_v0", run_missing_tests=False, noise_id=noise_id
+        )
+        b = run_method("B5", proposal, snapshot, oam_results, noise_id=noise_id)
 
         if g["decision"] == "allow" and _is_wrong(proposal, fault_id):
             stats["gate_v0_unsafe"] += 1
@@ -253,7 +257,7 @@ def run_offline_pilot(episodes=500, seed=1, save_episodes=True, episodes_dir=Non
                 "started_at": stats["generated_at"],
                 "completed_at": datetime.now(timezone.utc).isoformat(),
                 "fault_id": fault_id,
-                "noise_id": "N0",
+                "noise_id": noise_id,
                 "seed": rng.randint(0, 2**20),
                 "correlation_ids": [],
                 "network_snapshot": snapshot,

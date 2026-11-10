@@ -369,7 +369,10 @@ def _self_check():
     assert calm_out.get("decision") == "allow", calm_out
     assert "healthy no-op" in (calm_out.get("reason") or ""), calm_out
 
-    # Negative regression: held-out U1 with empty OAM must not allow as a no-op.
+    # Negative regression (independent of the H0 calm fixture above): a held-out
+    # U1 claim with empty OAM must escalate, never allow as a healthy no-op.
+    from gate.checks import noop_justified
+
     held_out_empty = {
         "action": "DO_NOTHING",
         "target": "HostA_to_HostB",
@@ -377,9 +380,12 @@ def _self_check():
         "proposed_path": ["r1", "r2", "r4"],
         "causes": [{"cause_id": "U1", "predicted_tests": []}],
     }
+    assert not noop_justified(healthy, [], noise_id="N0"), "empty OAM must not justify no-op"
     held_out = decide(None, held_out_empty, healthy, [], mode="full", run_missing_tests=False)
-    assert held_out.get("decision") != "allow", held_out
-    assert "healthy no-op" not in (held_out.get("reason") or ""), held_out
+    assert held_out.get("decision") in ("escalate", "block"), held_out
+    reason = held_out.get("reason") or ""
+    assert "healthy no-op" not in reason, held_out
+    assert held_out.get("decision") != "allow"
 
     try:
         write_report({"no": True}, FROZEN_RESULTS[0])

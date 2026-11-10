@@ -26,7 +26,7 @@ def decide_b5(
     test_results,
     run_tests=True,
     thresholds=None,
-    noise_id="N0",
+    noise_id=None,
     budget_seconds=None,
 ):
     if noise_id is None:

@@ -295,7 +295,7 @@ def main():
         finally:
             gin._GATE = real_path
         assert any("consistency_scope" in e for e in errs), errs
-    b5 = decide_b5(None, copy.deepcopy(proposal), lossy, all_errored, run_tests=False)
+    b5 = decide_b5(None, copy.deepcopy(proposal), lossy, all_errored, run_tests=False, noise_id="N0")
     assert b5["decision"] != "allow", b5
     assert sorted(b5.get("errored_tests") or []) == sorted(DEFAULT_ORDER), b5
 
@@ -303,6 +303,22 @@ def main():
     # an error row adds nothing that an absent test would not.
     absent = decide(None, copy.deepcopy(proposal), lossy, [], run_missing_tests=False)
     assert absent["decision"] == out["decision"], (absent["decision"], out["decision"])
+
+    # Non-finite measurements are unavailable evidence, never mismatches/blocks.
+    import math
+
+    nan_rows = [
+        {"test_id": "T1_e2e_ping", "packet_loss_percent": math.nan, "latency_ms": 10.0, "error": None},
+    ]
+    from gate.checks import check_consistency
+
+    nan_cons = check_consistency(
+        {"causes": [{"cause_id": "F1", "predicted_tests": [{"test_id": "T1_e2e_ping", "expected": "ok"}]}]},
+        nan_rows,
+    )
+    assert nan_cons["predictions_mismatched"] == 0, nan_cons
+    assert nan_cons["predictions_unchecked"] == 1, nan_cons
+    assert "unavailable" in (nan_cons["predictions"][0].get("reason") or ""), nan_cons
 
     # E2: errored observations are unchecked (unavailable), never mismatches.
     from gate.checks import check_consistency

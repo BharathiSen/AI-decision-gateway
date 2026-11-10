@@ -401,7 +401,15 @@ def decide(
                 if isinstance(tr, dict) and tr.get("error"):
                     unavailable.append({"alternative": alt, "test_id": tid})
                     continue
-            obs = checks._summarize_observation(tr, thresholds)
+            try:
+                obs = checks._summarize_observation(tr, thresholds)
+            except ValueError:
+                unavailable.append({"alternative": alt, "test_id": tid})
+                continue
+            # Non-finite grades are missing evidence, not contradictions.
+            if obs is None:
+                unavailable.append({"alternative": alt, "test_id": tid})
+                continue
             primary_pred = next(
                 (
                     p

@@ -63,7 +63,9 @@ def _rule_action(grades, snapshot):
     return "DO_NOTHING"
 
 
-def decide(proposal, snapshot, test_results, net=None, run_battery=False, noise_id="N0"):
+def decide(proposal, snapshot, test_results, net=None, run_battery=False, noise_id=None):
+    if noise_id is None:
+        raise ValueError("B2 requires noise_id (episode traffic level)")
     results = list(test_results or [])
     if run_battery and net is not None:
         bundle = oam.run_all(net)

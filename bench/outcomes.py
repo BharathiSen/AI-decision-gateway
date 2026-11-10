@@ -60,6 +60,8 @@ ACCEPTANCE_BINDING_FIELDS = (
     "first_try_t10_target",
     "report_sha256",
     "samples_sha256",
+    "report_path",
+    "samples_path",
 )
 
 # Offline / historical analysis only. Never a research-grade mark.
@@ -83,6 +85,33 @@ def acceptance_binding_hash(noise_id, acceptance, thresholds):
     }
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def verify_acceptance_file_hashes(acceptance, where="acceptance"):
+    """Re-hash report/sample files on disk. [] when digests match; else reasons.
+
+    Missing digests, missing paths, unreadable files, or digest mismatch all refuse.
+    """
+    acceptance = acceptance or {}
+    errors = []
+    for digest_key, path_key in (
+        ("report_sha256", "report_path"),
+        ("samples_sha256", "samples_path"),
+    ):
+        digest = acceptance.get(digest_key)
+        path = acceptance.get(path_key)
+        if not isinstance(digest, str) or not digest:
+            errors.append(f"{where}: {digest_key} missing")
+            continue
+        if not path:
+            errors.append(f"{where}: {path_key} missing")
+            continue
+        actual = file_sha256(path)
+        if actual is None:
+            errors.append(f"{where}: {path_key} unreadable ({path})")
+        elif actual != digest:
+            errors.append(f"{where}: {digest_key} does not match bytes at {path}")
+    return errors
 
 
 def refuse_live_if_unaccepted(noise_ids, stream=None):
@@ -155,6 +184,8 @@ def threshold_set_errors(thresholds, tests=None):
 # --- test-only thresholds -------------------------------------------------
 # Context-local depth so concurrent contexts and nested with-blocks restore
 # correctly. Live/research entrypoints refuse when this is active (L1).
+# Generator functions decorated with @using_test_thresholds elevate depth only
+# during each next()/send() step so suspension cannot leak into the caller.
 
 _TEST_DEPTH = contextvars.ContextVar("verifix_test_threshold_depth", default=0)
 
@@ -183,13 +214,56 @@ def research_mode():
         _TEST_DEPTH.reset(token)
 
 
+def _test_mode_generator(gen):
+    """Drive a generator with test mode on only while a step is executing."""
+    try:
+        with test_thresholds():
+            try:
+                value = next(gen)
+            except StopIteration:
+                return
+        while True:
+            try:
+                sent = yield value
+            except GeneratorExit:
+                with test_thresholds():
+                    gen.close()
+                return
+            try:
+                with test_thresholds():
+                    value = gen.send(sent) if sent is not None else next(gen)
+            except StopIteration:
+                return
+    finally:
+        try:
+            gen.close()
+        except Exception:
+            pass
+
+
 def using_test_thresholds(fn):
-    """Decorator for offline self-checks. Research mode is restored on return."""
+    """Decorator for offline self-checks. Research mode is restored on return.
+
+    Generator functions get step-scoped test mode so a suspended yield cannot
+    leave test_mode_active() true in the caller's context (L1).
+    """
+    import inspect
+
+    if inspect.isgeneratorfunction(fn):
+
+        @functools.wraps(fn)
+        def gen_wrapper(*args, **kwargs):
+            return _test_mode_generator(fn(*args, **kwargs))
+
+        return gen_wrapper
 
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
         with test_thresholds():
-            return fn(*args, **kwargs)
+            result = fn(*args, **kwargs)
+        if inspect.isgenerator(result):
+            return _test_mode_generator(result)
+        return result
 
     return wrapper
 
@@ -260,6 +334,10 @@ def threshold_status(noise_id="N0"):
                     expected = acceptance_binding_hash(noise_id, acceptance, thresholds)
                     if stored != expected:
                         found, why = None, ["config/thresholds.yaml: acceptance_sha256 mismatch"]
+                if found is not None:
+                    file_why = verify_acceptance_file_hashes(acceptance, "config/thresholds.yaml")
+                    if file_why:
+                        found, why = None, file_why
         except Exception as exc:
             found, why = None, [f"config/thresholds.yaml: {type(exc).__name__}: {exc}"]
         if found is not None:

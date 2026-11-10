@@ -88,7 +88,19 @@ def check_consistency(proposal, test_results, primary_cause_id=None, thresholds=
             unchecked += 1
             rows.append(record)
             continue
-        obs_str = _summarize_observation(obs, thresholds)
+        try:
+            obs_str = _summarize_observation(obs, thresholds)
+        except ValueError as exc:
+            record["reason"] = f"test unavailable: {exc}"
+            unchecked += 1
+            rows.append(record)
+            continue
+        # Non-finite / ungradable measurements are unavailable, never mismatches.
+        if obs_str is None:
+            record["reason"] = "test unavailable: non-finite or ungradable measurement"
+            unchecked += 1
+            rows.append(record)
+            continue
         record["observed"] = obs_str
         checked += 1
         if prediction_matches(tid, expected, obs_str):

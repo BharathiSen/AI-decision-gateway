@@ -1456,14 +1456,14 @@ def _self_check():
         "proposed_path": ["r1", "r3", "r4"],
     }
     for method in BASELINE_METHODS:
-        out = run_method(method, shared, healthy, [])
+        out = run_method(method, shared, healthy, [], noise_id="N0")
         assert out["decision"] in {"allow", "block", "escalate"}, out
         assert "action" in out and out["method"] == method
         assert "tests_run" in out and "budget" in out, out
         assert out["permitted_actions"] == ["REROUTE", "DO_NOTHING", "ESCALATE"]
     baselines_self_check()
     try:
-        run_method("B0", shared, healthy, [], fault_id="F1")
+        run_method("B0", shared, healthy, [], fault_id="F1", noise_id="N0")
         raise AssertionError("fault_id was accepted")
     except TypeError:
         pass

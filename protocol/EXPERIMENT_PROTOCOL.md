@@ -239,16 +239,19 @@ halts.
 ### Calibration order (pre-registered)
 
 1. Collect healthy H0 samples at N0/N1/N2 into a **new** episode-aligned
-   samples path (`results/calibration_samples_episode.jsonl` or a dated
-   sibling). Fault ids are never injected for calibration.
-2. Fit per noise level (`bench/calibrate_healthy.py`): data-only quantiles;
+   `--samples` path (default `results/calibration_samples_episode.jsonl`).
+   Fault ids are never injected for calibration.
+2. With the same `--samples` path, fit per noise level: data-only quantiles
+   (×1.1 latency/loss; T10 = 0.9× lower tail; n≥30; strict `>` loss compare);
    copy T8 policy from `policy_by_noise_level`; no withdrawn floors.
-3. Score a held-out healthy eval set; compute
+3. Score a held-out healthy eval split from those samples; compute
    `eval_error_inclusive_false_alarm_rate` and first-try T10 completeness.
 4. Write a **new** `--report` path (the committed
    `results/calibration_report.json` is protected and refused).
-5. Only when `ready_to_write` passes: `--write-thresholds` into
-   `accepted_by_noise_level`. Live runners preflight-refuse unaccepted levels.
+5. Only when `ready_to_write` passes: `--write-thresholds` binds
+   `accepted_by_noise_level` to SHA-256 of that report file and the
+   `--samples` file. Live runners preflight-refuse unaccepted levels.
+   Grading re-hashes those paths and refuses missing or mismatched digests.
 
 ### Fitting constants
 
@@ -256,7 +259,10 @@ halts.
 |---|---|---|
 | Fit quantile ladder | p95/p05 → p99/p01 → p995/p005 → max/min | smallest upper quantile meeting FAR target on the fit set |
 | Latency/loss multiplier | × 1.1 on fitted upper quantile | slack above empirical healthy |
-| Loss resolution floor | one ping of the episode battery | never finer than measurement grain |
+| T10 floor | 0.9 × lower-tail quantile | throughput minimum from healthy lower tail |
+| `MIN_N_TO_TIGHTEN` | 30 | minimum n before a data-only limit is proposed |
+| Loss resolution floor | one ping of the episode battery (`100/EPISODE_PING_COUNT`) | never finer than measurement grain |
+| Loss alarm comparison | strict `>` vs `max_loss_percent` | equal-to-limit is still healthy |
 | `false_alarm_rate_target` | 0.05 | write-decision ceiling |
 | `FIRST_TRY_T10_TARGET` | 0.95 | first-try T10 completeness; backfill does not count |
 | `MIN_CALIBRATION_RUNS` / `MIN_EVAL_RUNS` | 200 / 50 | acceptance floors |
@@ -286,8 +292,10 @@ Every campaign output must record:
 - Gate config: `consistency_scope`, `budget_seconds`, `learned_grader`,
   `min_grade_confidence`.
 - Calibration acceptance binding: `acceptance_sha256` over exact `noise_id`,
-  acceptance evidence fields, `report_sha256`, `samples_sha256`, and the
-  written threshold set (`bench.outcomes.acceptance_binding_hash`).
+  acceptance evidence fields, `report_path` / `samples_path`,
+  `report_sha256` / `samples_sha256`, and the written threshold set
+  (`bench.outcomes.acceptance_binding_hash`). Grading re-hashes those paths
+  and refuses missing or mismatched digests.
 - Halt artifacts (`*.halt.json`) on contamination or fatal agent errors.
 
 ### Test-only thresholds

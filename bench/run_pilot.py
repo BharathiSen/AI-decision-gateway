@@ -1788,7 +1788,7 @@ def _self_check():
 
     # F11: DO_NOTHING is not permitted — B5 must escalate (never false-allow).
     invalid_f11 = _invalid_noop("F11", "F11", noop_evidence)
-    live_b5_f11 = run_b5_independent(raw_proposal(invalid_f11), calm, noop_evidence, net=None)
+    live_b5_f11 = run_b5_independent(raw_proposal(invalid_f11), calm, noop_evidence, net=None, noise_id="N0")
     assert live_b5_f11["decision"] == "escalate", live_b5_f11
     assert "not permitted" in (live_b5_f11.get("reason") or ""), live_b5_f11
     one = empty_stats(1, 1, "stub")
@@ -1809,7 +1809,7 @@ def _self_check():
 
     # F12: DO_NOTHING permitted with complete healthy noop evidence.
     invalid_f12 = _invalid_noop("F12", "F12", noop_evidence)
-    live_b5_f12 = run_b5_independent(raw_proposal(invalid_f12), calm, noop_evidence, net=None)
+    live_b5_f12 = run_b5_independent(raw_proposal(invalid_f12), calm, noop_evidence, net=None, noise_id="N0")
     assert live_b5_f12["decision"] == "allow" and live_b5_f12["action"] == "DO_NOTHING", live_b5_f12
     one = empty_stats(1, 1, "stub")
     one.update(episodes_attempted=1, episodes_with_b5=1, episodes_with_gate=1)
@@ -1839,7 +1839,7 @@ def _self_check():
             "causes": [{"cause_id": "F12"}],
         }},
     )
-    live_b5_wc = run_b5_independent(raw_proposal(wrong_cause_f11), calm, noop_evidence, net=None)
+    live_b5_wc = run_b5_independent(raw_proposal(wrong_cause_f11), calm, noop_evidence, net=None, noise_id="N0")
     assert live_b5_wc["decision"] == "allow" and live_b5_wc["action"] == "DO_NOTHING", live_b5_wc
     one = empty_stats(1, 1, "stub")
     one.update(episodes_attempted=1, episodes_with_b5=1, episodes_with_gate=1)

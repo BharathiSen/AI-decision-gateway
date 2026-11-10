@@ -10,14 +10,13 @@ from baselines.common import (
 _DECISIONS = {"allow", "block", "escalate"}
 
 
-def run_method(method, proposal, snapshot, test_results, net=None, budget_seconds=None, noise_id="N0"):
+def run_method(method, proposal, snapshot, test_results, net=None, budget_seconds=None, noise_id=None):
     """Run one method on the shared proposal, snapshot, and OAM results.
 
     The true fault id is not an input. net is used only when a method
     needs to run extra OAM tests. B0 does not change the network here.
     noise_id selects grading thresholds for B2–B5 (same levels as the gate).
-    Callers with an episode must pass that episode's noise_id. There is no
-    silent cross-level fallback; None is refused.
+    Callers must pass the episode's noise_id; there is no N0 default.
     """
     name = (method or "").upper()
     proposal = proposal or {}
@@ -162,7 +161,7 @@ def _self_check():
     }
 
     for method in METHODS:
-        out = run_method(method, shared, healthy, [])
+        out = run_method(method, shared, healthy, [], noise_id="N0")
         assert out["decision"] in _DECISIONS, out
         assert out["method"] == method
         assert "action" in out
@@ -171,38 +170,44 @@ def _self_check():
         assert set(out["permitted_actions"]) <= set(PERMITTED_ACTIONS)
 
     try:
-        run_method("B0", shared, healthy, [], fault_id="F1")
+        run_method("B0", shared, healthy, [], fault_id="F1", noise_id="N0")
         raise AssertionError("fault_id was accepted")
     except TypeError:
         pass
 
     try:
-        run_method("B6", shared, healthy, [])
+        run_method("B6", shared, healthy, [], noise_id="N0")
         raise AssertionError("unknown method was accepted")
     except ValueError:
         pass
 
-    b0 = run_method("B0", shared, healthy, [])
+    try:
+        run_method("B0", shared, healthy, [])
+        raise AssertionError("missing noise_id was accepted")
+    except ValueError as exc:
+        assert "noise_id" in str(exc)
+
+    b0 = run_method("B0", shared, healthy, [], noise_id="N0")
     assert b0["decision"] == "allow" and b0["tests_run"] == []
 
-    b1_ok = run_method("B1", shared, healthy, [])
+    b1_ok = run_method("B1", shared, healthy, [], noise_id="N0")
     assert b1_ok["action"] == "DO_NOTHING" and b1_ok["tests_run"] == []
-    b1_loss = run_method("B1", shared, lossy, [])
+    b1_loss = run_method("B1", shared, lossy, [], noise_id="N0")
     assert b1_loss["action"] == "REROUTE" and b1_loss["path"] == ["r1", "r3", "r4"]
 
     t8_fail = [{"test_id": "T8_tcp_vs_ping", "ping_ok": True, "tcp_ok": False}]
-    b2_acl = run_method("B2", shared, healthy, t8_fail)
+    b2_acl = run_method("B2", shared, healthy, t8_fail, noise_id="N0")
     assert b2_acl["action"] == "ESCALATE", b2_acl
     t1_loss = [{"test_id": "T1_e2e_ping", "packet_loss_percent": 40, "latency_ms": 12, "connectivity": True}]
-    b2_reroute = run_method("B2", shared, healthy, t1_loss)
+    b2_reroute = run_method("B2", shared, healthy, t1_loss, noise_id="N0")
     assert b2_reroute["action"] == "REROUTE", b2_reroute
-    b2_f12 = run_method("B2", shared, backup_down, t1_loss)
+    b2_f12 = run_method("B2", shared, backup_down, t1_loss, noise_id="N0")
     assert b2_f12["action"] == "ESCALATE", b2_f12
     # Replay (net is None) must not pretend a battery ran.
     assert b2_reroute["tests_run"] == ["T1_e2e_ping"]
 
     t10 = {"test_id": "T10_speed", "mbit_per_sec": 0.1}
-    b3 = run_method("B3", shared, healthy, t1_loss + [t10], budget_seconds=3.0)
+    b3 = run_method("B3", shared, healthy, t1_loss + [t10], budget_seconds=3.0, noise_id="N0")
     assert b3["tests_run"] == ["T1_e2e_ping"], b3
     assert "T10_speed" not in b3["tests_run"], b3
     assert b3["budget"]["within_budget"]
@@ -211,17 +216,17 @@ def _self_check():
     assert b3.get("matched_fault") not in hidden
     assert all(row["fault_id"] not in hidden for row in _load_matrix())
 
-    b4 = run_method("B4", shared, healthy, [])
+    b4 = run_method("B4", shared, healthy, [], noise_id="N0")
     assert b4["decision"] == "escalate" and b4["reason"] == "no cause"
     caused = dict(shared)
     caused["causes"] = [{"cause_id": "F1", "predicted_tests": []}]
-    b4_f1 = run_method("B4", caused, healthy, t1_loss)
+    b4_f1 = run_method("B4", caused, healthy, t1_loss, noise_id="N0")
     assert b4_f1["decision"] in _DECISIONS
     assert b4_f1["method"] == "B4"
 
-    b5 = run_method("B5", shared, healthy, [])
+    b5 = run_method("B5", shared, healthy, [], noise_id="N0")
     assert b5["decision"] == "escalate" and b5["reason"] == "no cause"
-    b5_bad = run_method("B5", {"action": "NOT_AN_ACTION"}, healthy, [])
+    b5_bad = run_method("B5", {"action": "NOT_AN_ACTION"}, healthy, [], noise_id="N0")
     assert b5_bad["decision"] == "block"
     idle = {
         "action": "DO_NOTHING",
@@ -235,17 +240,22 @@ def _self_check():
         {"test_id": "T8_tcp_vs_ping", "ping_ok": True, "tcp_ok": True, "error": None},
         {"test_id": "T10_speed", "mbit_per_sec": 50.0, "error": None},
     ]
-    b5_idle = run_method("B5", idle, healthy, noop_ok)
+    b5_idle = run_method("B5", idle, healthy, noop_ok, noise_id="N0")
     assert b5_idle["decision"] == "allow" and b5_idle["reason"] == "healthy no-op", b5_idle
-    b5_idle_loss = run_method("B5", idle, healthy, [{"test_id": "T1_e2e_ping", "packet_loss_percent": 30.0, "latency_ms": 10.0}])
+    b5_idle_loss = run_method(
+        "B5", idle, healthy, [{"test_id": "T1_e2e_ping", "packet_loss_percent": 30.0, "latency_ms": 10.0}], noise_id="N0"
+    )
     assert b5_idle_loss["decision"] != "allow", b5_idle_loss
-    b5_idle_incomplete = run_method("B5", idle, healthy, [{"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0, "latency_ms": 10.0}])
+    b5_idle_incomplete = run_method(
+        "B5", idle, healthy, [{"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0, "latency_ms": 10.0}], noise_id="N0"
+    )
     assert b5_idle_incomplete["decision"] != "allow", b5_idle_incomplete
     b5_no_cause = run_method(
         "B5",
         {"action": "DO_NOTHING", "target": "HostA_to_HostB", "reason": "ok"},
         healthy,
         noop_ok,
+        noise_id="N0",
     )
     assert b5_no_cause["decision"] == "escalate" and "missing cause" in b5_no_cause["reason"], b5_no_cause
     # H5: B3/B4/B5 receive the same noise_id thresholds / budget contract.

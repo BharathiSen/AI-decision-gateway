@@ -114,7 +114,7 @@ def _action_for_fault(fault_id):
     return "ESCALATE"
 
 
-def predict_action(test_results, snapshot=None, net=None, budget_seconds=None, noise_id="N0"):
+def predict_action(test_results, snapshot=None, net=None, budget_seconds=None, noise_id=None):
     if noise_id is None:
         raise ValueError("B3 requires noise_id (episode traffic level)")
     thresholds = load_thresholds(noise_id)
