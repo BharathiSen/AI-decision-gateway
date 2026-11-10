@@ -488,6 +488,10 @@ def live_compare():
     return 0
 
 
+from bench.outcomes import using_test_thresholds  # offline checks grade with test-only limits
+
+
+@using_test_thresholds
 def _self_check():
     """Offline Stage 14 checks. Does not write results/experiment_summary.json."""
     import tempfile

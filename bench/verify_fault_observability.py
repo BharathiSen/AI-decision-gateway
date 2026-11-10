@@ -409,6 +409,13 @@ def main(argv=None):
     if args.noise not in load_noise_levels():
         print(f"Unknown noise level {args.noise!r}", file=sys.stderr)
         return 2
+    from bench.outcomes import require_accepted_thresholds
+
+    refusal = require_accepted_thresholds([args.noise])
+    if refusal:
+        # Labels grade recovery signatures; never with unaccepted limits.
+        print(refusal, file=sys.stderr)
+        return 2
     if not args.fault:
         gap = label_out_error(args.out_dir)
         if gap:

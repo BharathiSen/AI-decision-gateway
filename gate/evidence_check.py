@@ -64,6 +64,10 @@ def _noop_proposal(cause_id="H0"):
     }
 
 
+from bench.outcomes import using_test_thresholds  # offline checks grade with test-only limits
+
+
+@using_test_thresholds
 def main():
     from agent.test_validate import good_proposal
     from baselines.b5_adaptive import decide_b5

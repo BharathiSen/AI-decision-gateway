@@ -327,6 +327,10 @@ def test_ground_truth_rules():
     check("others keep measured fixes", expected["H0"] == ["DO_NOTHING"] and expected["F1"] == ["REROUTE", "REBALANCE"] and "F2" not in expected)
 
 
+from bench.outcomes import using_test_thresholds  # offline checks grade with test-only limits
+
+
+@using_test_thresholds
 def main():
     test_grades()
     test_expected_catalog_covers_faults()

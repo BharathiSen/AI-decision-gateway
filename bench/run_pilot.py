@@ -1380,6 +1380,18 @@ def main(argv=None):
     if not hasattr(os, "geteuid") or os.geteuid() != 0:
         print("run_pilot.py requires root on Mininet VM.", file=sys.stderr)
         return 2
+    from bench.outcomes import require_accepted_thresholds
+
+    planned = (
+        scenarios_from_faults(args.faults)
+        if args.faults
+        else [pick_scenario(args.seed, index) for index in range(args.episodes)]
+    )
+    refusal = require_accepted_thresholds({row["noise_id"] for row in planned})
+    if refusal:
+        # Every episode would ESCALATE on unaccepted thresholds; refuse before spending a run.
+        print(refusal, file=sys.stderr)
+        return 2
     from bench.mininet_util import mn_cleanup
     from network.topology import create_network
 
@@ -1445,6 +1457,10 @@ def live_pilot():
     return 0
 
 
+from bench.outcomes import using_test_thresholds  # offline checks grade with test-only limits
+
+
+@using_test_thresholds
 def _self_check():
     """Offline Stage 13 checks. Does not touch Mininet or results/pilot/summary.json."""
     import tempfile
@@ -1578,14 +1594,14 @@ def _self_check():
     assert diagnosis_correct(proposal, "H0")
     assert not diagnosis_correct(proposal, "F1")
 
-    from bench.outcomes import load_yaml_thresholds
+    from bench.outcomes import load_test_thresholds
 
     slow_ping = [{"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0, "latency_ms": 180.0}]
     ok_pred = {
         "causes": [{"cause_id": "H0", "predicted_tests": [{"test_id": "T1_e2e_ping", "expected": "ok"}]}]
     }
-    n0_limits = load_yaml_thresholds("N0")
-    n2_limits = load_yaml_thresholds("N2")
+    n0_limits = load_test_thresholds("N0")
+    n2_limits = load_test_thresholds("N2")
     assert n0_limits["T1_e2e_ping"]["max_latency_ms"] < 180.0 < n2_limits["T1_e2e_ping"]["max_latency_ms"]
     n0_checked, n0_matched = prediction_overlap(ok_pred, slow_ping, thresholds=n0_limits)
     n2_checked, n2_matched = prediction_overlap(ok_pred, slow_ping, thresholds=n2_limits)

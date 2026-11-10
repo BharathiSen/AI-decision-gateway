@@ -1098,6 +1098,10 @@ def _reads(*snapshots):
     return read
 
 
+from bench.outcomes import using_test_thresholds  # offline checks grade with test-only limits
+
+
+@using_test_thresholds
 def _self_check():
     """Offline check of the execution boundary. Does not touch Mininet."""
     import inspect
@@ -1753,7 +1757,7 @@ def _self_check():
     saved_report = outcomes._REPORT
     outcomes._REPORT = Path(tempfile.gettempdir()) / f"absent-{uuid.uuid4().hex}.json"
     try:
-        limits = {level: outcomes.load_yaml_thresholds(level)["T1_e2e_ping"]["max_latency_ms"] for level in ("N0", "N2")}
+        limits = {level: outcomes.load_test_thresholds(level)["T1_e2e_ping"]["max_latency_ms"] for level in ("N0", "N2")}
         assert limits["N0"] < 180.0 < limits["N2"], limits
         at_n0 = gate_decide(None, predicted_ok, healthy, slow_ping, mode="pilot_v0", run_missing_tests=False)
         at_n2 = gate_decide(None, predicted_ok, healthy, slow_ping, mode="pilot_v0", run_missing_tests=False, noise_id="N2")
@@ -2144,11 +2148,11 @@ def _self_check():
         parse_t2_prediction,
         parse_t6_prediction,
     )
-    from bench.outcomes import HOP_NAMES, grade_result, load_yaml_thresholds
+    from bench.outcomes import HOP_NAMES, grade_result, load_test_thresholds
     from gate.grader import grade_test
 
     ip_by_hop = {name: ip for ip, name in HOP_NAMES.items()}
-    n0_limits = load_yaml_thresholds("N0")
+    n0_limits = load_test_thresholds("N0")
 
     def _hop_row(name, outcome="ok"):
         if outcome == "down":

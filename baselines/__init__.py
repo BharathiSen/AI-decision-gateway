@@ -22,7 +22,30 @@ def run_method(method, proposal, snapshot, test_results, net=None, budget_second
     snapshot = snapshot or {}
     test_results = list(test_results or [])
     cap = DEFAULT_BUDGET_SECONDS if budget_seconds is None else budget_seconds
+    if name not in METHODS:
+        raise ValueError(f"unknown method {method!r}")
+    from bench.outcomes import ThresholdsUnavailable
 
+    try:
+        result = _dispatch(name, proposal, snapshot, test_results, net, cap, noise_id)
+    except ThresholdsUnavailable as exc:
+        # Unaccepted calibration: no arm grades OAM. Fail closed, say why.
+        result = {
+            "method": name,
+            "decision": "escalate",
+            "action": proposal.get("action"),
+            "tests_run": [],
+            "reason": f"thresholds unavailable: {exc}",
+            "threshold_status": exc.status,
+        }
+
+    result = attach_contract(result, proposal, budget_seconds=cap)
+    if result.get("decision") not in _DECISIONS or "method" not in result or "action" not in result:
+        raise ValueError(f"{name} returned an incomplete decision record: {result!r}")
+    return result
+
+
+def _dispatch(name, proposal, snapshot, test_results, net, cap, noise_id):
     if name == "B0":
         from baselines.b0_ungated import decide
         result = decide(proposal, snapshot, test_results)
@@ -68,14 +91,14 @@ def run_method(method, proposal, snapshot, test_results, net=None, budget_second
             budget_seconds=cap,
         )
     else:
-        raise ValueError(f"unknown method {method!r}")
-
-    result = attach_contract(result, proposal, budget_seconds=cap)
-    if result.get("decision") not in _DECISIONS or "method" not in result or "action" not in result:
-        raise ValueError(f"{name} returned an incomplete decision record: {result!r}")
+        raise ValueError(f"unknown method {name!r}")
     return result
 
 
+from bench.outcomes import using_test_thresholds  # offline checks grade with test-only limits
+
+
+@using_test_thresholds
 def _self_check():
     from gate.selector import held_out_ids, _load_matrix
     from baselines.ablations import (

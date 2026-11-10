@@ -63,9 +63,10 @@ def scenario_ids():
 
 
 def loss_limit(noise_id):
-    with (ROOT / "config" / "thresholds.yaml").open() as f:
-        doc = yaml.safe_load(f)
-    return float(doc["by_noise_level"][noise_id]["T1_e2e_ping"]["max_loss_percent"])
+    """Accepted T1 loss limit. Raises ThresholdsUnavailable when calibration is unaccepted."""
+    from bench.outcomes import load_thresholds
+
+    return float(load_thresholds(noise_id)["T1_e2e_ping"]["max_loss_percent"])
 
 
 def _inject(net, scenario, seed):
@@ -195,6 +196,13 @@ def main():
         print(f"Unknown ids: {unknown}; known: {known}", file=sys.stderr)
         sys.exit(2)
     noise_ids = list(NOISE_IDS) if not args.noise or "all" in args.noise else args.noise
+    from bench.outcomes import require_accepted_thresholds
+
+    refusal = require_accepted_thresholds(noise_ids)
+    if refusal:
+        # Fault validity grades T1 loss; it must not use unaccepted limits.
+        print(refusal, file=sys.stderr)
+        sys.exit(2)
 
     print("Cleaning stale Mininet state (mn -c)...", flush=True)
     mn_cleanup()

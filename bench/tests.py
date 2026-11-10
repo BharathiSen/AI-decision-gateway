@@ -27,10 +27,12 @@ except ImportError:
 try:
     from bench.contracts import T6_QUEUE_NODES
     from bench.outcomes import grade_result, is_degraded, load_thresholds as _load_thresholds
+    from bench.outcomes import using_test_thresholds
     from bench.outcomes import parse_qdisc_stats
 except ImportError:
     from contracts import T6_QUEUE_NODES
     from outcomes import grade_result, is_degraded, load_thresholds as _load_thresholds
+    from outcomes import using_test_thresholds
     from outcomes import parse_qdisc_stats
 
 HOPS = [
@@ -1868,10 +1870,15 @@ def _check_e1_t567_measurement_errors():
     print("E1 T5/T6/T7 measurement errors: PASS")
 
 
-if __name__ == "__main__":
+@using_test_thresholds
+def _offline_checks():
     _check_costs()
     print("test cost: PASS")
     _check_ping_classification()
     _check_t10_receiver()
     _check_h2_measurement_errors()
     _check_e1_t567_measurement_errors()
+
+
+if __name__ == "__main__":
+    _offline_checks()

@@ -1,38 +1,34 @@
-version: 1
-by_noise_level:
+version: 2
+# Research grading thresholds (protocol v1 §3, §8).
+#
+# accepted_by_noise_level holds ONLY levels written by
+#   calibrate_healthy.py --write-thresholds
+# after ready_to_write accepted them. Each entry keeps the acceptance evidence
+# it was written with ({thresholds, acceptance}); bench/outcomes.py re-checks
+# that evidence with the same ready_to_write contract before grading.
+# A level that is absent or fails the check is unavailable: research grading
+# raises ThresholdsUnavailable (fail closed). There is no fallback.
+#
+# The former by_noise_level values (2026-10-27 calibration) were withdrawn on
+# 2026-11-06 after VM evidence and are no longer research configuration.
+# Historical record (unchanged): results/calibration_report.json.
+# Offline self-checks use bench/test_thresholds.yaml (test-only).
+accepted_by_noise_level: {}
+
+# Fixed protocol policy, not a fitted number and not a floor. Calibration
+# copies it into each proposed level. N2 runs 5 Mbit background traffic
+# (config/noise.yaml), where a TCP connect failure is not by itself a fault.
+policy_by_noise_level:
   N0:
-    T1_e2e_ping:
-      max_loss_percent: 5.0
-      max_latency_ms: 160.0
-    T2_hop_ping:
-      max_loss_percent: 10.0
-      max_latency_ms: 80.0
     T8_tcp_vs_ping:
       tcp_must_succeed: true
-    T10_speed:
-      min_mbit: 8.09055
   N1:
-    T1_e2e_ping:
-      max_loss_percent: 10.0
-      max_latency_ms: 120.0
-    T2_hop_ping:
-      max_loss_percent: 15.0
-      max_latency_ms: 150.0
     T8_tcp_vs_ping:
       tcp_must_succeed: true
-    T10_speed:
-      min_mbit: 6.588
   N2:
-    T1_e2e_ping:
-      max_loss_percent: 20.0
-      max_latency_ms: 200.0
-    T2_hop_ping:
-      max_loss_percent: 25.0
-      max_latency_ms: 250.0
     T8_tcp_vs_ping:
       tcp_must_succeed: false
-    T10_speed:
-      min_mbit: 4.1850000000000005
+
 calibration:
   healthy_runs_target: 200
   false_alarm_rate_target: 0.05
@@ -41,11 +37,12 @@ calibration:
     ping_count: 10
     ping_interval: 0.2
     speed_seconds: 3
-  notes: Placeholder limits above are not VM-calibrated. Do not use them for grading
-    until --write-thresholds passes after false_alarm_rate_target is met on an episode-aligned
-    battery. Existing results/calibration_samples.jsonl on the VM used the legacy
-    3-ping / 1-second speed profile unless re-collected.
-  last_run:
+  notes: Fitted limits come from healthy calibration samples only (data quantile,
+    ping-resolution loss bound, minimum sample size). No configured numeric floor
+    is applied. A level grades research episodes only after ready_to_write passes
+    and --write-thresholds records it under accepted_by_noise_level.
+  withdrawn_last_run:
+    status: withdrawn 2026-11-06 (VM N0 graded FAR 0.10, error-inclusive 0.98)
     N0:
       calibration_runs: 200
       eval_runs: 50

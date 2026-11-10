@@ -1,0 +1,45 @@
+# TEST-ONLY grading thresholds for offline self-checks. NOT research configuration.
+#
+# These are the 2026-10-27 calibration values that were withdrawn on
+# 2026-11-06 after VM evidence (N0 graded FAR 0.10, error-inclusive 0.98).
+# They are kept only so existing offline fixtures keep their meaning.
+#
+# bench/outcomes.py reads this file only inside test_thresholds() /
+# @using_test_thresholds. Research grading never reads it, and calibration
+# never uses it as a floor. The unchanged historical record of these values
+# is results/calibration_report.json.
+status: test_only_withdrawn
+test_only_by_noise_level:
+  N0:
+    T1_e2e_ping:
+      max_loss_percent: 5.0
+      max_latency_ms: 160.0
+    T2_hop_ping:
+      max_loss_percent: 10.0
+      max_latency_ms: 80.0
+    T8_tcp_vs_ping:
+      tcp_must_succeed: true
+    T10_speed:
+      min_mbit: 8.09055
+  N1:
+    T1_e2e_ping:
+      max_loss_percent: 10.0
+      max_latency_ms: 120.0
+    T2_hop_ping:
+      max_loss_percent: 15.0
+      max_latency_ms: 150.0
+    T8_tcp_vs_ping:
+      tcp_must_succeed: true
+    T10_speed:
+      min_mbit: 6.588
+  N2:
+    T1_e2e_ping:
+      max_loss_percent: 20.0
+      max_latency_ms: 200.0
+    T2_hop_ping:
+      max_loss_percent: 25.0
+      max_latency_ms: 250.0
+    T8_tcp_vs_ping:
+      tcp_must_succeed: false
+    T10_speed:
+      min_mbit: 4.1850000000000005

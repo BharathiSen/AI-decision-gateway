@@ -847,6 +847,10 @@ def _assert_frozen(before):
         assert after.get(path) == original, f"must not modify {path}"
 
 
+from bench.outcomes import using_test_thresholds  # offline checks grade with test-only limits
+
+
+@using_test_thresholds
 def _self_check():
     before = _snapshot_frozen()
     hidden = held_out_ids()
