@@ -306,7 +306,9 @@ def _self_check():
         {"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0, "latency_ms": 10.0, "connectivity": True},
         {"test_id": "T7_route_check", "active_path": "primary"},
     ]
-    mislead_out = decide(None, mislead, healthy, healthy_oam, mode="full", run_missing_tests=False)
+    mislead_out = decide(
+        None, mislead, healthy, healthy_oam, mode="full", run_missing_tests=False, noise_id="N0"
+    )
     if mislead_out.get("decision") == "allow":
         failures.append(f"healthy misleading allowed {mislead_out}")
     calls = []

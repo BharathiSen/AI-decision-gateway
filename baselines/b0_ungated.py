@@ -53,15 +53,18 @@ def _harm(before, after):
     return False
 
 
-def run(net, proposal, measure=True):
+def run(net, proposal, measure=True, noise_id=None):
     """Execute, measure post-action recovery (same battery as VeriFix), then restore.
 
     Harm remains a T1 before/after comparison. Recovery status comes from the
     independent post-remediation OAM battery and is never inferred from
-    execution.executed.
+    execution.executed. noise_id grades recovery with the episode traffic level.
     """
     from bench.tests import T1_e2e_ping
     from bench.run_episode import measure_traffic_recovery, traffic_conditions
+
+    if noise_id is None:
+        raise ValueError("B0 run requires noise_id (episode traffic level)")
 
     before_path = None
     try:
@@ -93,7 +96,7 @@ def run(net, proposal, measure=True):
     # back to a dedicated T1 so infra gaps are not scored as harm.
     if measure:
         try:
-            post_oam = measure_traffic_recovery(net)
+            post_oam = measure_traffic_recovery(net, noise_id=noise_id)
         except Exception as exc:
             post_oam = {
                 "recovery_status": "measurement_unavailable",

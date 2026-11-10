@@ -1295,6 +1295,42 @@ def _check_research_thresholds():
             )
             is None
         )
+        # Missing loss/throughput is unavailable, not inferred down/slow.
+        assert (
+            grade_result(
+                {"test_id": "T1_e2e_ping", "packet_loss_percent": None, "latency_ms": 10.0, "error": None},
+                _COMPLETE_TEST_SET,
+            )
+            is None
+        )
+        assert (
+            grade_result({"test_id": "T10_speed", "mbit_per_sec": None, "error": None}, _COMPLETE_TEST_SET)
+            is None
+        )
+        assert (
+            grade_result(
+                {
+                    "test_id": "T2_hop_ping",
+                    "error": None,
+                    "hops_primary": [
+                        {"dst_ip": "10.0.12.2", "packet_loss_percent": None, "latency_ms": 10.0},
+                    ],
+                },
+                _COMPLETE_TEST_SET,
+            )
+            is None
+        )
+        assert (
+            grade_result(
+                {"test_id": "T1_e2e_ping", "packet_loss_percent": 100.0, "latency_ms": None, "error": None},
+                _COMPLETE_TEST_SET,
+            )
+            == "down"
+        )
+        assert (
+            grade_result({"test_id": "T10_speed", "mbit_per_sec": 0.05, "error": None}, _COMPLETE_TEST_SET)
+            == "slow"
+        )
 
         # H1: test-mode restores; research mode refuses without accepted levels.
         assert outcomes.test_mode_active()
@@ -1325,6 +1361,16 @@ def _check_research_thresholds():
                 assert outcomes.refuse_live_if_unaccepted(["N0"]) == 2
             # Unaccepted research thresholds also refuse live entry.
             assert outcomes.refuse_live_if_unaccepted(["N0"]) == 2
+
+        # Mutation: test-mode live preflight refuses even when acceptance is present.
+        _write(None)
+        update_thresholds_yaml({"N0": _accepted_fixture()}, yaml_path)
+        with outcomes.research_mode():
+            assert outcomes.load_thresholds("N0") == _COMPLETE_TEST_SET
+        with outcomes.test_thresholds():
+            assert outcomes.refuse_live_if_unaccepted(["N0"]) == 2, (
+                "test-mode must refuse live even with accepted calibration"
+            )
 
     finally:
         outcomes._REPORT, outcomes._THRESHOLDS = saved
@@ -1837,6 +1883,58 @@ def _self_check():
     assert set(merged["levels"]) == {"N0", "N2"}, merged
     merged_path.unlink()
     merged_path.parent.rmdir()
+    assert THRESHOLDS_PATH.read_text(encoding="utf-8") == before
+
+    # Mutation: _emit_reports must bind the supplied --samples path, not ignore it.
+    # When this file runs as __main__, patch this module (not bench.calibrate_healthy).
+    emit_src = inspect.getsource(_emit_reports)
+    assert "samples_path" in emit_src
+    assert "sample_file = Path(samples_path)" in emit_src
+    assert "SAMPLES_EPISODE_PATH" not in emit_src.split("if write_thresholds")[-1]
+    bind_dir = Path(tempfile.mkdtemp())
+    bind_report = bind_dir / "calibration_report.json"
+    bind_samples = bind_dir / "custom_samples.jsonl"
+    bind_samples.write_text('{"noise_id":"N0","index":0}\n', encoding="utf-8")
+    bind_yaml = bind_dir / "thresholds.yaml"
+    bind_yaml.write_text("version: 1\naccepted_by_noise_level: {}\n", encoding="utf-8")
+    captured = {}
+    this = sys.modules[__name__]
+    real_update = this.update_thresholds_yaml
+
+    def _capture_update(passing, path=THRESHOLDS_PATH, report_path=None, samples_path=None):
+        captured["samples_path"] = samples_path
+        captured["passing"] = passing
+        # Always write the temp yaml — never the committed research file.
+        return real_update(passing, bind_yaml, report_path=report_path, samples_path=samples_path)
+
+    this.update_thresholds_yaml = _capture_update
+    try:
+        fixture = _accepted_fixture(
+            report_path=str(bind_report),
+            samples_path=str(bind_samples),
+        )
+        bind_report.write_text('{"version":1,"levels":{}}', encoding="utf-8")
+        _emit_reports({"N0": fixture}, bind_report, write_thresholds=True, samples_path=bind_samples)
+    finally:
+        this.update_thresholds_yaml = real_update
+        # Belt-and-suspenders: restore research yaml if a bug wrote through.
+        if THRESHOLDS_PATH.read_text(encoding="utf-8") != before:
+            THRESHOLDS_PATH.write_text(before, encoding="utf-8")
+    assert captured.get("samples_path") is not None, captured
+    assert Path(captured["samples_path"]).resolve() == bind_samples.resolve(), captured
+    stamped = (captured.get("passing") or {}).get("N0") or {}
+    assert Path(stamped.get("samples_path")).resolve() == bind_samples.resolve(), stamped
+    written = yaml.safe_load(bind_yaml.read_text(encoding="utf-8"))
+    acc = ((written.get("accepted_by_noise_level") or {}).get("N0") or {}).get("acceptance") or {}
+    assert Path(acc.get("samples_path")).resolve() == bind_samples.resolve(), acc
+    for item in bind_dir.iterdir():
+        if item.is_file():
+            item.unlink()
+        elif item.is_dir():
+            for nested in item.iterdir():
+                nested.unlink()
+            item.rmdir()
+    bind_dir.rmdir()
     assert THRESHOLDS_PATH.read_text(encoding="utf-8") == before
 
     stall = "".join(f"icmp_seq={i} ttl=63 time={t} ms\n" for i, t in enumerate([11.0, 11.2, 240.0], 1))

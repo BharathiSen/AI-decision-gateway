@@ -446,9 +446,8 @@ def _hop_outcome(hop, thresholds):
     max_loss = limits["max_loss_percent"]
     max_lat = limits["max_latency_ms"]
     loss = hop.get("packet_loss_percent")
-    if loss is None:
-        loss = 100.0
-    elif not _finite_number(loss):
+    # Missing loss is unavailable evidence, not an inferred link-down.
+    if loss is None or not _finite_number(loss):
         return None
     if loss >= 100.0:
         return "down"
@@ -479,9 +478,8 @@ def _grade_t1(result, thresholds):
     max_loss = limits["max_loss_percent"]
     max_lat = limits["max_latency_ms"]
     loss = result.get("packet_loss_percent")
-    if loss is None:
-        loss = 100.0
-    elif not _finite_number(loss):
+    # Missing loss is unavailable, not fabricated 100%/down.
+    if loss is None or not _finite_number(loss):
         return None
     latency = result.get("latency_ms")
     if latency is not None and not _finite_number(latency):
@@ -616,9 +614,8 @@ def _grade_t9(result, thresholds):
 def _grade_t10(result, thresholds):
     minimum = thresholds["T10_speed"]["min_mbit"]
     mbit = result.get("mbit_per_sec")
-    if mbit is None:
-        return "slow"
-    if not _finite_number(mbit):
+    # Missing throughput is unavailable, not an inferred "slow".
+    if mbit is None or not _finite_number(mbit):
         return None
     if mbit < minimum:
         return "slow"
@@ -632,7 +629,8 @@ def grade_result(result, thresholds=None, noise_id="N0"):
     failure, not a network observation. Return None (no grade). Callers
     must treat that as missing evidence, never as ok/slow/loss/etc.
     Incomplete or non-finite threshold dictionaries refuse grading (M1).
-    Non-finite measurements are unavailable, never healthy.
+    Missing or non-finite loss/throughput measurements are unavailable
+    (None), never inferred as down/slow/100% loss.
     """
     if not isinstance(result, dict):
         return "unknown"

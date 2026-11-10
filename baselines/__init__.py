@@ -334,7 +334,35 @@ def _self_check():
     saved = oam_mod.run_in_node
     oam_mod.run_in_node = fake_run
     try:
-        live = b0_run(net, shared)
+        # Explicit noise levels must reach measure_traffic_recovery independently.
+        seen_noise = []
+
+        def _spy_recovery(net_arg, noise_id="N0", ping_count=None, speed_seconds=None):
+            seen_noise.append(noise_id)
+            return {
+                "results": [],
+                "recovery_status": "measurement_unavailable",
+                "traffic_recovered": None,
+                "error": "spy",
+            }
+
+        import bench.run_episode as ep_mod
+
+        saved_mtr = ep_mod.measure_traffic_recovery
+        ep_mod.measure_traffic_recovery = _spy_recovery
+        try:
+            for level in ("N0", "N1", "N2"):
+                b0_run(net, shared, measure=True, noise_id=level)
+            try:
+                b0_run(net, shared, measure=True)
+                raise AssertionError("B0 run accepted missing noise_id")
+            except ValueError as exc:
+                assert "noise_id" in str(exc)
+        finally:
+            ep_mod.measure_traffic_recovery = saved_mtr
+        assert seen_noise == ["N0", "N1", "N2"], seen_noise
+
+        live = b0_run(net, shared, noise_id="N0")
     finally:
         oam_mod.run_in_node = saved
     assert live["decision"] == "allow"
@@ -357,7 +385,7 @@ def _self_check():
     idle = {"action": "DO_NOTHING", "target": "HostA_to_HostB", "reason": "ok"}
     oam_mod.run_in_node = fake_run
     try:
-        skipped = b0_run(net, idle)
+        skipped = b0_run(net, idle, noise_id="N0")
     finally:
         oam_mod.run_in_node = saved
     assert skipped["execution"].get("executed") is False

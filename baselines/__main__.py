@@ -40,7 +40,7 @@ def _live():
     failures = []
     try:
         inj.inject(net, "F12")
-        live = b0_run(net, proposal)
+        live = b0_run(net, proposal, noise_id="N0")
         if live.get("harm") is not True:
             failures.append(f"B0 harm {live.get('harm')}")
         if live.get("rolled_back") is not True:

@@ -341,7 +341,7 @@ def _self_check():
         "packet_loss_percent": 0.0,
     }
     risky = unseen_reroute_proposal()
-    risky_out = decide(None, risky, healthy, [], mode="full", run_missing_tests=False)
+    risky_out = decide(None, risky, healthy, [], mode="full", run_missing_tests=False, noise_id="N0")
     calls = []
 
     def execute(item, _box=calls):
@@ -365,7 +365,7 @@ def _self_check():
         "proposed_path": ["r1", "r2", "r4"],
         "causes": [{"cause_id": "H0", "predicted_tests": []}],
     }
-    calm_out = decide(None, calm, healthy, noop_evidence, mode="full", run_missing_tests=False)
+    calm_out = decide(None, calm, healthy, noop_evidence, mode="full", run_missing_tests=False, noise_id="N0")
     assert calm_out.get("decision") == "allow", calm_out
     assert "healthy no-op" in (calm_out.get("reason") or ""), calm_out
 
@@ -381,11 +381,22 @@ def _self_check():
         "causes": [{"cause_id": "U1", "predicted_tests": []}],
     }
     assert not noop_justified(healthy, [], noise_id="N0"), "empty OAM must not justify no-op"
-    held_out = decide(None, held_out_empty, healthy, [], mode="full", run_missing_tests=False)
+    held_out = decide(None, held_out_empty, healthy, [], mode="full", run_missing_tests=False, noise_id="N0")
     assert held_out.get("decision") in ("escalate", "block"), held_out
     reason = held_out.get("reason") or ""
     assert "healthy no-op" not in reason, held_out
     assert held_out.get("decision") != "allow"
+
+    # Cause guard (mutation-resistant): U1 with *complete* healthy evidence still
+    # refuses. Fails if only the empty-OAM evidence guard remains.
+    assert noop_justified(healthy, noop_evidence, noise_id="N0"), "evidence alone is healthy"
+    held_out_full = decide(
+        None, held_out_empty, healthy, noop_evidence, mode="full", run_missing_tests=False, noise_id="N0"
+    )
+    assert held_out_full.get("decision") != "allow", held_out_full
+    assert "healthy no-op" not in (held_out_full.get("reason") or ""), held_out_full
+    # Catalog H0 with the same evidence still allows — evidence alone is not the refusal.
+    assert calm_out.get("decision") == "allow"
 
     try:
         write_report({"no": True}, FROZEN_RESULTS[0])

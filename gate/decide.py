@@ -134,18 +134,28 @@ def decide(
     already_ran=None,
     mode="full",
     run_missing_tests=True,
-    noise_id="N0",
+    noise_id=None,
     learned_grader=None,
     budget_seconds=None,
 ):
     """
     mode: 'full' | 'pilot_v0' (consistency + safety only)
     noise_id selects the traffic-level thresholds used to grade results.
+    Callers must pass the episode noise level; there is no N0 default.
     Returns audit dict with decision in {allow, block, escalate}.
     """
     supplied = list(test_results) if isinstance(test_results, list) else list(test_results or [])
     proposal = proposal if isinstance(proposal, dict) else {}
     snapshot_fp = evidence_fingerprint(network_snapshot)
+    if noise_id is None:
+        return _audit(
+            "escalate",
+            proposal if isinstance(proposal, dict) else {},
+            supplied,
+            {},
+            "noise_id required",
+            supplied=supplied,
+        )
 
     def audit(decision, proposal_arg, tests_run, checks_out, reason, supplied=None, selected_ids=None, log=None):
         record = _audit(

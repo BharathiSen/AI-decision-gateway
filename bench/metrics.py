@@ -1352,7 +1352,7 @@ def live_metrics():
         compared = compare_episode(record, net=None)
         record["decisions"] = compared["decisions"]
         record["gate_cost"] = {"latency_seconds": 0.0}
-        harm = b0_run(net, proposal)
+        harm = b0_run(net, proposal, noise_id=record.get("noise_id") or "N0")
         record["b0"] = harm
         record["completed_at"] = datetime.now(timezone.utc).isoformat()
         report, scored = evaluate_records([record])

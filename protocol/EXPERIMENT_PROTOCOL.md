@@ -330,15 +330,15 @@ python -c "from baselines import _self_check; _self_check(); print('baselines: P
 | Step | Command | Output |
 |---|---|---|
 | 0 offline | `sudo python3 bench/run_pilot.py --self-check` (+ host offline suite) | PASS required |
-| 1 fault validity | `sudo python3 bench/validate_faults.py --out results/fault_validation/<run-id>.json` | inject/reset cycles × N0/N1/N2 |
-| 1b calibration | follow §8 order: collect → fit → new `--report` → `--write-thresholds` only if `ready_to_write` | accepted_by_noise_level + binding hashes |
-| 2 labels | `sudo python3 bench/verify_fault_observability.py --out-dir results/labels/<N>-s<seed> --noise <N> --seed <seed>` | matrix + ground_truth per run |
-| 3 consensus | `python3 -m bench.label_audit results/labels/* --write results/labels/consensus.json` | trusted/untrusted |
-| 4 development | `VERIFIX_LABELS=… sudo --preserve-env=GROQ_API_KEY,VERIFIX_LABELS python3 bench/run_pilot.py --require-model --save-episodes … --out results/campaign/dev-<run-id>.json` | episodes + summary |
-| 5 freeze commit | commit protocol + gate config + labels; record commit | — |
-| 6 held-out | as step 4 with held-out ids → `heldout-<run-id>.json` | — |
-| 7 arms | `python3 bench/run_experiments.py --episodes-dir … --out …_arms.json` | paired decisions |
-| 8 metrics | `python3 bench/metrics.py …`; `python3 bench/analyze.py …` | CIs, McNemar, tables |
+| 1 calibration | follow §8 order: collect → fit → new `--report` → `--write-thresholds` only if `ready_to_write` | accepted_by_noise_level + binding hashes |
+| 2 fault validity | `sudo python3 bench/validate_faults.py --out results/fault_validation/<run-id>.json` | inject/reset cycles × N0/N1/N2 under accepted thresholds |
+| 3 labels | `sudo python3 bench/verify_fault_observability.py --out-dir results/labels/<N>-s<seed> --noise <N> --seed <seed>` | matrix + ground_truth per run |
+| 4 consensus | `python3 -m bench.label_audit results/labels/* --write results/labels/consensus.json` | trusted/untrusted |
+| 5 development | `VERIFIX_LABELS=… sudo --preserve-env=GROQ_API_KEY,VERIFIX_LABELS python3 bench/run_pilot.py --require-model --save-episodes … --out results/campaign/dev-<run-id>.json` | episodes + summary |
+| 6 freeze commit | commit protocol + gate config + labels; record commit | — |
+| 7 held-out | as step 5 with held-out ids → `heldout-<run-id>.json` | — |
+| 8 arms | `python3 bench/run_experiments.py --episodes-dir … --out …_arms.json` | paired decisions |
+| 9 metrics | `python3 bench/metrics.py …`; `python3 bench/analyze.py …` | CIs, McNemar, tables |
 
 Exit codes: 2 = refused (provenance / protected path / unaccepted calibration);
 3 = fatal agent error (fix, then `--resume`); 4 = reset/cleanup failed

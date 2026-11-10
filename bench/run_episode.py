@@ -1759,7 +1759,7 @@ def _self_check():
     try:
         limits = {level: outcomes.load_test_thresholds(level)["T1_e2e_ping"]["max_latency_ms"] for level in ("N0", "N2")}
         assert limits["N0"] < 180.0 < limits["N2"], limits
-        at_n0 = gate_decide(None, predicted_ok, healthy, slow_ping, mode="pilot_v0", run_missing_tests=False)
+        at_n0 = gate_decide(None, predicted_ok, healthy, slow_ping, mode="pilot_v0", run_missing_tests=False, noise_id="N0")
         at_n2 = gate_decide(None, predicted_ok, healthy, slow_ping, mode="pilot_v0", run_missing_tests=False, noise_id="N2")
     finally:
         outcomes._REPORT = saved_report
@@ -1782,10 +1782,10 @@ def _self_check():
     assert stages["candidate_generation"] is not None and stages["test_selection"] is not None
     unknown_noise = gate_decide(None, predicted_ok, healthy, slow_ping, mode="pilot_v0", run_missing_tests=False, noise_id="N99")
     assert unknown_noise["decision"] == "escalate" and unknown_noise["reason"].startswith("frozen inputs:"), unknown_noise
-    no_hypotheses = gate_decide(None, backup, healthy, [], mode="full", run_missing_tests=False)
+    no_hypotheses = gate_decide(None, backup, healthy, [], mode="full", run_missing_tests=False, noise_id="N0")
     assert no_hypotheses["decision"] == "block" and no_hypotheses["reason"] == "incomplete hypotheses", no_hypotheses
     assert "AI_PRIMARY" not in str(no_hypotheses)
-    empty_snap = gate_decide(None, predicted_ok, {}, slow_ping, mode="pilot_v0", run_missing_tests=False)
+    empty_snap = gate_decide(None, predicted_ok, {}, slow_ping, mode="pilot_v0", run_missing_tests=False, noise_id="N0")
     assert empty_snap["decision"] == "escalate" and empty_snap["reason"].startswith("incomplete snapshot:"), empty_snap
     missing_up = _snapshot()
     del missing_up["links"][0]["up"]
@@ -1797,9 +1797,9 @@ def _self_check():
     assert validate_snapshot(empty_route)
     bogus_pred = dict(predicted_ok, causes=[{"cause_id": "F3", "predicted_tests": [{"test_id": "T1_e2e_ping", "expected": ""}]}])
     assert validate_proposal_inputs(bogus_pred, costs=frozen["costs"])
-    bad_mode = gate_decide(None, predicted_ok, healthy, slow_ping, mode="maybe", run_missing_tests=False)
+    bad_mode = gate_decide(None, predicted_ok, healthy, slow_ping, mode="maybe", run_missing_tests=False, noise_id="N0")
     assert bad_mode["decision"] == "escalate" and bad_mode["reason"] == "invalid mode", bad_mode
-    none_proposal = gate_decide(None, None, healthy, [], mode="full", run_missing_tests=False)
+    none_proposal = gate_decide(None, None, healthy, [], mode="full", run_missing_tests=False, noise_id="N0")
     assert none_proposal["decision"] == "block", none_proposal
 
     cfg = frozen["gate"]
@@ -1812,7 +1812,7 @@ def _self_check():
         {"test_id": "T8_tcp_vs_ping", "ping_ok": True, "tcp_ok": True, "error": None},
         {"test_id": "T10_speed", "mbit_per_sec": 50.0, "error": None},
     ]
-    vacuous = gate_decide(None, predicted_ok, healthy, t1_ok, mode="full", run_missing_tests=False)
+    vacuous = gate_decide(None, predicted_ok, healthy, t1_ok, mode="full", run_missing_tests=False, noise_id="N0")
     # consistency_scope=discriminating: no covering separator exists, so a
     # risky action escalates (protocol v1 §5 fail-safe).
     assert vacuous["decision"] == "escalate", vacuous
@@ -1825,10 +1825,10 @@ def _self_check():
         backup,
         causes=[{"cause_id": "F10", "predicted_tests": [{"test_id": "T8_tcp_vs_ping", "expected": "ping_ok_tcp_fail"}]}],
     )
-    contradicted = gate_decide(None, f10, healthy, [], mode="full", run_missing_tests=False)
+    contradicted = gate_decide(None, f10, healthy, [], mode="full", run_missing_tests=False, noise_id="N0")
     assert contradicted["decision"] == "block" and contradicted["reason"] == "proposal contradicted", contradicted
     held = dict(backup, causes=[{"cause_id": "U1", "predicted_tests": []}])
-    outside = gate_decide(None, held, healthy, [], mode="full", run_missing_tests=False)
+    outside = gate_decide(None, held, healthy, [], mode="full", run_missing_tests=False, noise_id="N0")
     assert outside["decision"] == "escalate" and outside["reason"] == "outside catalog", outside
     fp = None
     from gate.decide import evidence_fingerprint, result_reusable
@@ -1847,8 +1847,7 @@ def _self_check():
         t1_ok,
         mode="full",
         run_missing_tests=False,
-        budget_seconds=0.1,
-    )
+        budget_seconds=0.1, noise_id="N0")
     assert tight["decision"] == "escalate", tight
     assert tight["reason"] in {"no affordable discriminating test", "inseparable", "no discrimination"} or tight[
         "reason"
@@ -1860,27 +1859,26 @@ def _self_check():
         t1_ok,
         mode="pilot_v0",
         run_missing_tests=False,
-        budget_seconds=0.1,
-    )
+        budget_seconds=0.1, noise_id="N0")
     assert v0_same["decision"] == "allow", v0_same
     assert tight["decision"] != "allow"
 
     idle = _cause_proposal("DO_NOTHING", "H0")
-    idle_ok = gate_decide(None, idle, healthy, noop_ok, mode="full", run_missing_tests=False)
+    idle_ok = gate_decide(None, idle, healthy, noop_ok, mode="full", run_missing_tests=False, noise_id="N0")
     assert idle_ok["decision"] == "allow" and idle_ok["reason"] == "healthy no-op", idle_ok
     t1_loss = [{"test_id": "T1_e2e_ping", "packet_loss_percent": 30.0, "latency_ms": 40.0}]
-    idle_loss = gate_decide(None, idle, lossy_snap, t1_loss, mode="full", run_missing_tests=False)
+    idle_loss = gate_decide(None, idle, lossy_snap, t1_loss, mode="full", run_missing_tests=False, noise_id="N0")
     assert idle_loss["decision"] != "allow", idle_loss
     t8_acl = list(noop_ok)
     t8_acl[2] = {"test_id": "T8_tcp_vs_ping", "ping_ok": True, "tcp_ok": False, "error": None}
-    idle_acl = gate_decide(None, idle, healthy, t8_acl, mode="full", run_missing_tests=False)
+    idle_acl = gate_decide(None, idle, healthy, t8_acl, mode="full", run_missing_tests=False, noise_id="N0")
     assert idle_acl["decision"] != "allow", idle_acl
-    idle_snap_loss = gate_decide(None, idle, lossy_snap, [], mode="full", run_missing_tests=False)
+    idle_snap_loss = gate_decide(None, idle, lossy_snap, [], mode="full", run_missing_tests=False, noise_id="N0")
     assert idle_snap_loss["decision"] != "allow", idle_snap_loss
     h0_snap = _snapshot()
     h0_snap["metrics"] = {"active_path": "primary", "packet_loss_percent": 0.0, "connectivity": True}
     # Incomplete evidence: snapshot alone must never authorize DO_NOTHING.
-    idle_empty = gate_decide(None, idle, h0_snap, [], mode="full", run_missing_tests=False)
+    idle_empty = gate_decide(None, idle, h0_snap, [], mode="full", run_missing_tests=False, noise_id="N0")
     assert idle_empty["decision"] == "escalate", idle_empty
     assert idle_empty["reason"].startswith("no-op not justified"), idle_empty
 
@@ -2099,7 +2097,7 @@ def _self_check():
     f1_obs = t1_down + [t2_f1, t7_primary, t9_equal_loss]
     f1_ok = check_consistency(f1_vocab, f1_obs)
     assert f1_ok["passed"], f1_ok
-    f1_gate = gate_decide(None, f1_vocab, healthy, f1_obs, mode="full", run_missing_tests=False)
+    f1_gate = gate_decide(None, f1_vocab, healthy, f1_obs, mode="full", run_missing_tests=False, noise_id="N0")
     assert f1_gate["reason"] != "consistency failed", f1_gate
     # Healthy snapshot: no alternative needs a different fix, so there is no
     # discriminating test; consistency_scope=discriminating escalates (fail-safe).
@@ -2119,7 +2117,7 @@ def _self_check():
     f1_t7 = check_consistency(f1_wrong_t7, f1_obs)
     assert not f1_t7["passed"], f1_t7
     assert any(row.get("test_id") == "T7_route_check" and row.get("observed") == "primary" for row in f1_t7["mismatches"]), f1_t7
-    f1_t7_gate = gate_decide(None, f1_wrong_t7, healthy, f1_obs, mode="full", run_missing_tests=False)
+    f1_t7_gate = gate_decide(None, f1_wrong_t7, healthy, f1_obs, mode="full", run_missing_tests=False, noise_id="N0")
     # T7 is not a discriminating test here: a wrong side-prediction cannot block.
     assert f1_t7_gate["decision"] == "escalate" and f1_t7_gate["reason"] != "consistency failed", f1_t7_gate
     f1_t9 = check_consistency(
@@ -2137,7 +2135,7 @@ def _self_check():
         f1_vocab,
         causes=[{"cause_id": "F1", "predicted_tests": [{"test_id": "T1_e2e_ping", "expected": "timeout / no reply"}]}],
     )
-    english_gate = gate_decide(None, english_f1, healthy, f1_obs, mode="full", run_missing_tests=False)
+    english_gate = gate_decide(None, english_f1, healthy, f1_obs, mode="full", run_missing_tests=False, noise_id="N0")
     assert english_gate["decision"] == "block" and "invalid proposal" in (english_gate.get("reason") or ""), english_gate
 
     from bench.contracts import (
@@ -2298,8 +2296,7 @@ def _self_check():
         healthy,
         f1_obs,
         mode="full",
-        run_missing_tests=False,
-    )
+        run_missing_tests=False, noise_id="N0")
     # Unchecked predictions are missing evidence: escalate, not block.
     assert unrun_gate["decision"] == "escalate", unrun_gate
     assert unrun_gate["reason"].startswith("insufficient evidence"), unrun_gate
@@ -2362,7 +2359,7 @@ def _self_check():
         assert "replace(\";\"" not in text and "replace(';'," not in text, rel
 
     t4_fail = [{"test_id": "T4_mtu", "df_ping_ok": False}]
-    idle_mtu = gate_decide(None, idle, healthy, t4_fail, mode="full", run_missing_tests=False)
+    idle_mtu = gate_decide(None, idle, healthy, t4_fail, mode="full", run_missing_tests=False, noise_id="N0")
     assert idle_mtu["decision"] != "allow", idle_mtu
     f12_snap = _snapshot(backup_up=False, active_path="primary")
     f12_snap["metrics"] = {"active_path": "primary", "packet_loss_percent": 0.0, "connectivity": True}
@@ -2381,11 +2378,10 @@ def _self_check():
             {"dst_ip": "10.0.4.2", "packet_loss_percent": 0.0},
         ],
     }
-    idle_f12 = gate_decide(None, idle, f12_snap, noop_ok + [t2_backup_down], mode="full", run_missing_tests=False)
+    idle_f12 = gate_decide(None, idle, f12_snap, noop_ok + [t2_backup_down], mode="full", run_missing_tests=False, noise_id="N0")
     assert idle_f12["decision"] == "allow" and idle_f12["reason"] == "healthy no-op", idle_f12
     f12_reroute = gate_decide(
-        None, _cause_proposal("REROUTE", "F12"), f12_snap, noop_ok + [t2_backup_down], mode="full", run_missing_tests=False
-    )
+        None, _cause_proposal("REROUTE", "F12"), f12_snap, noop_ok + [t2_backup_down], mode="full", run_missing_tests=False, noise_id="N0")
     assert f12_reroute["decision"] == "block" and f12_reroute["reason"] == "safety failed", f12_reroute
 
     calls.clear()
@@ -2402,7 +2398,7 @@ def _self_check():
     from agent.validate import MAX_EXPECTED_LEN
 
     fabricated = _cause_proposal("REROUTE", "H0")
-    fabricated_out = gate_decide(None, fabricated, healthy, [], mode="full", run_missing_tests=False)
+    fabricated_out = gate_decide(None, fabricated, healthy, [], mode="full", run_missing_tests=False, noise_id="N0")
     assert fabricated_out["decision"] == "block" and fabricated_out["reason"] == "proposal contradicted", fabricated_out
     calls.clear()
     fabricated_exec = apply_authorized_action(fabricated_out, fabricated, execute, healthy, lambda: healthy)
@@ -2418,19 +2414,19 @@ def _self_check():
     for link in lookalike_snap["links"]:
         link["packet_loss_percent"] = 0.0
     lookalike = _cause_proposal("REROUTE", "F3", expected="loss")
-    lookalike_out = gate_decide(None, lookalike, lookalike_snap, [], mode="full", run_missing_tests=False)
+    lookalike_out = gate_decide(None, lookalike, lookalike_snap, [], mode="full", run_missing_tests=False, noise_id="N0")
     assert lookalike_out["decision"] in {"block", "escalate"} and lookalike_out["decision"] != "allow", lookalike_out
 
     hidden_snap = _snapshot(backup_up=False, active_path="primary")
     hidden = _cause_proposal("REROUTE", "F1")
-    hidden_out = gate_decide(None, hidden, hidden_snap, [], mode="full", run_missing_tests=False)
+    hidden_out = gate_decide(None, hidden, hidden_snap, [], mode="full", run_missing_tests=False, noise_id="N0")
     assert hidden_out["decision"] == "block" and hidden_out["reason"] == "safety failed", hidden_out
     calls.clear()
     hidden_exec = apply_authorized_action(hidden_out, hidden, execute, hidden_snap, lambda: hidden_snap)
     assert calls == [] and hidden_exec["execution_attempted"] is False, hidden_exec
 
     unseen = _cause_proposal("REROUTE", "U1")
-    unseen_out = gate_decide(None, unseen, healthy, [], mode="full", run_missing_tests=False)
+    unseen_out = gate_decide(None, unseen, healthy, [], mode="full", run_missing_tests=False, noise_id="N0")
     assert unseen_out["decision"] == "escalate" and unseen_out["reason"] == "outside catalog", unseen_out
     calls.clear()
     unseen_exec = apply_authorized_action(unseen_out, unseen, execute, healthy, lambda: healthy)
@@ -2443,7 +2439,7 @@ def _self_check():
     assert missing and missing["execution_error"] == "invalid proposal", missing
 
     backup_claim = _cause_proposal("REROUTE", "F12")
-    backup_claim_out = gate_decide(None, backup_claim, healthy, [], mode="full", run_missing_tests=False)
+    backup_claim_out = gate_decide(None, backup_claim, healthy, [], mode="full", run_missing_tests=False, noise_id="N0")
     assert backup_claim_out["decision"] == "block" and backup_claim_out["reason"] == "proposal contradicted", backup_claim_out
     calls.clear()
     down_exec = apply_authorized_action(
@@ -2847,7 +2843,7 @@ def live_recheck():
 
 
 def live_gate_inputs():
-    """Frozen catalog/matrix plus a live diamond snapshot into decide().
+    """Frozen catalog/matrix plus a live diamond snapshot into decide(, noise_id="N0").
 
     On the VM, as root:
 
@@ -2900,7 +2896,7 @@ def live_gate_inputs():
         blocked = gate_decide(net, risky, snap, [], mode="full", run_missing_tests=False, noise_id="N0")
         if blocked.get("decision") == "allow" or blocked.get("reason") != "incomplete hypotheses":
             failures.append(f"reroute without hypotheses {blocked}")
-        empty = gate_decide(net, dict(risky, causes=[{"cause_id": "F1", "predicted_tests": []}]), {}, [], mode="full", run_missing_tests=False)
+        empty = gate_decide(net, dict(risky, causes=[{"cause_id": "F1", "predicted_tests": []}]), {}, [], mode="full", run_missing_tests=False, noise_id="N0")
         if empty.get("decision") != "escalate" or not str(empty.get("reason", "")).startswith("incomplete snapshot:"):
             failures.append(f"empty snapshot {empty}")
     except Exception as exc:
@@ -2917,7 +2913,7 @@ def live_gate_inputs():
 
 
 def live_gate():
-    """Stage 10 algorithm on the live diamond: safety block, then F1 decide().
+    """Stage 10 algorithm on the live diamond: safety block, then F1 decide(, noise_id="N0").
 
     On the VM, as root:
 

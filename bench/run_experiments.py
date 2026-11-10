@@ -797,6 +797,20 @@ def _self_check():
         assert row["permitted_actions"] == list(PERMITTED_ACTIONS), (name, row)
         assert row["budget"]["budget_seconds"] == DEFAULT_BUDGET_SECONDS, (name, row)
         assert row["budget"]["within_budget"] or name == "B2", (name, row)
+
+    # Mutation: run_strategies must not silently force N0 for N1/N2.
+    try:
+        run_strategies(proposal, snap, oam, net=None)
+        raise AssertionError("run_strategies accepted missing noise_id")
+    except ValueError as exc:
+        assert "noise_id" in str(exc)
+    strat_src = inspect.getsource(run_strategies)
+    assert "noise_id=noise_id" in strat_src
+    assert 'noise_id="N0"' not in strat_src and "noise_id='N0'" not in strat_src
+    for level in ("N0", "N1", "N2"):
+        leveled = run_strategies(proposal, snap, oam, net=None, noise_id=level)
+        assert leveled["B3"].get("noise_id") == level, (level, leveled["B3"])
+        assert leveled["B5"].get("noise_id") == level, (level, leveled["B5"])
     if decisions["B3"].get("matched_fault") in hidden:
         raise AssertionError(f"B3 used held-out label {decisions['B3'].get('matched_fault')}")
 

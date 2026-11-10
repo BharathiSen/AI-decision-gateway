@@ -85,10 +85,23 @@ def load_gate_config():
     return cfg, errors
 
 
-def load_frozen_context(noise_id="N0"):
-    """Load catalog, matrix, thresholds, and costs. Empty or missing files fail."""
+def load_frozen_context(noise_id=None):
+    """Load catalog, matrix, thresholds, and costs. Empty or missing files fail.
+
+    noise_id is required (episode traffic level). There is no silent N0 default.
+    """
     errors = []
-    noise_id = noise_id or "N0"
+    if noise_id is None:
+        return False, ["noise_id required"], {
+            "noise_id": None,
+            "catalog": {},
+            "matrix": [],
+            "thresholds": {},
+            "costs": {},
+            "fixes": {},
+            "held_out": set(),
+            "gate": {},
+        }
     known = _noise_ids()
     if noise_id not in known:
         errors.append(f"unknown noise_id {noise_id!r}")
