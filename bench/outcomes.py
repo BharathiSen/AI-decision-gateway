@@ -2,8 +2,8 @@
 
 Outcomes are strings the observability matrix and the consistency check
 both use. Thresholds come from config/thresholds.yaml (per traffic level),
-or from results/calibration_report.json proposed limits when that file
-exists (see calibration.grading_from_report in thresholds.yaml).
+or from results/calibration_report.json proposed limits only when that
+level passes ready_to_write acceptance (see calibration.grading_from_report).
 """
 
 import json
@@ -38,6 +38,11 @@ _HEALTHY = {
 
 
 def _thresholds_from_report(noise_id):
+    """Return proposed thresholds only when the level passed acceptance.
+
+    Unaccepted / incomplete / missing reports must not grade. Callers fall
+    back to committed YAML via load_thresholds.
+    """
     if not _REPORT.is_file():
         return None
     try:
@@ -46,9 +51,14 @@ def _thresholds_from_report(noise_id):
         return None
     level = (doc.get("levels") or {}).get(noise_id) or {}
     proposed = level.get("proposed_thresholds")
-    if isinstance(proposed, dict) and proposed:
-        return proposed
-    return None
+    if not (isinstance(proposed, dict) and proposed):
+        return None
+    # Lazy import: calibrate_healthy imports outcomes at module load.
+    from bench.calibrate_healthy import ready_to_write
+
+    if not ready_to_write(level):
+        return None
+    return proposed
 
 
 def load_yaml_thresholds(noise_id="N0"):
@@ -59,6 +69,12 @@ def load_yaml_thresholds(noise_id="N0"):
 
 
 def load_thresholds(noise_id="N0"):
+    """Grading limits: accepted calibration report, else committed YAML.
+
+    A report that merely exists is not acceptance. ready_to_write must pass
+    before proposed_thresholds may override YAML. Fail closed to YAML when
+    acceptance evidence is absent or invalid — never silently loosen.
+    """
     with (_CONFIG / "thresholds.yaml").open(encoding="utf-8") as f:
         doc = yaml.safe_load(f)
     calibration = doc.get("calibration") or {}

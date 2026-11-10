@@ -130,6 +130,137 @@ def main():
     import shutil
 
     shutil.rmtree(out_dir, ignore_errors=True)
+
+    # E5: reset_all / clear_noise exceptions surface as TopologyContaminated.
+    events = []
+
+    def boom_reset(net, baseline=False):
+        events.append("reset+baseline" if baseline else "reset")
+        if baseline:
+            raise RuntimeError("stop_all_flaps exploded")
+        return CLEAN
+
+    try:
+        run_episode(
+            None,
+            None,
+            fault_id="F1",
+            agent_fn=_agent,
+            run_oam=False,
+            _components=_fakes(events, pre=CLEAN, post=CLEAN) | {"reset_all": boom_reset},
+        )
+        raise AssertionError("reset exception must become TopologyContaminated")
+    except TopologyContaminated as exc:
+        assert "stop_all_flaps exploded" in str(exc), exc
+        assert exc.__cause__ is not None
+        assert exc.record is not None
+
+    # E5: noise applied before a body failure still reaches cleanup.
+    events = []
+    noise_states = []
+
+    def tracking_noise(net, noise_id, links=None):
+        events.append("noise")
+        noise_states.append("applied")
+        return {"noise_id": noise_id}
+
+    def tracking_clear(net, applied, links=None):
+        events.append("clear")
+        noise_states.append("cleared")
+
+    def fail_pre(net, baseline=False):
+        events.append("reset+baseline" if baseline else "reset")
+        if baseline:
+            return CLEAN
+        raise RuntimeError("pre-reset hard fail")
+
+    try:
+        run_episode(
+            None,
+            None,
+            fault_id="F1",
+            agent_fn=_agent,
+            run_oam=False,
+            _components={
+                **_fakes(events, pre=CLEAN, post=CLEAN),
+                "apply_noise": tracking_noise,
+                "clear_noise": tracking_clear,
+                "reset_all": fail_pre,
+            },
+        )
+        raise AssertionError("pre-reset exception must contaminate")
+    except TopologyContaminated as exc:
+        assert "pre-reset hard fail" in str(exc) or "episode teardown" in str(exc), exc
+    assert events[0] == "noise" and "clear" in events and events[-1] == "reset+baseline", events
+    assert noise_states == ["applied", "cleared"], noise_states
+
+    # E6: timeout during teardown must halt as contamination, not a partial episode.
+    import signal
+
+    from bench.run_batch import run_one
+
+    if hasattr(signal, "SIGALRM"):
+        alarms_cleared = []
+
+        def teardown_ok(net, baseline=False):
+            if not baseline:
+                return CLEAN
+            alarms_cleared.append(True)
+            return CLEAN
+
+        comps = _fakes([], pre=CLEAN, post=CLEAN)
+        comps["reset_all"] = teardown_ok
+        signal.signal(signal.SIGALRM, signal.SIG_IGN)
+        signal.alarm(60)
+        try:
+            run_episode(
+                None,
+                None,
+                fault_id="H0",
+                agent_fn=_agent,
+                run_oam=False,
+                _components=comps,
+            )
+        finally:
+            remaining = signal.alarm(0)
+        assert remaining == 0, "teardown must cancel pending SIGALRM"
+        assert alarms_cleared, "baseline teardown must still run"
+
+    def batch_boom(net, baseline=False):
+        if baseline:
+            raise TimeoutError("teardown timed out")
+        return CLEAN
+
+    import bench.run_batch as rb
+
+    real_run = rb.run_episode
+
+    def wrapped_episode(*args, **kwargs):
+        kwargs = dict(kwargs)
+        comps2 = _fakes([], pre=CLEAN, post=CLEAN)
+        comps2["reset_all"] = batch_boom
+        kwargs["_components"] = comps2
+        kwargs["agent_fn"] = _agent
+        kwargs["gate_fn"] = None
+        kwargs["run_oam"] = False
+        return real_run(*args, **kwargs)
+
+    saved = rb.run_episode
+    rb.run_episode = wrapped_episode
+    try:
+        try:
+            run_one(
+                None,
+                None,
+                {"fault_id": "H0", "noise_id": "N0", "seed": 1, "strategy": "verifix"},
+                timeout_seconds=0,
+            )
+            raise AssertionError("teardown TimeoutError must halt as TopologyContaminated")
+        except TopologyContaminated as exc:
+            assert "timeout" in str(exc).lower() or "teardown" in str(exc).lower(), exc
+    finally:
+        rb.run_episode = saved
+
     print("cleanup halt: PASS")
     return 0
 

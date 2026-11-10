@@ -306,15 +306,31 @@ def _snmp_input_errors(node):
 
     F4 corrupts on r2's egress, so r4 (the next hop) is where InHdrErrors
     land. hostB only sees the packets r4 forwarded with a good IP checksum.
+
+    Returns (count, error_or_None). Tool failures are not zeroed into a clean reading.
     """
-    snmp = _snmp_table_errors(run_in_node(node, "cat /proc/net/snmp"), ("Ip:", "Icmp:"))
-    ext = _snmp_table_errors(run_in_node(node, "cat /proc/net/netstat"), ("IpExt:",))
-    return snmp + ext
+    snmp_run = _run_probe(node, "cat /proc/net/snmp")
+    err = _probe_run_error(snmp_run)
+    if err:
+        return None, f"snmp: {err}"
+    snmp_text = snmp_run.get("output") or ""
+    if not snmp_text.strip():
+        return None, "snmp: empty_output"
+    snmp = _snmp_table_errors(snmp_text, ("Ip:", "Icmp:"))
+    ext_run = _run_probe(node, "cat /proc/net/netstat")
+    ext_err = _probe_run_error(ext_run)
+    if ext_err:
+        return None, f"netstat: {ext_err}"
+    ext_text = ext_run.get("output") or ""
+    ext = _snmp_table_errors(ext_text, ("IpExt:",)) if ext_text.strip() else 0
+    return snmp + ext, None
 
 
 def T5_if_errors(net, probe_count=0):
+    """Interface error counters. Tool failures are explicit `error`, never clean."""
     t0 = time.monotonic()
     stats = {}
+    errors = []
     for name in ("r1", "r2", "r3", "r4"):
         node = net.get(name)
         intfs = [intf.name for intf in node.intfList() if intf.name != "lo"]
@@ -328,7 +344,16 @@ def T5_if_errors(net, probe_count=0):
             f'$(cat /sys/class/net/{intf}/statistics/rx_frame_errors 2>/dev/null || echo 0)"'
             for intf in intfs
         )
-        for line in run_in_node(node, script).splitlines():
+        run = _run_probe(node, script)
+        err = _probe_run_error(run)
+        if err:
+            errors.append(f"{name}: {err}")
+            continue
+        out = run.get("output") or ""
+        if not out.strip():
+            errors.append(f"{name}: empty_output")
+            continue
+        for line in out.splitlines():
             parts = line.split()
             if len(parts) < 3:
                 continue
@@ -338,16 +363,32 @@ def T5_if_errors(net, probe_count=0):
             if len(parts) > 4:
                 rx += _counter(parts[4])
             stats[f"{name}/{parts[0]}"] = {"rx_errors": rx, "tx_errors": _counter(parts[2])}
-    if probe_count:
-        before = {name: _snmp_input_errors(net.get(name)) for name in _T5_SNMP_NODES}
-        interval = 0.02 if probe_count >= 50 else 0.05
-        for src, dst_ip in _T5_HOP_PROBES:
-            _hop_ping(net, src, dst_ip, count=probe_count, interval=interval)
-        _hop_ping(net, "hostA", net.get("hostB").IP(), count=probe_count, interval=interval)
-        time.sleep(0.2)
+    if probe_count and not errors:
+        before = {}
         for name in _T5_SNMP_NODES:
-            delta = max(0, _snmp_input_errors(net.get(name)) - before[name])
-            stats[f"{name}/icmp"] = {"rx_errors": delta, "tx_errors": 0}
+            count, err = _snmp_input_errors(net.get(name))
+            if err:
+                errors.append(f"{name}/{err}")
+                continue
+            before[name] = count
+        if not errors:
+            interval = 0.02 if probe_count >= 50 else 0.05
+            for src, dst_ip in _T5_HOP_PROBES:
+                hop = _hop_ping(net, src, dst_ip, count=probe_count, interval=interval)
+                if hop.get("error"):
+                    errors.append(f"{src}->{dst_ip}: {hop['error']}")
+            end = _hop_ping(net, "hostA", net.get("hostB").IP(), count=probe_count, interval=interval)
+            if end.get("error"):
+                errors.append(f"hostA->hostB: {end['error']}")
+            time.sleep(0.2)
+            if not errors:
+                for name in _T5_SNMP_NODES:
+                    after, err = _snmp_input_errors(net.get(name))
+                    if err:
+                        errors.append(f"{name}/{err}")
+                        continue
+                    delta = max(0, after - before[name])
+                    stats[f"{name}/icmp"] = {"rx_errors": delta, "tx_errors": 0}
     hop_packets = probe_count * (1 + len(_T5_HOP_PROBES)) if probe_count else 0
     probes = [_icmp_probe(hop_packets)] if hop_packets else []
     return {
@@ -355,20 +396,33 @@ def T5_if_errors(net, probe_count=0):
         "interfaces": stats,
         "duration_seconds": time.monotonic() - t0,
         "probes": probes,
-        "error": None,
+        "error": ("; ".join(errors)) if errors else None,
     }
 
 
 def T6_queue_stats(net):
-    """Queue stats for r1/r2/r3 only. r4 is not measured."""
+    """Queue stats for r1/r2/r3 only. r4 is not measured.
+
+    Structured probe failures are `error`; successful empty/clear qdiscs grade.
+    """
     t0 = time.monotonic()
     queues = {}
+    errors = []
     for name in T6_QUEUE_NODES:
         node = net.get(name)
         intfs = [intf.name for intf in node.intfList() if intf.name != "lo"]
         if not intfs:
             continue
         script = "; ".join(f'echo "@@{intf}"; tc -s qdisc show dev {intf}' for intf in intfs)
+        run = _run_probe(node, script)
+        err = _probe_run_error(run)
+        if err:
+            errors.append(f"{name}: {err}")
+            continue
+        out = run.get("output") or ""
+        if not out.strip():
+            errors.append(f"{name}: empty_output")
+            continue
         current = None
         chunk = []
 
@@ -380,7 +434,7 @@ def T6_queue_stats(net):
             parsed["raw"] = raw
             queues[f"{_name}/{intf_name}"] = parsed
 
-        for line in run_in_node(node, script).splitlines():
+        for line in out.splitlines():
             if line.startswith("@@"):
                 store(current, chunk)
                 current = line[2:].strip()
@@ -393,23 +447,46 @@ def T6_queue_stats(net):
         "queues": queues,
         "duration_seconds": time.monotonic() - t0,
         "probes": [],
-        "error": None,
+        "error": ("; ".join(errors)) if errors else None,
     }
 
 
 def T7_route_check(net):
+    """Forward/return routes. Probe/tool failures are `error`, not a path grade."""
     t0 = time.monotonic()
-    r1 = run_in_node(net.get("r1"), "ip route show 10.0.4.0/24").strip()
-    r2 = run_in_node(net.get("r2"), "ip route show 10.0.4.0/24").strip()
-    r4 = run_in_node(net.get("r4"), "ip route show 10.0.1.0/24").strip()
-    if "blackhole" in r1 or "blackhole" in r2:
-        active = "blackhole"
-    elif "10.0.12.2" in r1:
-        active = "primary"
-    elif "10.0.13.2" in r1:
-        active = "backup"
-    else:
-        active = ctl.get_active_path(net)
+    specs = (
+        ("r1_to_dest", "r1", "ip route show 10.0.4.0/24"),
+        ("r2_to_dest", "r2", "ip route show 10.0.4.0/24"),
+        ("r4_to_src", "r4", "ip route show 10.0.1.0/24"),
+    )
+    routes = {}
+    errors = []
+    for key, node_name, command in specs:
+        run = _run_probe(net.get(node_name), command)
+        err = _probe_run_error(run)
+        if err:
+            errors.append(f"{node_name}: {err}")
+            routes[key] = ""
+            continue
+        text = (run.get("output") or "").strip()
+        routes[key] = text
+    r1 = routes.get("r1_to_dest") or ""
+    r2 = routes.get("r2_to_dest") or ""
+    r4 = routes.get("r4_to_src") or ""
+    active = None
+    if not errors:
+        if "blackhole" in r1 or "blackhole" in r2:
+            active = "blackhole"
+        elif "10.0.12.2" in r1:
+            active = "primary"
+        elif "10.0.13.2" in r1:
+            active = "backup"
+        else:
+            try:
+                active = ctl.get_active_path(net)
+            except Exception as exc:
+                errors.append(f"active_path: {type(exc).__name__}: {exc}")
+                active = None
     return {
         "test_id": "T7_route_check",
         "r1_to_dest": r1,
@@ -418,7 +495,7 @@ def T7_route_check(net):
         "active_path": active,
         "duration_seconds": time.monotonic() - t0,
         "probes": [],
-        "error": None,
+        "error": ("; ".join(errors)) if errors else None,
     }
 
 
@@ -1084,11 +1161,14 @@ def _check_costs():
             "Icmp: InMsgs InErrors InCsumErrors InEchos\n"
             "Icmp: 4 3 5 4\n"
         )
-        assert _snmp_input_errors(_SnmpNode(old)) == 3, _snmp_input_errors(_SnmpNode(old))
-        assert _snmp_input_errors(_SnmpNode(new)) == 2 + 1 + 3 + 5, _snmp_input_errors(_SnmpNode(new))
+        old_count, old_err = _snmp_input_errors(_SnmpNode(old))
+        assert old_err is None and old_count == 3, (old_count, old_err)
+        new_count, new_err = _snmp_input_errors(_SnmpNode(new))
+        assert new_err is None and new_count == 2 + 1 + 3 + 5, (new_count, new_err)
         ext = _SnmpNode(old)
         ext.netstat = "IpExt: InNoRoutes InCsumErrors\nIpExt: 0 7\n"
-        assert _snmp_input_errors(ext) == 3 + 7, _snmp_input_errors(ext)
+        ext_count, ext_err = _snmp_input_errors(ext)
+        assert ext_err is None and ext_count == 3 + 7, (ext_count, ext_err)
     finally:
         globals()["run_in_node"] = saved_run
 
@@ -1686,9 +1766,112 @@ def _check_h2_measurement_errors():
     print("H2 measurement errors: PASS")
 
 
+def _check_e1_t567_measurement_errors():
+    """E1: T5/T6/T7 propagate structured tool failures; never invent clean grades."""
+    from bench.outcomes import grade_result
+
+    class _Intf:
+        def __init__(self, name):
+            self.name = name
+
+    class _Node:
+        def __init__(self, name, intfs):
+            self.name = name
+            self._intfs = intfs
+
+        def intfList(self):
+            return [ _Intf(n) for n in self._intfs ]
+
+        def IP(self):
+            return "10.0.4.2"
+
+    class _Net:
+        def get(self, name):
+            if name in ("r1", "r2", "r3"):
+                return _Node(name, [f"{name}-eth0"])
+            if name == "r4":
+                return _Node(name, ["r4-eth0"])
+            return _Node(name, [])
+
+    def _structured(output="", exit_code=0, timed_out=False, error=None):
+        return {
+            "output": output,
+            "exit_code": exit_code,
+            "timed_out": timed_out,
+            "error": error,
+        }
+
+    saved = globals()["run_in_node"]
+
+    def fail_t5(node, command, timeout=60.0, structured=False):
+        meta = _structured("", timed_out=True, error="timeout")
+        return meta if structured else meta["output"]
+
+    globals()["run_in_node"] = fail_t5
+    try:
+        t5 = T5_if_errors(_Net())
+        assert t5["error"] and "timeout" in t5["error"], t5
+        assert grade_result(t5) is None, grade_result(t5)
+    finally:
+        globals()["run_in_node"] = saved
+
+    def fail_t6(node, command, timeout=60.0, structured=False):
+        meta = _structured("", exit_code=1, error="command_failure")
+        return meta if structured else meta["output"]
+
+    globals()["run_in_node"] = fail_t6
+    try:
+        t6 = T6_queue_stats(_Net())
+        assert t6["error"] and "command_failure" in t6["error"], t6
+        assert grade_result(t6) is None
+    finally:
+        globals()["run_in_node"] = saved
+
+    def empty_t6(node, command, timeout=60.0, structured=False):
+        meta = _structured("", exit_code=0, error=None)
+        return meta if structured else ""
+
+    globals()["run_in_node"] = empty_t6
+    try:
+        t6e = T6_queue_stats(_Net())
+        assert t6e["error"] and "empty_output" in t6e["error"], t6e
+        assert grade_result(t6e) is None
+    finally:
+        globals()["run_in_node"] = saved
+
+    def fail_t7(node, command, timeout=60.0, structured=False):
+        meta = _structured("", exit_code=0, error="read_failure")
+        return meta if structured else ""
+
+    globals()["run_in_node"] = fail_t7
+    try:
+        t7 = T7_route_check(_Net())
+        assert t7["error"] and "read_failure" in t7["error"], t7
+        assert t7.get("active_path") is None
+        assert grade_result(t7) is None
+    finally:
+        globals()["run_in_node"] = saved
+
+    # Legitimate empty route text (tool ok) is still a network observation path.
+    def ok_empty_route(node, command, timeout=60.0, structured=False):
+        meta = _structured("\n", exit_code=0, error=None)
+        return meta if structured else "\n"
+
+    globals()["run_in_node"] = ok_empty_route
+    try:
+        t7_ok = T7_route_check(_Net())
+        # No tool error; active_path may fall through to controller.
+        assert t7_ok["error"] is None or "active_path" in (t7_ok["error"] or ""), t7_ok
+    finally:
+        globals()["run_in_node"] = saved
+
+    print("E1 T5/T6/T7 measurement errors: PASS")
+
+
 if __name__ == "__main__":
     _check_costs()
     print("test cost: PASS")
     _check_ping_classification()
     _check_t10_receiver()
     _check_h2_measurement_errors()
+    _check_e1_t567_measurement_errors()

@@ -389,9 +389,18 @@ def decide(
                 ran_ids.add(tid)
                 used_seconds += cost
                 log["ran_tests"].append(tid)
+                # Fresh tool/measurement failure: unavailable, not a mismatch.
+                if isinstance(tr, dict) and tr.get("error"):
+                    unavailable.append({"alternative": alt, "test_id": tid})
+                    errored_tests = sorted(set(errored_tests) | {tid})
+                    log["errored_tests"] = errored_tests
+                    continue
             else:
                 if tid not in log["reused_tests"]:
                     log["reused_tests"].append(tid)
+                if isinstance(tr, dict) and tr.get("error"):
+                    unavailable.append({"alternative": alt, "test_id": tid})
+                    continue
             obs = checks._summarize_observation(tr, thresholds)
             primary_pred = next(
                 (

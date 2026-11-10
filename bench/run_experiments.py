@@ -594,44 +594,85 @@ def _self_check():
         escalated = run_b5_independent(malformed, snap, oam, net=None)
         assert escalated["decision"] == "escalate" and escalated["reason"] == NO_VALID_PROPOSAL, escalated
     calm = dict(snap, metrics={"packet_loss_percent": 0.0, "latency_ms": 10, "active_path": "primary", "connectivity": True})
-    for label, unsafe in (("F11", True), ("F12", False)):
-        invalid_noop = {
-            "episode_id": f"invalid-noop-{label}",
-            "fault_id": label,
-            "noise_id": "N0",
-            "agent_proposal": None,
-            "agent_error": "invalid agent output",
-            "agent_error_class": "invalid_output",
-            "agent_raw": {"parsed": {
-                "action": "DO_NOTHING",
-                "target": "HostA_to_HostB",
-                "proposed_path": ["r1", "r2", "r4"],
-                "causes": [{"cause_id": "F12"}],
-            }},
-            "network_snapshot": calm,
-            "oam": {"results": []},
-            "execution_attempted": False,
-        }
-        replay = compare_episode(invalid_noop, net=None)
-        assert replay["invalid_proposal"] is True
-        assert replay["decisions"]["B5"]["decision"] == "allow", replay["decisions"]["B5"]
-        b5_score = replay["scores"]["B5"]
-        assert b5_score["evaluated_action"] == "DO_NOTHING"
-        assert b5_score["false_allow"] is unsafe, (label, b5_score)
-        assert b5_score["correct_allow"] is (not unsafe), (label, b5_score)
-        for name in GATE_ARMS:
-            row = replay["decisions"][name]
-            assert row["decision"] == "escalate" and row["reason"] == NO_VALID_PROPOSAL, (name, row)
-            assert replay["scores"][name]["false_allow"] is False, name
-        live = run_b5_independent(raw_proposal(invalid_noop), calm, [], net=None)
-        assert live["decision"] == "allow" and live["action"] == "DO_NOTHING", live
-        assert score_arm(live["decision"], live["action"], label) == b5_score
-        tmp_one = Path(tempfile.mkdtemp())
-        (tmp_one / "one.json").write_text(json.dumps(invalid_noop), encoding="utf-8")
-        rolled_b5 = aggregate(tmp_one)["methods"]["B5"]
-        assert rolled_b5["false_allow"] == int(unsafe), (label, rolled_b5)
-        (tmp_one / "one.json").unlink()
-        tmp_one.rmdir()
+    noop_evidence = [
+        {"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0, "latency_ms": 10.0, "connectivity": True, "error": None},
+        {"test_id": "T4_mtu", "df_ping_ok": True, "error": None},
+        {"test_id": "T8_tcp_vs_ping", "ping_ok": True, "tcp_ok": True, "error": None},
+        {"test_id": "T10_speed", "mbit_per_sec": 50.0, "error": None},
+    ]
+    # F11: cause-permit forbids DO_NOTHING — B5 must escalate (never false-allow).
+    invalid_f11 = {
+        "episode_id": "invalid-noop-F11",
+        "fault_id": "F11",
+        "noise_id": "N0",
+        "agent_proposal": None,
+        "agent_error": "invalid agent output",
+        "agent_error_class": "invalid_output",
+        "agent_raw": {"parsed": {
+            "action": "DO_NOTHING",
+            "target": "HostA_to_HostB",
+            "proposed_path": ["r1", "r2", "r4"],
+            "causes": [{"cause_id": "F11"}],
+        }},
+        "network_snapshot": calm,
+        "oam": {"results": noop_evidence},
+        "execution_attempted": False,
+    }
+    replay_f11 = compare_episode(invalid_f11, net=None)
+    assert replay_f11["invalid_proposal"] is True
+    assert replay_f11["decisions"]["B5"]["decision"] == "escalate", replay_f11["decisions"]["B5"]
+    b5_f11 = replay_f11["scores"]["B5"]
+    assert b5_f11["false_allow"] is False and b5_f11["correct_allow"] is False, b5_f11
+    for name in GATE_ARMS:
+        row = replay_f11["decisions"][name]
+        assert row["decision"] == "escalate" and row["reason"] == NO_VALID_PROPOSAL, (name, row)
+        assert replay_f11["scores"][name]["false_allow"] is False, name
+    live_f11 = run_b5_independent(raw_proposal(invalid_f11), calm, noop_evidence, net=None)
+    assert live_f11["decision"] == "escalate", live_f11
+    assert "not permitted" in (live_f11.get("reason") or ""), live_f11
+    assert score_arm(live_f11["decision"], live_f11.get("action"), "F11") == b5_f11
+    tmp_f11 = Path(tempfile.mkdtemp())
+    (tmp_f11 / "one.json").write_text(json.dumps(invalid_f11), encoding="utf-8")
+    assert aggregate(tmp_f11)["methods"]["B5"]["false_allow"] == 0
+    (tmp_f11 / "one.json").unlink()
+    tmp_f11.rmdir()
+
+    # F12: DO_NOTHING is permitted with complete healthy noop evidence.
+    invalid_f12 = {
+        "episode_id": "invalid-noop-F12",
+        "fault_id": "F12",
+        "noise_id": "N0",
+        "agent_proposal": None,
+        "agent_error": "invalid agent output",
+        "agent_error_class": "invalid_output",
+        "agent_raw": {"parsed": {
+            "action": "DO_NOTHING",
+            "target": "HostA_to_HostB",
+            "proposed_path": ["r1", "r2", "r4"],
+            "causes": [{"cause_id": "F12"}],
+        }},
+        "network_snapshot": calm,
+        "oam": {"results": noop_evidence},
+        "execution_attempted": False,
+    }
+    replay_f12 = compare_episode(invalid_f12, net=None)
+    assert replay_f12["invalid_proposal"] is True
+    assert replay_f12["decisions"]["B5"]["decision"] == "allow", replay_f12["decisions"]["B5"]
+    b5_f12 = replay_f12["scores"]["B5"]
+    assert b5_f12["evaluated_action"] == "DO_NOTHING"
+    assert b5_f12["false_allow"] is False and b5_f12["correct_allow"] is True, b5_f12
+    for name in GATE_ARMS:
+        row = replay_f12["decisions"][name]
+        assert row["decision"] == "escalate" and row["reason"] == NO_VALID_PROPOSAL, (name, row)
+        assert replay_f12["scores"][name]["false_allow"] is False, name
+    live_f12 = run_b5_independent(raw_proposal(invalid_f12), calm, noop_evidence, net=None)
+    assert live_f12["decision"] == "allow" and live_f12["action"] == "DO_NOTHING", live_f12
+    assert score_arm(live_f12["decision"], live_f12["action"], "F12") == b5_f12
+    tmp_f12 = Path(tempfile.mkdtemp())
+    (tmp_f12 / "one.json").write_text(json.dumps(invalid_f12), encoding="utf-8")
+    assert aggregate(tmp_f12)["methods"]["B5"]["false_allow"] == 0
+    (tmp_f12 / "one.json").unlink()
+    tmp_f12.rmdir()
     rejected = dict(record, agent_error="stale observation", agent_error_class="invalid_output")
     rejected_cmp = compare_episode(rejected, net=None)
     assert rejected_cmp["invalid_proposal"] is True

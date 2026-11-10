@@ -81,6 +81,12 @@ def check_consistency(proposal, test_results, primary_cause_id=None, thresholds=
             unchecked += 1
             rows.append(record)
             continue
+        # Errored rows are unavailable measurement, not negative evidence.
+        if obs.get("error"):
+            record["reason"] = f"test unavailable: {obs.get('error')}"
+            unchecked += 1
+            rows.append(record)
+            continue
         obs_str = _summarize_observation(obs, thresholds)
         record["observed"] = obs_str
         checked += 1

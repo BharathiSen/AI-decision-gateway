@@ -12,6 +12,7 @@ if __name__ == "__main__":
 
 import json
 import re
+import signal
 import time
 import uuid
 from datetime import datetime, timezone
@@ -660,12 +661,23 @@ def run_episode(
     real_reset = parts["reset_all"] is inj.reset_all
     episode_id = str(uuid.uuid4())
     started = datetime.now(timezone.utc).isoformat()
-    noise_applied = parts["apply_noise"](net, noise_id, links)
+    noise_applied = None
     correlation_ids = []
     record = None
 
     try:
-        pre_reset = parts["reset_all"](net)
+        # Noise is inside the try so a partial/failed setup still hits cleanup.
+        noise_applied = parts["apply_noise"](net, noise_id, links)
+        try:
+            pre_reset = parts["reset_all"](net)
+        except TopologyContaminated:
+            raise
+        except Exception as exc:
+            raise TopologyContaminated(
+                f"pre-episode reset: {type(exc).__name__}: {exc}",
+                None,
+                record=record,
+            ) from exc
         # Background traffic is on here, so only errors and residual count.
         require_clean_topology(
             pre_reset,
@@ -833,12 +845,51 @@ def run_episode(
         record["completed_at"] = datetime.now(timezone.utc).isoformat()
         return record
     finally:
+        # E6: cancel batch/episode SIGALRM before teardown so a timeout cannot
+        # interrupt cleanup and let the next episode run on a dirty topology.
+        if hasattr(signal, "SIGALRM"):
+            try:
+                signal.alarm(0)
+            except Exception:
+                pass
         clear_error = None
+        teardown = None
         try:
-            parts["clear_noise"](net, noise_applied, links)
+            parts["clear_noise"](net, noise_applied or {}, links)
         except Exception as exc:
             clear_error = f"clear_noise: {type(exc).__name__}: {exc}"
-        teardown = parts["reset_all"](net, baseline=True)
+        try:
+            teardown = parts["reset_all"](net, baseline=True)
+        except TopologyContaminated:
+            raise
+        except TimeoutError as exc:
+            problem = f"timeout during teardown: {exc}"
+            if clear_error:
+                problem = f"{problem}; {clear_error}"
+            if isinstance(record, dict):
+                record["teardown"] = teardown_summary(
+                    {"errors": [{"error": problem}], "residual": {}, "healthy": False},
+                    problem,
+                )
+            raise TopologyContaminated(
+                f"episode teardown: {problem}",
+                None,
+                record=record,
+            ) from exc
+        except Exception as exc:
+            problem = f"{type(exc).__name__}: {exc}"
+            if clear_error:
+                problem = f"{problem}; {clear_error}"
+            if isinstance(record, dict):
+                record["teardown"] = teardown_summary(
+                    {"errors": [{"error": problem}], "residual": {}, "healthy": False},
+                    problem,
+                )
+            raise TopologyContaminated(
+                f"episode teardown: {problem}",
+                None,
+                record=record,
+            ) from exc
         problem = teardown_problem(teardown, real_reset, check_health=True)
         if clear_error:
             problem = f"{problem}; {clear_error}" if problem else clear_error

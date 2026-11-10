@@ -1214,6 +1214,8 @@ def _self_check():
     import bench.outcomes as outcomes
 
     report_path = Path(tempfile.mkdtemp()) / "calibration_report.json"
+    yaml_latency = load_yaml_thresholds("N0")["T1_e2e_ping"]["max_latency_ms"]
+    # Unaccepted report must not override committed YAML for grading.
     report_path.write_text(
         json.dumps(
             {
@@ -1232,7 +1234,31 @@ def _self_check():
     previous = outcomes._REPORT
     outcomes._REPORT = report_path
     try:
-        assert load_thresholds("N0")["T1_e2e_ping"]["max_latency_ms"] == 99.0
+        unaccepted = load_thresholds("N0")
+        assert unaccepted["T1_e2e_ping"]["max_latency_ms"] == yaml_latency, unaccepted
+        assert unaccepted["T1_e2e_ping"]["max_latency_ms"] != 99.0
+        # Accepted level (ready_to_write) may override YAML.
+        accepted_level = {
+            "full_battery": True,
+            "calibration_runs": MIN_CALIBRATION_RUNS,
+            "eval_runs": 50,
+            "used_evaluation_faults": False,
+            "episode_aligned_battery": True,
+            "eval_error_inclusive_false_alarm_rate": 0.0,
+            "eval_false_alarm_rate": 0.0,
+            "first_try_t10_completeness": 1.0,
+            "first_try_t10_target": FIRST_TRY_T10_TARGET,
+            "proposed_thresholds": {
+                "T1_e2e_ping": {"max_loss_percent": 9.0, "max_latency_ms": 99.0},
+            },
+        }
+        assert ready_to_write(accepted_level)
+        report_path.write_text(
+            json.dumps({"version": 1, "levels": {"N0": accepted_level}}),
+            encoding="utf-8",
+        )
+        accepted = load_thresholds("N0")
+        assert accepted["T1_e2e_ping"]["max_latency_ms"] == 99.0, accepted
     finally:
         outcomes._REPORT = previous
     report_path.unlink()

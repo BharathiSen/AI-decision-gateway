@@ -300,6 +300,53 @@ def main():
     absent = decide(None, copy.deepcopy(proposal), lossy, [], run_missing_tests=False)
     assert absent["decision"] == out["decision"], (absent["decision"], out["decision"])
 
+    # E2: errored observations are unchecked (unavailable), never mismatches.
+    from gate.checks import check_consistency
+
+    e2_proposal = with_predictions([{"test_id": "T1_e2e_ping", "expected": "ok"}])
+    e2_cons = check_consistency(
+        e2_proposal,
+        [{"test_id": "T1_e2e_ping", "error": "timeout", "packet_loss_percent": 100.0}],
+    )
+    assert e2_cons["predictions_checked"] == 0 and e2_cons["predictions_mismatched"] == 0, e2_cons
+    assert e2_cons["predictions_unchecked"] == 1 and e2_cons["passed"] is False, e2_cons
+    assert e2_cons["predictions"][0]["status"] == "unchecked"
+    assert "unavailable" in (e2_cons["predictions"][0].get("reason") or "")
+
+    # E2: freshly executed errored tests escalate as unavailable, not block.
+    from bench import tests as oam_mod
+
+    saved_run = oam_mod.run_test
+    fresh_calls = []
+
+    def _fresh_error(net, tid, **kwargs):
+        fresh_calls.append(tid)
+        return {"test_id": tid, "error": "timeout"}
+
+    oam_mod.run_test = _fresh_error
+    try:
+        fresh_out = decide(
+            object(),
+            copy.deepcopy(proposal),
+            lossy,
+            [],
+            mode="full",
+            run_missing_tests=True,
+        )
+    finally:
+        oam_mod.run_test = saved_run
+    assert fresh_calls, "expected at least one fresh OAM run"
+    assert fresh_out["decision"] == "escalate", fresh_out
+    assert fresh_out["decision"] != "block"
+    reason = fresh_out.get("reason") or ""
+    assert "unavailable" in reason or "insufficient evidence" in reason, reason
+    assert "consistency failed" not in reason
+    log = fresh_out.get("log") or {}
+    assert not any(
+        row.get("status") == "mismatched"
+        for row in ((fresh_out.get("checks") or {}).get("consistency") or {}).get("predictions") or []
+    )
+
     print("evidence semantics: PASS")
     return 0
 

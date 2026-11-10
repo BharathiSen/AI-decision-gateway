@@ -1018,9 +1018,12 @@ def reset_all(net, baseline=False):
         from bench import flap as flap_mod
     except ImportError:
         import flap as flap_mod
-    flap_mod.stop_all_flaps(net)
-
     cleared, errors, residual = [], [], {}
+    try:
+        flap_mod.stop_all_flaps(net)
+    except Exception as exc:
+        errors.append({"correlation_id": None, "error": f"stop_all_flaps: {type(exc).__name__}: {exc}"})
+
     for cid in sorted(_ACTIVE, key=lambda c: _ACTIVE[c]["seq"], reverse=True):
         try:
             result = reset(cid)
@@ -1036,7 +1039,11 @@ def reset_all(net, baseline=False):
         except Exception as exc:
             errors.append({"correlation_id": None, "error": f"restore_baseline: {type(exc).__name__}: {exc}"})
 
-    loss, ping_output = health_check(net)
+    try:
+        loss, ping_output = health_check(net)
+    except Exception as exc:
+        errors.append({"correlation_id": None, "error": f"health_check: {type(exc).__name__}: {exc}"})
+        loss, ping_output = None, ""
     return {
         "cleared": cleared,
         "errors": errors,
