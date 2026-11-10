@@ -20,6 +20,7 @@ test fixtures only and are used only inside `test_thresholds()` /
 import contextlib
 import copy
 import functools
+import hashlib
 import json
 import math
 import re
@@ -41,6 +42,35 @@ REQUIRED_THRESHOLDS = {
     "T8_tcp_vs_ping": ("tcp_must_succeed",),
     "T10_speed": ("min_mbit",),
 }
+
+# Evidence fields bound into acceptance_sha256 with the threshold set.
+# Keep in sync with bench.calibrate_healthy.ACCEPTANCE_FIELDS.
+ACCEPTANCE_BINDING_FIELDS = (
+    "noise_id",
+    "full_battery",
+    "calibration_runs",
+    "eval_runs",
+    "used_evaluation_faults",
+    "episode_aligned_battery",
+    "eval_error_inclusive_false_alarm_rate",
+    "false_alarm_rate_target",
+    "first_try_t10_completeness",
+    "first_try_t10_target",
+)
+
+# Offline / historical analysis only. Never a research-grade mark.
+DIAGNOSTIC_UNACCEPTED_LABEL = "thresholds unaccepted — not research data"
+
+
+def acceptance_binding_hash(noise_id, acceptance, thresholds):
+    """SHA-256 binding noise identity, acceptance evidence, and thresholds."""
+    payload = {
+        "noise_id": noise_id,
+        "acceptance": {key: (acceptance or {}).get(key) for key in ACCEPTANCE_BINDING_FIELDS},
+        "thresholds": thresholds,
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 class ThresholdsUnavailable(RuntimeError):
@@ -186,8 +216,18 @@ def threshold_status(noise_id="N0"):
         try:
             if not isinstance(entry, dict):
                 raise ValueError("accepted entry is not a mapping")
-            candidate = dict(entry.get("acceptance") or {}, proposed_thresholds=entry.get("thresholds"))
+            acceptance = entry.get("acceptance") or {}
+            thresholds = entry.get("thresholds")
+            candidate = dict(acceptance, proposed_thresholds=thresholds)
             found, why = _accepted(candidate, noise_id, "config/thresholds.yaml")
+            if found is not None:
+                stored = entry.get("acceptance_sha256")
+                if not isinstance(stored, str) or not stored:
+                    found, why = None, ["config/thresholds.yaml: acceptance_sha256 missing"]
+                else:
+                    expected = acceptance_binding_hash(noise_id, acceptance, thresholds)
+                    if stored != expected:
+                        found, why = None, ["config/thresholds.yaml: acceptance_sha256 mismatch"]
         except Exception as exc:
             found, why = None, [f"config/thresholds.yaml: {type(exc).__name__}: {exc}"]
         if found is not None:

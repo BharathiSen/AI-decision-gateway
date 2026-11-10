@@ -285,6 +285,10 @@ def run_suite():
     return results, failures
 
 
+from bench.outcomes import using_test_thresholds  # offline checks grade with test-only limits
+
+
+@using_test_thresholds
 def _self_check():
     before = _snapshot_frozen()
     failures = []
@@ -381,8 +385,14 @@ def live_accept():
     from bench import inject as inj
     from bench import tests as oam
     from bench.mininet_util import mn_cleanup, run_in_node
+    from bench.outcomes import require_accepted_thresholds
     from bench.run_episode import run_episode
     from network.topology import create_network
+
+    refusal = require_accepted_thresholds(["N0", "N2"])
+    if refusal:
+        print(refusal, file=sys.stderr)
+        return 2
 
     print(f"live-accept build: {LIVE_ACCEPT_BUILD}")
     before = _snapshot_frozen()

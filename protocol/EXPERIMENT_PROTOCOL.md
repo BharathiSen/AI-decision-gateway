@@ -13,7 +13,9 @@ Freeze means: do not change decision semantics, label methodology, splits,
 primary metrics, or baseline contracts after held-out episode collection
 begins. Any such change requires a new protocol version and a new `--out`.
 
-Companion index: [`protocol/RESEARCH_READINESS.md`](RESEARCH_READINESS.md).
+Companion readiness index: not present in the tracked tree (do not invent a
+new document). Calibration acceptance and campaign gates are defined in §8
+of this protocol.
 
 ---
 
@@ -126,8 +128,9 @@ provider/model/effort per campaign. Changing the model starts a new campaign
 - Untrusted labels are reported separately and excluded from primary rates.
 - Invalid proposals score as non-executable (cannot be false ALLOW; remain in
   attempt denominators).
-- If calibration acceptance fails for a noise level (§8), T10 is excluded from
-  evidence at that level for the whole campaign and the exclusion is reported.
+- If calibration acceptance fails for a noise level (§8), that noise level is
+  refused entirely for research grading and new campaigns (whole-level
+  fail-closed). There is no T10-only exclusion carve-out.
 
 ---
 

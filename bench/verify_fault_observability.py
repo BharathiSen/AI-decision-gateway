@@ -525,6 +525,10 @@ def main(argv=None):
 # "primary" faults and the backup by "backup" faults.
 # ---------------------------------------------------------------------------
 
+from bench.outcomes import using_test_thresholds  # offline checks grade with test-only limits
+
+
+@using_test_thresholds
 def _self_check():
     import tempfile
 

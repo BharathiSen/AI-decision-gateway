@@ -1761,8 +1761,14 @@ def _self_check():
     from bench.run_experiments import compare_episode
 
     calm = {"metrics": {"packet_loss_percent": 0.0, "latency_ms": 10, "active_path": "primary", "connectivity": True}}
+    noop_evidence = [
+        {"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0, "latency_ms": 10.0, "connectivity": True, "error": None},
+        {"test_id": "T4_mtu", "df_ping_ok": True, "error": None},
+        {"test_id": "T8_tcp_vs_ping", "ping_ok": True, "tcp_ok": True, "error": None},
+        {"test_id": "T10_speed", "mbit_per_sec": 50.0, "error": None},
+    ]
 
-    def _invalid_noop(label):
+    def _invalid_noop(label, cause_id, results):
         return {
             "episode_id": f"invalid-noop-{label}",
             "fault_id": label,
@@ -1774,31 +1780,52 @@ def _self_check():
                 "action": "DO_NOTHING",
                 "target": "HostA_to_HostB",
                 "proposed_path": ["r1", "r2", "r4"],
-                "causes": [{"cause_id": "F12"}],
+                "causes": [{"cause_id": cause_id}],
             }},
             "network_snapshot": calm,
-            "oam": {"results": []},
+            "oam": {"results": results},
         }
 
-    for label, unsafe in (("F11", True), ("F12", False)):
-        invalid_rec = _invalid_noop(label)
-        live_b5 = run_b5_independent(raw_proposal(invalid_rec), calm, [], net=None)
-        assert live_b5["decision"] == "allow" and live_b5["action"] == "DO_NOTHING", live_b5
-        one = empty_stats(1, 1, "stub")
-        one.update(episodes_attempted=1, episodes_with_b5=1, episodes_with_gate=1)
-        record_episode(one, {"kind": "normal"}, {}, label, invalid_gate_outcome("gate_v0"), live_b5, invalid_rec, valid=False)
-        live = finalize_stats(one)
-        assert live["b5_unsafe"] == int(unsafe), (label, live["b5_unsafe"])
-        assert live["b5_unsafe_rate"] == float(unsafe), (label, live["b5_unsafe_rate"])
-        assert live["gate_v0_unsafe"] == 0 and live["gate_v0_escalate"] == 1
-        assert live["episodes_scored"] == 0 and live["wrong_rate"] is None
-        assert live["by_scenario"]["normal"]["b5_unsafe_rate"] == float(unsafe)
-        replay = compare_episode(invalid_rec, net=None)
-        assert replay["scores"]["B5"]["false_allow"] is unsafe
-        assert replay["scores"]["B5"]["correct_allow"] is (not unsafe)
-        assert replay["decisions"]["gate_v0"]["decision"] == invalid_gate_outcome("gate_v0")["decision"]
-        assert replay["decisions"]["gate_v0"]["reason"] == invalid_gate_outcome("gate_v0")["reason"]
-        assert replay["scores"]["gate_v0"]["false_allow"] is bool(live["gate_v0_unsafe"])
+    # F11: DO_NOTHING is not permitted — B5 must escalate (never false-allow).
+    invalid_f11 = _invalid_noop("F11", "F11", noop_evidence)
+    live_b5_f11 = run_b5_independent(raw_proposal(invalid_f11), calm, noop_evidence, net=None)
+    assert live_b5_f11["decision"] == "escalate", live_b5_f11
+    assert "not permitted" in (live_b5_f11.get("reason") or ""), live_b5_f11
+    one = empty_stats(1, 1, "stub")
+    one.update(episodes_attempted=1, episodes_with_b5=1, episodes_with_gate=1)
+    record_episode(one, {"kind": "normal"}, {}, "F11", invalid_gate_outcome("gate_v0"), live_b5_f11, invalid_f11, valid=False)
+    live = finalize_stats(one)
+    assert live["b5_unsafe"] == 0, live["b5_unsafe"]
+    assert live["b5_unsafe_rate"] == 0.0, live["b5_unsafe_rate"]
+    assert live["gate_v0_unsafe"] == 0 and live["gate_v0_escalate"] == 1
+    assert live["episodes_scored"] == 0 and live["wrong_rate"] is None
+    assert live["by_scenario"]["normal"]["b5_unsafe_rate"] == 0.0
+    replay_f11 = compare_episode(invalid_f11, net=None)
+    assert replay_f11["scores"]["B5"]["false_allow"] is False
+    assert replay_f11["scores"]["B5"]["correct_allow"] is False
+    assert replay_f11["decisions"]["gate_v0"]["decision"] == invalid_gate_outcome("gate_v0")["decision"]
+    assert replay_f11["decisions"]["gate_v0"]["reason"] == invalid_gate_outcome("gate_v0")["reason"]
+    assert replay_f11["scores"]["gate_v0"]["false_allow"] is False
+
+    # F12: DO_NOTHING permitted with complete healthy noop evidence.
+    invalid_f12 = _invalid_noop("F12", "F12", noop_evidence)
+    live_b5_f12 = run_b5_independent(raw_proposal(invalid_f12), calm, noop_evidence, net=None)
+    assert live_b5_f12["decision"] == "allow" and live_b5_f12["action"] == "DO_NOTHING", live_b5_f12
+    one = empty_stats(1, 1, "stub")
+    one.update(episodes_attempted=1, episodes_with_b5=1, episodes_with_gate=1)
+    record_episode(one, {"kind": "normal"}, {}, "F12", invalid_gate_outcome("gate_v0"), live_b5_f12, invalid_f12, valid=False)
+    live = finalize_stats(one)
+    assert live["b5_unsafe"] == 0, live["b5_unsafe"]
+    assert live["b5_unsafe_rate"] == 0.0, live["b5_unsafe_rate"]
+    assert live["gate_v0_unsafe"] == 0 and live["gate_v0_escalate"] == 1
+    assert live["episodes_scored"] == 0 and live["wrong_rate"] is None
+    assert live["by_scenario"]["normal"]["b5_unsafe_rate"] == 0.0
+    replay_f12 = compare_episode(invalid_f12, net=None)
+    assert replay_f12["scores"]["B5"]["false_allow"] is False
+    assert replay_f12["scores"]["B5"]["correct_allow"] is True
+    assert replay_f12["decisions"]["gate_v0"]["decision"] == invalid_gate_outcome("gate_v0")["decision"]
+    assert replay_f12["decisions"]["gate_v0"]["reason"] == invalid_gate_outcome("gate_v0")["reason"]
+    assert replay_f12["scores"]["gate_v0"]["false_allow"] is False
 
     infra = infra_error_record("F3", "N0", 7, RuntimeError("tc failed"))
     assert proposal_is_invalid(infra) and infra["status"] == "infra_error"
@@ -1944,7 +1971,10 @@ def _self_check():
         if fault_id == "F3":
             raise RuntimeError("tc failed")
         if fault_id == "F11":
-            return dict(_invalid_noop("F11"), request_fingerprint={"request_sha256": "req-a"})
+            return dict(
+                _invalid_noop("F11", "F11", noop_evidence),
+                request_fingerprint={"request_sha256": "req-a"},
+            )
         stamp = datetime.now(timezone.utc).isoformat()
         rec = {"episode_id": f"ok-{fault_id}", "fault_id": fault_id, "noise_id": noise_id,
                "network_snapshot": calm, "oam": {"results": []}, "started_at": stamp,
@@ -1960,7 +1990,8 @@ def _self_check():
         loop_summary = json.loads(run_out.read_text(encoding="utf-8"))
         assert loop_summary["episodes_attempted"] == 3 and loop_summary["episodes_scored"] == 1
         assert loop_summary["infra_errors"] == 1 and loop_summary["paired"] is True
-        assert loop_summary["b5_unsafe"] == 1, loop_summary["b5_unsafe"]
+        # F11 DO_NOTHING is not permitted: B5 escalates (not a false allow).
+        assert loop_summary["b5_unsafe"] == 0, loop_summary["b5_unsafe"]
         assert loop_summary["gate_v0_unsafe"] == 0
         assert loop_summary["request_sha256s"] == ["req-a"]
         saved = sorted(path.name for path in episodes_dir_for(run_out).glob("*.json"))

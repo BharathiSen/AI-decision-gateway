@@ -94,6 +94,7 @@ SAMPLES_PATH = ROOT / "results" / "calibration_samples.jsonl"
 SAMPLES_EPISODE_PATH = ROOT / "results" / "calibration_samples_episode.jsonl"
 FULL_BATTERY = list(TEST_IDS)
 MIN_CALIBRATION_RUNS = 200
+MIN_EVAL_RUNS = 50
 CALIBRATION_BATCH = 10
 SAMPLE_TIMEOUT_SECONDS = 90
 SPEED_FILL_CAP = 10
@@ -857,8 +858,8 @@ def acceptance_errors(report):
     if not (_count(runs) and runs >= MIN_CALIBRATION_RUNS):
         errors.append(f"calibration_runs {runs!r} < {MIN_CALIBRATION_RUNS}")
     eval_runs = report.get("eval_runs")
-    if not (_count(eval_runs) and eval_runs > 0):
-        errors.append(f"eval_runs {eval_runs!r} is not a positive count")
+    if not (_count(eval_runs) and eval_runs >= MIN_EVAL_RUNS):
+        errors.append(f"eval_runs {eval_runs!r} < {MIN_EVAL_RUNS}")
     target = _configured_false_alarm_target()
     if target is None:
         errors.append("configured false_alarm_rate_target missing or invalid")
@@ -907,12 +908,16 @@ def update_thresholds_yaml(reports, path=THRESHOLDS_PATH):
     if not isinstance(accepted, dict):
         accepted = {}
     doc["accepted_by_noise_level"] = accepted
+    from bench.outcomes import acceptance_binding_hash
+
     for noise, report in reports.items():
         acceptance = {key: report.get(key) for key in ACCEPTANCE_FIELDS}
         acceptance["noise_id"] = noise
+        thresholds = json.loads(json.dumps(report["proposed_thresholds"]))
         accepted[noise] = {
-            "thresholds": json.loads(json.dumps(report["proposed_thresholds"])),
+            "thresholds": thresholds,
             "acceptance": acceptance,
+            "acceptance_sha256": acceptance_binding_hash(noise, acceptance, thresholds),
         }
     doc.setdefault("calibration", {}).setdefault("last_run", {}).update({
         noise: {
@@ -1057,6 +1062,7 @@ def _check_research_thresholds():
             "calibration_runs as string": _accepted_fixture(calibration_runs="200"),
             "calibration_runs as bool": _accepted_fixture(calibration_runs=True),
             "eval_runs zero": _accepted_fixture(eval_runs=0),
+            "eval_runs below 50": _accepted_fixture(eval_runs=49),
             "partial override (T1 only)": _accepted_fixture(proposed_thresholds={"T1_e2e_ping": {"max_loss_percent": 9.0, "max_latency_ms": 99.0}}),
             "T10 dropped": _accepted_fixture(proposed_thresholds={k: v for k, v in _COMPLETE_TEST_SET.items() if k != "T10_speed"}),
             "T8 not boolean": _accepted_fixture(proposed_thresholds=dict(_COMPLETE_TEST_SET, T8_tcp_vs_ping={"tcp_must_succeed": "yes"})),
@@ -1117,6 +1123,16 @@ def _check_research_thresholds():
         del tampered["accepted_by_noise_level"]["N0"]["acceptance"][WRITE_DECISION_METRIC]
         _write(None, tampered)
         _refused("accepted entry without error-inclusive FAR")
+        # Hash binding: missing or mismatched acceptance_sha256 refuses grading.
+        assert written["accepted_by_noise_level"]["N0"].get("acceptance_sha256")
+        tampered = json.loads(json.dumps(written))
+        del tampered["accepted_by_noise_level"]["N0"]["acceptance_sha256"]
+        _write(None, tampered)
+        _refused("accepted entry without acceptance_sha256")
+        tampered = json.loads(json.dumps(written))
+        tampered["accepted_by_noise_level"]["N0"]["acceptance_sha256"] = "0" * 64
+        _write(None, tampered)
+        _refused("accepted entry with mismatched acceptance_sha256")
         # The writer refuses every invalid level and writes nothing.
         _write(None)
         before_cfg = yaml_path.read_text(encoding="utf-8")

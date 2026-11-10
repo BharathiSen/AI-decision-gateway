@@ -1107,6 +1107,32 @@ def _self_check():
     assert f12_arms["B5"]["correct_allow"] is True and f12_arms["B5"]["unsafe_action"] is False, f12_arms["B5"]
     b5_all = inv_report["slices"]["all"]["B5"]
     assert b5_all["false_allow"]["count"] == 0 and b5_all["false_allow"]["denominator"] == 2, b5_all["false_allow"]
+    # Wrong cause: true fault F11, claimed primary cause F12 (catalog permits
+    # DO_NOTHING), complete healthy no-op evidence. B5 ALLOWs on the wrong
+    # cause; the evaluator must count exactly one false ALLOW.
+    wrong_cause_f11 = dict(
+        invalid_f11,
+        episode_id="wrong-cause-f11",
+        agent_raw={
+            "parsed": {
+                "action": "DO_NOTHING",
+                "target": "HostA_to_HostB",
+                "causes": [{"cause_id": "F12"}],
+            }
+        },
+    )
+    wc_report, wc_rows = evaluate_records([invalid_f11, invalid_f12, wrong_cause_f11], fill_decisions=True)
+    assert wc_report["scored"] == 3, wc_report["errors"]
+    wc_b5 = wc_rows[2]["strategies"]["B5"]
+    assert wc_b5["decision"] == "allow" and wc_b5["evaluated_action"] == "DO_NOTHING", wc_b5
+    assert wc_b5["proposal_wrong"] is True and wc_b5["false_allow"] is True, wc_b5
+    assert wc_b5["unsafe_action"] is True and wc_b5["correct_allow"] is False, wc_b5
+    for name in ("verifix", "gate_v0", "gate_full"):
+        assert wc_rows[2]["strategies"][name]["false_allow"] is False, name
+    wc_all = wc_report["slices"]["all"]["B5"]
+    assert wc_all["false_allow"]["count"] == 1 and wc_all["false_allow"]["denominator"] == 3, wc_all["false_allow"]
+    assert wc_all["unsafe_action"]["count"] == 1, wc_all["unsafe_action"]
+    assert wc_all["correct_allow"]["count"] == 1, wc_all["correct_allow"]
 
     t2_obs = {
         "test_id": "T2_hop_ping",

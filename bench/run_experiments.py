@@ -283,7 +283,17 @@ def score_decisions(decisions, proposal, fault_id, invalid=False):
 
 
 def compare_episode(record, net=None, budget_seconds=None):
-    """Paired decisions on one episode, with recovery recorded separately."""
+    """Paired decisions on one episode, with recovery recorded separately.
+
+    When calibration is unaccepted, offline replay still runs as diagnostic
+    analysis only and is labeled accordingly — never as research grades.
+    """
+    from bench.outcomes import (
+        DIAGNOSTIC_UNACCEPTED_LABEL,
+        test_mode_active,
+        threshold_status,
+    )
+
     inputs = strategy_inputs(record)
     invalid = inputs["proposal"] is None
     gate_proposal = {} if invalid else inputs["proposal"]
@@ -308,7 +318,7 @@ def compare_episode(record, net=None, budget_seconds=None):
         noise_id=inputs["noise_id"],
     )
     views = {name: _decision_view(row) for name, row in decisions.items()}
-    return {
+    out = {
         "episode_id": (record or {}).get("episode_id"),
         "paired": True,
         "budget_seconds": cap,
@@ -317,7 +327,20 @@ def compare_episode(record, net=None, budget_seconds=None):
         "recovery": episode_recovery(record),
         "invalid_proposal": invalid,
         "scores": score_decisions(decisions, gate_proposal, (record or {}).get("fault_id", "H0"), invalid),
+        "research_grade": True,
     }
+    if not test_mode_active():
+        status = threshold_status(inputs["noise_id"] or "N0")
+        if status.get("status") != "accepted":
+            out["research_grade"] = False
+            out["analysis_mode"] = "diagnostic"
+            out["label"] = DIAGNOSTIC_UNACCEPTED_LABEL
+            out["threshold_status"] = status
+            for row in out["decisions"].values():
+                if isinstance(row, dict):
+                    row["label"] = DIAGNOSTIC_UNACCEPTED_LABEL
+                    row["research_grade"] = False
+    return out
 
 
 def replay_episode(record, net=None):
@@ -331,6 +354,8 @@ def replay_episode(record, net=None):
 
 
 def aggregate(episode_dir):
+    from bench.outcomes import DIAGNOSTIC_UNACCEPTED_LABEL, test_mode_active, threshold_status
+
     episode_dir = Path(episode_dir)
     files = sorted(episode_dir.glob("*.json"))
     files = [f for f in files if f.name != "_batch_state.json"]
@@ -341,7 +366,9 @@ def aggregate(episode_dir):
         "permitted_actions": list(PERMITTED_ACTIONS),
         "methods": {},
         "recovery": {"recorded": 0, "attempted": 0, "succeeded": 0},
+        "research_grade": True,
     }
+    diagnostic = False
 
     for path in files:
         try:
@@ -350,6 +377,10 @@ def aggregate(episode_dir):
             continue
         if not isinstance(record, dict):
             continue
+        if not test_mode_active():
+            noise = record.get("noise_id") or "N0"
+            if threshold_status(noise).get("status") != "accepted":
+                diagnostic = True
         methods = replay_episode(record, net=None)
         summary["count"] += 1
         rec = episode_recovery(record)
@@ -367,6 +398,10 @@ def aggregate(episode_dir):
 
     for _name, bucket in summary["methods"].items():
         bucket["false_allow_rate"] = bucket["false_allow"] / bucket["total"] if bucket["total"] else None
+    if diagnostic:
+        summary["research_grade"] = False
+        summary["analysis_mode"] = "diagnostic"
+        summary["label"] = DIAGNOSTIC_UNACCEPTED_LABEL
     return summary
 
 
@@ -404,8 +439,14 @@ def live_compare():
     from bench import inject as inj
     from bench import tests as oam
     from bench.mininet_util import mn_cleanup, run_in_node
+    from bench.outcomes import require_accepted_thresholds
     from network.topology import create_network
     from telemetry.collector import collect_current_state
+
+    refusal = require_accepted_thresholds(["N0"])
+    if refusal:
+        print(refusal, file=sys.stderr)
+        return 2
 
     mn_cleanup()
     state = create_network()
@@ -640,6 +681,45 @@ def _self_check():
     assert aggregate(tmp_f11)["methods"]["B5"]["false_allow"] == 0
     (tmp_f11 / "one.json").unlink()
     tmp_f11.rmdir()
+
+    # Wrong cause: true fault F11, claimed primary cause F12 (whose catalog fix
+    # permits DO_NOTHING), complete healthy no-op evidence. B5 trusts the
+    # claimed cause and ALLOWs; the evaluator must count a false ALLOW.
+    wrong_cause_f11 = dict(
+        invalid_f11,
+        episode_id="wrong-cause-F11",
+        agent_raw={"parsed": {
+            "action": "DO_NOTHING",
+            "target": "HostA_to_HostB",
+            "proposed_path": ["r1", "r2", "r4"],
+            "causes": [{"cause_id": "F12"}],
+        }},
+    )
+    assert "DO_NOTHING" not in _correct("F11"), _correct("F11")
+    replay_wc = compare_episode(wrong_cause_f11, net=None)
+    assert replay_wc["invalid_proposal"] is True
+    assert replay_wc["decisions"]["B5"]["decision"] == "allow", replay_wc["decisions"]["B5"]
+    b5_wc = replay_wc["scores"]["B5"]
+    assert b5_wc["evaluated_action"] == "DO_NOTHING", b5_wc
+    assert b5_wc["proposal_wrong"] is True and b5_wc["false_allow"] is True, b5_wc
+    assert b5_wc["correct_allow"] is False, b5_wc
+    for name in GATE_ARMS:
+        row = replay_wc["decisions"][name]
+        assert row["decision"] == "escalate" and row["reason"] == NO_VALID_PROPOSAL, (name, row)
+        assert replay_wc["scores"][name]["false_allow"] is False, name
+    live_wc = run_b5_independent(raw_proposal(wrong_cause_f11), calm, noop_evidence, net=None)
+    assert live_wc["decision"] == "allow" and live_wc["action"] == "DO_NOTHING", live_wc
+    assert score_arm(live_wc["decision"], live_wc["action"], "F11") == b5_wc
+    # Aggregate counts it: one wrong-cause false ALLOW, one correct F11 escalation.
+    tmp_wc = Path(tempfile.mkdtemp())
+    (tmp_wc / "wrong.json").write_text(json.dumps(wrong_cause_f11), encoding="utf-8")
+    (tmp_wc / "f11.json").write_text(json.dumps(invalid_f11), encoding="utf-8")
+    rolled_wc = aggregate(tmp_wc)["methods"]["B5"]
+    assert rolled_wc["false_allow"] == 1 and rolled_wc["total"] == 2, rolled_wc
+    assert rolled_wc["false_allow_rate"] == 0.5, rolled_wc
+    for leftover in ("wrong.json", "f11.json"):
+        (tmp_wc / leftover).unlink()
+    tmp_wc.rmdir()
 
     # F12: DO_NOTHING is permitted with complete healthy noop evidence.
     invalid_f12 = {
