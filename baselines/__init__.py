@@ -242,6 +242,16 @@ def _self_check():
     assert live["rolled_back"] is True
     assert net.path == "primary", net.path
     assert live["before_path"] == "primary"
+    # C4: B0 gets the same post-action recovery battery opportunity; command
+    # success is not traffic recovery.
+    assert live.get("post_oam") is not None, live
+    assert live.get("traffic_recovered") is not True, live
+    assert live.get("recovery_status") in (
+        "failed",
+        "partial",
+        "measurement_unavailable",
+        "recovered",
+    ), live
 
     idle = {"action": "DO_NOTHING", "target": "HostA_to_HostB", "reason": "ok"}
     oam_mod.run_in_node = fake_run
@@ -252,6 +262,8 @@ def _self_check():
     assert skipped["execution"].get("executed") is False
     assert skipped["harm"] is False
     assert skipped["rolled_back"] is False
+    assert skipped.get("post_oam") is not None, "DO_NOTHING still gets post-action measurement"
+    assert "recovery_status" in skipped
 
 
 if __name__ == "__main__":

@@ -257,13 +257,20 @@ def _decision_view(row):
 
 
 def episode_recovery(record):
-    """Actual execution outcome from the episode, not from a strategy."""
+    """Actual execution/recovery outcome from the episode, not from a strategy."""
     record = record or {}
     return {
         "execution_attempted": record.get("execution_attempted"),
         "remediation_succeeded": record.get("remediation_succeeded"),
         "state_verified": record.get("state_verified"),
         "execution_error": record.get("execution_error"),
+        "traffic_recovered": record.get("traffic_recovered"),
+        "recovery_status": record.get("recovery_status"),
+        "route_state_changed": record.get("route_state_changed"),
+        "recovery_time_seconds": record.get("recovery_time_seconds"),
+        "recovery_measurement_duration_seconds": record.get(
+            "recovery_measurement_duration_seconds"
+        ),
     }
 
 

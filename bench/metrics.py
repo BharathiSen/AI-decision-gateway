@@ -399,6 +399,37 @@ def decision_seconds(record):
 
 
 def recovery_seconds(record):
+    """Time to confirmed traffic recovery from measurement timestamps.
+
+    Explicit recovery_time_seconds wins. Confirmed recovery uses remediation
+    start → post-OAM completion when present. Failed / unavailable / not
+    attempted recovery never falls back to command success. Legacy records
+    without C4 fields keep the prior remediation_succeeded → episode span.
+    """
+    record = record or {}
+    explicit = record.get("recovery_time_seconds")
+    if isinstance(explicit, (int, float)):
+        return float(explicit)
+    status = record.get("recovery_status")
+    if status in ("failed", "partial", "measurement_unavailable", "not_attempted"):
+        return None
+    if record.get("traffic_recovered") is False:
+        return None
+    if status == "recovered" or record.get("traffic_recovered") is True:
+        post = record.get("post_oam") if isinstance(record.get("post_oam"), dict) else {}
+        started = record.get("remediation_started_at") or post.get("started_at")
+        ended = post.get("completed_at") or record.get("completed_at")
+        try:
+            start_dt = datetime.fromisoformat(str(started).replace("Z", "+00:00"))
+            end_dt = datetime.fromisoformat(str(ended).replace("Z", "+00:00"))
+            return (end_dt - start_dt).total_seconds()
+        except (TypeError, ValueError):
+            duration = post.get("duration_seconds")
+            if isinstance(duration, (int, float)):
+                return float(duration)
+            return episode_seconds(record)
+    if status is not None or "traffic_recovered" in record:
+        return None
     if record.get("remediation_succeeded") is not True:
         return None
     return episode_seconds(record)
@@ -557,6 +588,12 @@ def score_episode(record, decisions=None):
             "execution_attempted": record.get("execution_attempted"),
             "remediation_succeeded": record.get("remediation_succeeded"),
             "state_verified": record.get("state_verified"),
+            "traffic_recovered": record.get("traffic_recovered"),
+            "recovery_status": record.get("recovery_status"),
+            "route_state_changed": record.get("route_state_changed"),
+            "recovery_measurement_duration_seconds": record.get(
+                "recovery_measurement_duration_seconds"
+            ),
         },
     }
 
