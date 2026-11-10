@@ -5,9 +5,8 @@ matrix, not from the agent's predicted_tests, then calls gate.decide.
 A live LLM client is not used.
 """
 
-from gate.catalog import plausible_alternatives
-from gate.decide import _selected_test_ids, _symptoms_from_snapshot, decide as gate_decide
-from gate.selector import _load_matrix, held_out_ids
+from gate.decide import _candidate_set, _symptoms_from_snapshot, decide as gate_decide
+from gate.selector import covering_separating_tests, _load_matrix, held_out_ids
 
 
 def _catalog_predictions(cause_id, test_ids):
@@ -40,8 +39,10 @@ def decide(proposal, snapshot, test_results, net=None, run_missing_tests=None):
 
     primary = causes[0]["cause_id"]
     symptoms = _symptoms_from_snapshot(snapshot)
-    alts = plausible_alternatives(symptoms, exclude=[primary])
-    selected = _selected_test_ids(primary, alts)
+    hidden = held_out_ids()
+    candidates = _candidate_set(primary, [c["cause_id"] for c in causes], symptoms, hidden)
+    # Same model-independent covering set the gate freezes before predictions.
+    selected = covering_separating_tests(candidates, matrix=_load_matrix())
     filled = dict(proposal)
     filled["causes"] = [{
         "cause_id": primary,

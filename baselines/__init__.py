@@ -157,10 +157,18 @@ def _self_check():
     b5_bad = run_method("B5", {"action": "NOT_AN_ACTION"}, healthy, [])
     assert b5_bad["decision"] == "block"
     idle = {"action": "DO_NOTHING", "target": "HostA_to_HostB", "reason": "ok"}
-    b5_idle = run_method("B5", idle, healthy, [{"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0, "latency_ms": 10.0}])
+    noop_ok = [
+        {"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0, "latency_ms": 10.0, "connectivity": True, "error": None},
+        {"test_id": "T4_mtu", "df_ping_ok": True, "error": None},
+        {"test_id": "T8_tcp_vs_ping", "ping_ok": True, "tcp_ok": True, "error": None},
+        {"test_id": "T10_speed", "mbit_per_sec": 50.0, "error": None},
+    ]
+    b5_idle = run_method("B5", idle, healthy, noop_ok)
     assert b5_idle["decision"] == "allow" and b5_idle["reason"] == "healthy no-op", b5_idle
     b5_idle_loss = run_method("B5", idle, healthy, [{"test_id": "T1_e2e_ping", "packet_loss_percent": 30.0, "latency_ms": 10.0}])
     assert b5_idle_loss["decision"] != "allow", b5_idle_loss
+    b5_idle_incomplete = run_method("B5", idle, healthy, [{"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0, "latency_ms": 10.0}])
+    assert b5_idle_incomplete["decision"] != "allow", b5_idle_incomplete
 
     # Ablations exist and share decide()'s return shape.
     empty_oam = []

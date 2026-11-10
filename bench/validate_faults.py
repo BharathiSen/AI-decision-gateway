@@ -22,7 +22,8 @@ Run on the Mininet VM as root:
     sudo python3 bench/validate_faults.py
     sudo python3 bench/validate_faults.py --fault F6 --noise N2 --iterations 3
 
-Writes results/fault_validation.json.
+Writes the report to --out (a new file). The committed
+results/fault_validation.json is historical evidence and is never overwritten.
 """
 
 import argparse
@@ -251,7 +252,6 @@ def main():
     for noise_id, lines in report["noise_cleanup_residual"].items():
         if lines:
             print(f"note: clear_noise({noise_id}) left {len(lines)} difference(s), e.g. {lines[0]}")
-    print(f"\nwrote {OUT.relative_to(ROOT)}")
     if not report["pass"]:
         print("Fault validation: FAIL")
         sys.exit(1)

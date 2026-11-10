@@ -214,10 +214,21 @@ def decide(
     fingerprint = evidence_fingerprint(network_snapshot)
 
     if action == Action.DO_NOTHING:
-        if checks.noop_justified(network_snapshot, measured_rows, thresholds):
+        ai_causes = [c.get("cause_id") for c in proposal.get("causes", []) if c.get("cause_id")]
+        cause = ai_causes[0] if ai_causes else None
+        hidden = frozen.get("held_out") or set()
+        cause_fixes = set(((frozen.get("fixes") or {}).get(cause) or {}).get("correct") or [])
+        permitted = bool(cause) and cause not in hidden and "DO_NOTHING" in cause_fixes
+        if permitted and checks.noop_justified(network_snapshot, measured_rows, thresholds):
             return audit("allow", proposal, test_results, {}, "healthy no-op", supplied=supplied)
         reason = "no-op not justified"
-        if any(tid in checks.NOOP_EVIDENCE_TESTS for tid in errored_tests):
+        if not cause:
+            reason = "no-op not justified: missing cause"
+        elif cause in hidden or cause not in (frozen.get("fixes") or {}):
+            reason = "no-op not justified: outside catalog"
+        elif "DO_NOTHING" not in cause_fixes:
+            reason = "no-op not justified: DO_NOTHING not permitted for cause"
+        elif any(tid in checks.NOOP_EVIDENCE_TESTS for tid in errored_tests):
             reason = "no-op not justified: test unavailable (" + ", ".join(errored_tests) + ")"
         return audit("escalate", proposal, test_results, {"errored_tests": errored_tests}, reason, supplied=supplied)
     if action not in RISKY_ACTIONS:
@@ -247,7 +258,10 @@ def decide(
         for alt in candidates
         if alt != primary and selector.needs_different_fixes(primary, alt, fixes=frozen["fixes"])
     ]
-    selected_ids = _selected_test_ids(primary, relevant)
+    # Freeze covering separators before any prediction is read or graded.
+    selected_ids = list(
+        selector.covering_separating_tests(candidates, fixes=frozen["fixes"], matrix=matrix_rows)
+    )
     rules = []
     log = {
         "candidates": candidates,
@@ -321,12 +335,13 @@ def decide(
 
     if mode == "full":
         for alt in relevant:
-            tid = stages["test_selection"](primary, alt, already_ran=set())
+            separators = set(selector.separating_tests(primary, alt, matrix=matrix_rows))
+            tid = next((t for t in selected_ids if t in separators), None)
+            if tid is None:
+                tid = selector.pick_cheapest_separating_test(primary, alt, matrix=matrix_rows)
             if tid is None:
                 inseparable.append(alt)
                 continue
-            if tid not in selected_ids:
-                selected_ids.append(tid)
             tr = next((row for row in tests_run if row.get("test_id") == tid), None)
             if tr is None and tid in errored_tests and (not run_missing_tests or net is None):
                 unavailable.append({"alternative": alt, "test_id": tid})
@@ -407,13 +422,22 @@ def decide(
         scope = "all"
     discriminating = [tid for tid in selected_ids if isinstance(tid, str)]
     primary_cause = next((c for c in proposal.get("causes") or [] if c.get("cause_id") == primary), {})
-    predicted_ids = {
-        p.get("test_id") for p in (primary_cause.get("predicted_tests") or []) if isinstance(p, dict) and p.get("expected")
-    }
+    predicted_ids = set()
+    malformed_predictions = []
+    for pred in primary_cause.get("predicted_tests") or []:
+        if not isinstance(pred, dict):
+            malformed_predictions.append(pred)
+            continue
+        tid = pred.get("test_id")
+        expected = pred.get("expected")
+        if tid in discriminating and (not isinstance(tid, str) or expected is None or expected == ""):
+            malformed_predictions.append(tid or pred)
+            continue
+        if isinstance(tid, str) and expected is not None and expected != "":
+            predicted_ids.add(tid)
     if scope == "discriminating":
-        # Only predictions on the tests that separate the proposed cause from
-        # alternatives needing a different fix decide consistency. Other
-        # predictions are recorded but cannot block or allow.
+        # Only predictions on the frozen covering separators decide consistency.
+        # Other predictions are recorded but cannot block or allow.
         scoped = dict(proposal)
         scoped["causes"] = [
             dict(c, predicted_tests=[p for p in (c.get("predicted_tests") or []) if p.get("test_id") in discriminating])
@@ -431,13 +455,16 @@ def decide(
     consistency["scope"] = scope
     consistency["discriminating_tests"] = list(discriminating)
     consistency["missing_predictions"] = missing_predictions
+    if malformed_predictions:
+        consistency["malformed_predictions"] = True
     log["consistency_scope"] = scope
     remaining = [alt for alt in relevant if alt not in set(log["eliminated"])]
     discrimination = stages["discrimination_checking"](ruled_out)
     discrimination["relevant"] = relevant
     discrimination["remaining"] = remaining
     if not relevant:
-        discrimination["passed"] = True
+        # Empty alternative set never counts as successful verification.
+        discrimination["passed"] = False
         discrimination["vacuous"] = True
     else:
         discrimination["passed"] = not remaining
@@ -455,11 +482,15 @@ def decide(
         return audit("block", proposal, tests_run, check_bundle, "consistency failed", supplied=supplied, selected_ids=selected_ids, log=log)
 
     if scope == "discriminating":
-        # Fail-safe: allowing needs a checked prediction on every test that
-        # separates the proposed cause from an alternative with a different fix.
+        # Fail-safe: allowing needs a checked prediction on every frozen
+        # covering separator. Empty or vacuous discrimination never allows.
         if not discriminating:
             rules.append("insufficient evidence")
-            reason = "insufficient evidence: no discriminating test for the proposed cause"
+            reason = "insufficient evidence: no discriminating test"
+            return audit("escalate", proposal, tests_run, check_bundle, reason, supplied=supplied, selected_ids=selected_ids, log=log)
+        if malformed_predictions:
+            rules.append("insufficient evidence")
+            reason = "insufficient evidence: malformed prediction for discriminating test(s)"
             return audit("escalate", proposal, tests_run, check_bundle, reason, supplied=supplied, selected_ids=selected_ids, log=log)
         if missing_predictions:
             rules.append("insufficient evidence")
@@ -488,6 +519,18 @@ def decide(
         return audit("block", proposal, tests_run, check_bundle, "consistency failed", supplied=supplied, selected_ids=selected_ids, log=log)
 
     if mode == "full":
+        if discrimination.get("vacuous"):
+            rules.append("insufficient evidence")
+            return audit(
+                "escalate",
+                proposal,
+                tests_run,
+                check_bundle,
+                "insufficient evidence: no discriminating test",
+                supplied=supplied,
+                selected_ids=selected_ids,
+                log=log,
+            )
         if remaining:
             if inseparable and not ruled_out:
                 rules.append("inseparable")
@@ -511,18 +554,6 @@ def decide(
     check_bundle["discrimination"] = {"passed": True, "skipped": "pilot_v0"}
     rules.append("pilot_v0")
     return audit("allow", proposal, tests_run, check_bundle, "all checks passed", supplied=supplied, selected_ids=selected_ids, log=log)
-
-
-def _selected_test_ids(primary, alternatives):
-    """Cheapest separator for each alternative. Does not run those tests."""
-    chosen = []
-    for alt in alternatives:
-        if not selector.needs_different_fixes(primary, alt):
-            continue
-        tid = selector.pick_cheapest_separating_test(primary, alt)
-        if tid and tid not in chosen:
-            chosen.append(tid)
-    return chosen
 
 
 def _audit(decision, proposal, tests_run, checks_out, reason, supplied=None, selected_ids=None, log=None):

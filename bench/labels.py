@@ -142,7 +142,9 @@ def _self_check():
     assert prov["noise_id"] == "N0"
     fixes = yaml.safe_load((ROOT / "config" / "correct_fixes.yaml").read_text(encoding="utf-8"))
     diff = disagreements(fixes)
-    assert "C1" in diff and "H0" not in diff
+    # C1/C2 catalog entries were aligned to measured ESCALATE in Sprint 1.
+    assert "C1" not in diff and "C2" not in diff and "H0" not in diff
+    assert "F5" in diff, "catalog still disagrees with measured labels on some scenarios"
 
     with tempfile.TemporaryDirectory() as tmp:
         bad = Path(tmp) / "gt.json"

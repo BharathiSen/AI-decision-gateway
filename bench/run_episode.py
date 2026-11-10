@@ -982,7 +982,15 @@ def _self_check():
 
     def quiet_tests(net):
         events.append("tests")
-        return {"results": [{"test_id": "T7_route_check"}]}
+        return {
+            "results": [
+                {"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0, "latency_ms": 10.0, "connectivity": True, "error": None},
+                {"test_id": "T4_mtu", "df_ping_ok": True, "error": None},
+                {"test_id": "T8_tcp_vs_ping", "ping_ok": True, "tcp_ok": True, "error": None},
+                {"test_id": "T10_speed", "mbit_per_sec": 50.0, "error": None},
+                {"test_id": "T7_route_check", "active": "primary", "error": None},
+            ]
+        }
 
     def quiet_read(net, links=None):
         return full
@@ -1004,6 +1012,7 @@ def _self_check():
             "target": "HostA_to_HostB",
             "reason": "healthy",
             "proposed_path": ["r1", "r2", "r4"],
+            "causes": [{"cause_id": "H0", "predicted_tests": []}],
         }
 
     def local_gate(record):
@@ -1195,11 +1204,17 @@ def _self_check():
     assert cfg["frozen"] is True and cfg["learned_grader"] is False and cfg["budget_seconds"] == 8.0
     assert cfg.get("require_signatures") is False
     t1_ok = [{"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0, "latency_ms": 10.0}]
+    noop_ok = [
+        {"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0, "latency_ms": 10.0, "connectivity": True, "error": None},
+        {"test_id": "T4_mtu", "df_ping_ok": True, "error": None},
+        {"test_id": "T8_tcp_vs_ping", "ping_ok": True, "tcp_ok": True, "error": None},
+        {"test_id": "T10_speed", "mbit_per_sec": 50.0, "error": None},
+    ]
     vacuous = gate_decide(None, predicted_ok, healthy, t1_ok, mode="full", run_missing_tests=False)
-    # consistency_scope=discriminating: no discriminating test is missing
-    # evidence, so a risky action escalates (protocol v1 §5, rule 2).
+    # consistency_scope=discriminating: no covering separator exists, so a
+    # risky action escalates (protocol v1 §5 fail-safe).
     assert vacuous["decision"] == "escalate", vacuous
-    assert vacuous["reason"] == "insufficient evidence: no discriminating test for the proposed cause", vacuous
+    assert vacuous["reason"] == "insufficient evidence: no discriminating test", vacuous
     assert vacuous.get("snapshot_fingerprint")
     assert vacuous["log"]["learned_grader"] is False
     assert vacuous["log"]["frozen"] is True
@@ -1249,20 +1264,23 @@ def _self_check():
     assert tight["decision"] != "allow"
 
     idle = _cause_proposal("DO_NOTHING", "H0")
-    idle_ok = gate_decide(None, idle, healthy, t1_ok, mode="full", run_missing_tests=False)
+    idle_ok = gate_decide(None, idle, healthy, noop_ok, mode="full", run_missing_tests=False)
     assert idle_ok["decision"] == "allow" and idle_ok["reason"] == "healthy no-op", idle_ok
     t1_loss = [{"test_id": "T1_e2e_ping", "packet_loss_percent": 30.0, "latency_ms": 40.0}]
     idle_loss = gate_decide(None, idle, lossy_snap, t1_loss, mode="full", run_missing_tests=False)
     assert idle_loss["decision"] != "allow", idle_loss
-    t8_acl = [{"test_id": "T8_tcp_vs_ping", "ping_ok": True, "tcp_ok": False}]
+    t8_acl = list(noop_ok)
+    t8_acl[2] = {"test_id": "T8_tcp_vs_ping", "ping_ok": True, "tcp_ok": False, "error": None}
     idle_acl = gate_decide(None, idle, healthy, t8_acl, mode="full", run_missing_tests=False)
     assert idle_acl["decision"] != "allow", idle_acl
     idle_snap_loss = gate_decide(None, idle, lossy_snap, [], mode="full", run_missing_tests=False)
     assert idle_snap_loss["decision"] != "allow", idle_snap_loss
     h0_snap = _snapshot()
     h0_snap["metrics"] = {"active_path": "primary", "packet_loss_percent": 0.0, "connectivity": True}
+    # Incomplete evidence: snapshot alone must never authorize DO_NOTHING.
     idle_empty = gate_decide(None, idle, h0_snap, [], mode="full", run_missing_tests=False)
-    assert idle_empty["decision"] == "allow" and idle_empty["reason"] == "healthy no-op", idle_empty
+    assert idle_empty["decision"] == "escalate", idle_empty
+    assert idle_empty["reason"].startswith("no-op not justified"), idle_empty
 
     oam._check_costs()
     priced = {
@@ -1300,10 +1318,10 @@ def _self_check():
     assert connected["agent_cost"]["prompt_tokens"] is None
     assert connected["agent_cost"]["latency_seconds"] >= 0
     assert connected["gate_cost"]["latency_seconds"] >= 0
-    assert connected["oam_cost"]["test_count"] == 1
+    assert connected["oam_cost"]["test_count"] == 5
     assert connected["oam_cost"]["total_additional_bytes"] is None
     compared = connected["gate_decision"]["cost"]
-    assert compared["full_battery"]["test_count"] == 1
+    assert compared["full_battery"]["test_count"] == 5
     assert compared["selected_tests"]["test_count"] == 0
     assert compared["selected_tests"]["total_duration_seconds"] == 0.0
     assert compared["tests_executed"]["total_duration_seconds"] is None
@@ -1761,10 +1779,10 @@ def _self_check():
             {"dst_ip": "10.0.4.2", "packet_loss_percent": 0.0},
         ],
     }
-    idle_f12 = gate_decide(None, idle, f12_snap, t1_ok + [t2_backup_down], mode="full", run_missing_tests=False)
+    idle_f12 = gate_decide(None, idle, f12_snap, noop_ok + [t2_backup_down], mode="full", run_missing_tests=False)
     assert idle_f12["decision"] == "allow" and idle_f12["reason"] == "healthy no-op", idle_f12
     f12_reroute = gate_decide(
-        None, _cause_proposal("REROUTE", "F12"), f12_snap, t1_ok + [t2_backup_down], mode="full", run_missing_tests=False
+        None, _cause_proposal("REROUTE", "F12"), f12_snap, noop_ok + [t2_backup_down], mode="full", run_missing_tests=False
     )
     assert f12_reroute["decision"] == "block" and f12_reroute["reason"] == "safety failed", f12_reroute
 

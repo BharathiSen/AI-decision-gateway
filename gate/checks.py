@@ -183,13 +183,13 @@ def path_links_up(snapshot, choice):
     return not down, down
 
 
-# Traffic tests that can justify a no-op. T2 backup-down and T10 speed-floor
-# must not veto DO_NOTHING when end-to-end ICMP/TCP/MTU still work (F12, H0).
-NOOP_EVIDENCE_TESTS = ("T1_e2e_ping", "T4_mtu", "T8_tcp_vs_ping")
+# Traffic tests that must all be present and healthy to justify a no-op.
+# Incomplete batteries and degraded T10 (performance) refuse DO_NOTHING.
+NOOP_EVIDENCE_TESTS = ("T1_e2e_ping", "T4_mtu", "T8_tcp_vs_ping", "T10_speed")
 
 
 def noop_justified(snapshot, test_results, thresholds=None):
-    """True when leaving the network unchanged is supported by evidence."""
+    """True when leaving the network unchanged is supported by complete evidence."""
     from bench.outcomes import grade_result, is_degraded, load_thresholds
 
     thresholds = thresholds or load_thresholds("N0")
@@ -199,23 +199,22 @@ def noop_justified(snapshot, test_results, thresholds=None):
     loss_known = isinstance(loss, (int, float)) and not isinstance(loss, bool)
     # Contradiction needs an explicit broken reading; a missing number is not one.
     snapshot_broken = metrics.get("connectivity") is False or (loss_known and loss > max_loss)
-    snapshot_healthy = not snapshot_broken and loss_known
-    seen = False
+    by_id = {}
     for row in test_results or []:
-        tid = row.get("test_id")
-        if tid not in NOOP_EVIDENCE_TESTS:
+        if not isinstance(row, dict):
             continue
-        if row.get("error"):
-            # The test did not measure anything: missing evidence, not health.
+        tid = row.get("test_id")
+        if tid in NOOP_EVIDENCE_TESTS:
+            by_id[tid] = row
+    # Completeness: every required test must be present and measured.
+    for tid in NOOP_EVIDENCE_TESTS:
+        row = by_id.get(tid)
+        if row is None or row.get("error"):
             return False
-        seen = True
         if is_degraded(tid, grade_result(row, thresholds), thresholds):
             return False
-    if seen:
-        # Healthy OAM next to a broken snapshot is contradictory evidence.
-        return not snapshot_broken
-    # No measured no-op test: the snapshot alone must show health.
-    return snapshot_healthy
+    # Healthy OAM next to a broken snapshot is contradictory evidence.
+    return not snapshot_broken
 
 
 def check_safety(proposal, network_snapshot):

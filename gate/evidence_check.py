@@ -38,6 +38,8 @@ def _snapshot(loss=0.0, connectivity=True):
 T1_OK = {"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0, "latency_ms": 40.0, "connectivity": True, "error": None}
 T4_OK = {"test_id": "T4_mtu", "df_ping_ok": True, "error": None}
 T8_OK = {"test_id": "T8_tcp_vs_ping", "ping_ok": True, "tcp_ok": True, "error": None}
+T10_OK = {"test_id": "T10_speed", "mbit_per_sec": 50.0, "error": None}
+NOOP_HEALTHY = [T1_OK, T4_OK, T8_OK, T10_OK]
 
 
 def _errored(row, text="ping command_error"):
@@ -47,27 +49,65 @@ def _errored(row, text="ping command_error"):
         out.update(packet_loss_percent=100.0, connectivity=False, latency_ms=None)
     if out["test_id"] == "T4_mtu":
         out["df_ping_ok"] = False
+    if out["test_id"] == "T10_speed":
+        out["mbit_per_sec"] = None
     return out
+
+
+def _noop_proposal(cause_id="H0"):
+    return {
+        "action": "DO_NOTHING",
+        "target": "HostA_to_HostB",
+        "reason": "healthy",
+        "proposed_path": [],
+        "causes": [{"cause_id": cause_id, "predicted_tests": []}],
+    }
 
 
 def main():
     from agent.test_validate import good_proposal
     from baselines.b5_adaptive import decide_b5
     from bench.tests import DEFAULT_ORDER
-    from gate.checks import noop_justified
-    from gate.decide import decide
+    from gate.checks import NOOP_EVIDENCE_TESTS, noop_justified
+    from gate.decide import _candidate_set, _symptoms_from_snapshot, decide
+    from gate.inputs import load_frozen_context
+    from gate.selector import covering_separating_tests
 
-    noop = {"action": "DO_NOTHING", "target": "HostA_to_HostB", "reason": "healthy", "proposed_path": []}
-    healthy = [T1_OK, T4_OK, T8_OK]
+    noop = _noop_proposal("H0")
+    healthy = list(NOOP_HEALTHY)
+    assert NOOP_EVIDENCE_TESTS == ("T1_e2e_ping", "T4_mtu", "T8_tcp_vs_ping", "T10_speed")
 
-    # Control: positive evidence justifies a no-op.
+    # Control: complete positive evidence + permitted cause justifies a no-op.
     assert noop_justified(_snapshot(), healthy)
     gate_ok = decide(None, noop, _snapshot(), healthy, run_missing_tests=False)
     assert gate_ok["decision"] == "allow", gate_ok
     assert decide_b5(None, noop, _snapshot(), healthy, run_tests=False)["decision"] == "allow"
 
+    # Incomplete battery (missing T10) never justifies a no-op.
+    incomplete = [T1_OK, T4_OK, T8_OK]
+    assert not noop_justified(_snapshot(), incomplete)
+    assert decide(None, noop, _snapshot(), incomplete, run_missing_tests=False)["decision"] == "escalate"
+    assert decide(None, noop, _snapshot(), [], run_missing_tests=False)["decision"] == "escalate"
+
+    # Degraded T10 refuses DO_NOTHING.
+    slow = [T1_OK, T4_OK, T8_OK, {"test_id": "T10_speed", "mbit_per_sec": 0.1, "error": None}]
+    assert not noop_justified(_snapshot(), slow)
+    assert decide(None, noop, _snapshot(), slow, run_missing_tests=False)["decision"] == "escalate"
+
+    # Missing cause or cause that forbids DO_NOTHING escalates even with healthy OAM.
+    bare = {"action": "DO_NOTHING", "target": "HostA_to_HostB", "reason": "healthy", "proposed_path": []}
+    bare_out = decide(None, bare, _snapshot(), healthy, run_missing_tests=False)
+    assert bare_out["decision"] == "escalate" and "missing cause" in bare_out["reason"], bare_out
+    bad_cause = decide(None, _noop_proposal("F3"), _snapshot(), healthy, run_missing_tests=False)
+    assert bad_cause["decision"] == "escalate" and "not permitted" in bad_cause["reason"], bad_cause
+
     # Missing evidence: an errored no-op test refuses the no-op.
-    for broken in (_errored(T1_OK), _errored(T4_OK, "ping dns"), _errored(T8_OK, "RuntimeError: nc missing")):
+    for broken in (
+        _errored(T1_OK),
+        _errored(T4_OK, "ping dns"),
+        _errored(T8_OK, "RuntimeError: nc missing"),
+        _errored(T10_OK, "iperf timeout"),
+    ):
         rows = [broken if row["test_id"] == broken["test_id"] else row for row in healthy]
         assert not noop_justified(_snapshot(), rows), broken
         gate_out = decide(None, noop, _snapshot(), rows, run_missing_tests=False)
@@ -79,7 +119,7 @@ def main():
         assert not noop_justified(snap, healthy)
         assert decide(None, noop, snap, healthy, run_missing_tests=False)["decision"] == "escalate"
         assert decide_b5(None, noop, snap, healthy, run_tests=False)["decision"] == "escalate"
-    # Snapshot without a loss number is not evidence of health.
+    # Snapshot without a loss number is not evidence of health by itself.
     blank = _snapshot()
     blank["metrics"].pop("packet_loss_percent")
     assert not noop_justified(blank, [])
@@ -102,6 +142,7 @@ def main():
     assert out["checks"]["consistency"]["scope"] == "discriminating"
     disc = out["checks"]["consistency"]["discriminating_tests"]
     assert disc, "F3 on a lossy snapshot must have a discriminating test"
+    assert out["checks"]["discrimination"].get("vacuous") is not True
     tid = disc[0]
     from bench.outcomes import grade_result
     from bench.tests import HOPS, HOPS_BACKUP
@@ -140,6 +181,13 @@ def main():
     assert "no prediction for discriminating test" in side_out["reason"], side_out
     # (2) No prediction for the discriminating test: missing evidence, escalate.
     assert tid in side_out["checks"]["consistency"]["missing_predictions"]
+    # (2b) Malformed selected prediction (missing expected): never authorize.
+    # Proposal validation blocks schema-invalid predictions before consistency.
+    malformed = with_predictions([{"test_id": tid}])
+    malformed_out = decide(None, malformed, lossy, [observed], run_missing_tests=False)
+    assert malformed_out["decision"] in {"block", "escalate"}, malformed_out
+    assert malformed_out["decision"] != "allow"
+    assert "missing expected" in malformed_out["reason"] or "malformed" in malformed_out["reason"] or "no prediction" in malformed_out["reason"], malformed_out
     # (3) A contradicted prediction on the discriminating test: negative evidence, block.
     wrong = with_predictions([{"test_id": tid, "expected": alt_token}])
     wrong_out = decide(None, wrong, lossy, [observed], run_missing_tests=False)
@@ -177,8 +225,9 @@ def main():
     # (6) No discriminating test at all (no relevant alternative): fail-safe escalate.
     healthy_snap = _snapshot()
     vacuous = decide(None, copy.deepcopy(proposal), healthy_snap, [T1_OK], run_missing_tests=False)
-    if not vacuous.get("log", {}).get("relevant_alternatives"):
-        assert vacuous["decision"] == "escalate" and "no discriminating test" in vacuous["reason"], vacuous
+    assert vacuous["decision"] == "escalate" and "no discriminating test" in vacuous["reason"], vacuous
+    assert vacuous["checks"]["discrimination"].get("vacuous") is True
+    assert vacuous["checks"]["discrimination"].get("passed") is False
     # (6b) ALLOW stays reachable: a correct discriminating prediction plus
     # evidence that eliminates the alternative allows; contradicting evidence blocks.
     if tid == "T2_hop_ping":
@@ -194,7 +243,18 @@ def main():
         refuted = decide(None, copy.deepcopy(f3_pred), lossy, [_t2("r4", backup_hop="r4"), T1_OK], run_missing_tests=False)
         assert refuted["decision"] == "block" and refuted["reason"] == "consistency failed", refuted
 
-    # (7) The gate config must name a scope; a missing key fails closed.
+    # (7) Covering selection is independent of which candidate is primary.
+    ok, _errs, frozen = load_frozen_context("N0")
+    assert ok
+    symptoms = _symptoms_from_snapshot(lossy)
+    cands_a = _candidate_set("F3", ["F3", "F11"], symptoms, frozen["held_out"] or set())
+    cands_b = _candidate_set("F11", ["F11", "F3"], symptoms, frozen["held_out"] or set())
+    assert set(cands_a) == set(cands_b)
+    cover_a = covering_separating_tests(cands_a, fixes=frozen["fixes"], matrix=frozen["matrix"])
+    cover_b = covering_separating_tests(cands_b, fixes=frozen["fixes"], matrix=frozen["matrix"])
+    assert cover_a == cover_b and cover_a, (cover_a, cover_b)
+
+    # (8) The gate config must name a scope; a missing key fails closed.
     from gate import inputs as gin
 
     real_path = gin._GATE
