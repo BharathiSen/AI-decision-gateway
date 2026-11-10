@@ -38,15 +38,20 @@ Methodology
 2. Split: the first --runs bundles fit thresholds; the next --eval-runs
    bundles are held out and only scored.
 3. Fit: per test and traffic level, the smallest upper quantile (p95 and
-   up) whose fit-set alarm rate meets false_alarm_rate_target.
+   up) whose fit-set alarm rate meets false_alarm_rate_target. Latency/loss
+   limits follow the fit (they may tighten a permissive configured floor).
+   T10 min_mbit is never lowered below the configured floor when the healthy
+   lower tail is slower than that floor. Backfilled/--fill-speed 1 s T10
+   rows are excluded from the fit distribution.
 4. Score: a held-out run is a false alarm when any graded outcome is
-   degraded under the proposed thresholds.
+   degraded, when a row has `error`, or when T10 is missing/errored/backfilled.
 5. Errors are reported, not dropped. A run where a probe errored or
    returned no usable number (no ping summary, no T10 bitrate) is counted in
    eval_no_reading_runs per test. eval_error_inclusive_false_alarm_rate
    counts those runs as alarms, because in an episode the same failure
    grades as degraded (T10 'slow') or is missing evidence that stops a
-   no-op. --write-thresholds uses the error-inclusive rate.
+   no-op. --write-thresholds uses the error-inclusive rate and requires
+   first-try T10 completeness >= 0.95 (backfill does not count).
 """
 
 import argparse
@@ -141,10 +146,36 @@ def _usable_loss(value):
     return value
 
 
+def _backfilled(result):
+    """A T10 row filled after its first reading failed.
+
+    Legacy fills (before filled_after_failure existed) are the bare
+    {test_id, mbit_per_sec, checked} shape that only _store_speeds wrote.
+    One-second --fill-speed readings are never first-try episode T10.
+    """
+    if result.get("test_id") != "T10_speed":
+        return False
+    if result.get("filled_after_failure") is True:
+        return True
+    if result.get("fill_not_episode_equivalent") is True:
+        return True
+    if result.get("checked") is not True:
+        return False
+    if "filled_after_failure" in result:
+        return bool(result["filled_after_failure"])
+    return set(result) <= {"test_id", "mbit_per_sec", "checked"}
+
+
 def _observe(result):
-    """Pull the numbers a healthy threshold can use. No fault label."""
+    """Pull the numbers a healthy threshold can use. No fault label.
+
+    Errored and backfilled T10 rows contribute no bitrate: a 1 s fill is not
+    a 3 s episode measurement and must not tighten or loosen the floor.
+    """
     test_id = result.get("test_id")
     observed = {"test_id": test_id}
+    if result.get("error"):
+        return observed
     if test_id == "T1_e2e_ping":
         observed["latency_ms"] = result.get("latency_ms")
         observed["packet_loss_percent"] = _usable_loss(result.get("packet_loss_percent"))
@@ -181,7 +212,10 @@ def _observe(result):
         observed["a2b_loss"] = _usable_loss((result.get("hostA_to_hostB") or {}).get("packet_loss_percent"))
         observed["b2a_loss"] = _usable_loss((result.get("hostB_to_hostA") or {}).get("packet_loss_percent"))
     elif test_id == "T10_speed":
-        observed["mbit_per_sec"] = accepted_speed(result)
+        if _backfilled(result):
+            observed["mbit_per_sec"] = None
+        else:
+            observed["mbit_per_sec"] = accepted_speed(result)
     return observed
 
 
@@ -220,46 +254,68 @@ def summarize(bundles):
 
 
 def _upper(measured, floor):
+    """Data-driven upper limit from the fit quantile.
+
+    Returns (limit, too_permissive_note_or_None). When the configured floor
+    is above the fit candidate, the candidate wins so calibration can tighten
+    a permissive floor instead of only loosening.
+    """
     if measured is None:
-        return floor
-    return max(floor, measured * 1.1)
+        return floor, None
+    candidate = measured * 1.1
+    if floor is not None and floor > candidate:
+        return candidate, (
+            f"configured floor {floor} was more permissive than fit {candidate:g}"
+        )
+    return candidate, None
 
 
 def propose_thresholds(tests, existing, upper="p95", lower="p05"):
     """Turn calibration distributions into one noise level's limits.
 
-    upper is the fit quantile for latency and loss limits, lower the one
-    for the speed floor. Existing floors stay in place when the healthy
-    tail is healthier than the floor, and when the speed tail is below
-    the configured floor.
+    Latency/loss limits follow the fit quantile (can tighten a permissive
+    configured floor). The T10 min_mbit floor is never lowered below the
+    configured value when the healthy lower tail is slower than that floor.
     """
     existing = existing or {}
     notes = []
     t1 = existing.get("T1_e2e_ping") or {}
     t1_fit = tests.get("T1_e2e_ping") or {}
+    t1_loss, note = _upper(
+        (t1_fit.get("packet_loss_percent") or {}).get(upper),
+        t1.get("max_loss_percent", 5.0),
+    )
+    if note:
+        notes.append("T1 max_loss_percent: " + note)
+    t1_lat, note = _upper(
+        (t1_fit.get("latency_ms") or {}).get(upper),
+        t1.get("max_latency_ms", 50.0),
+    )
+    if note:
+        notes.append("T1 max_latency_ms: " + note)
     proposed = {
         "T1_e2e_ping": {
-            "max_loss_percent": _upper(
-                (t1_fit.get("packet_loss_percent") or {}).get(upper),
-                t1.get("max_loss_percent", 5.0),
-            ),
-            "max_latency_ms": _upper(
-                (t1_fit.get("latency_ms") or {}).get(upper),
-                t1.get("max_latency_ms", 50.0),
-            ),
+            "max_loss_percent": t1_loss,
+            "max_latency_ms": t1_lat,
         }
     }
     t2 = existing.get("T2_hop_ping") or {}
     t2_fit = tests.get("T2_hop_ping") or {}
+    t2_loss, note = _upper(
+        (t2_fit.get("packet_loss_percent") or {}).get(upper),
+        t2.get("max_loss_percent", 10.0),
+    )
+    if note:
+        notes.append("T2 max_loss_percent: " + note)
+    t2_lat, note = _upper(
+        (t2_fit.get("latency_ms") or {}).get(upper),
+        t2.get("max_latency_ms", 80.0),
+    )
+    if note:
+        notes.append("T2 max_latency_ms: " + note)
     proposed["T2_hop_ping"] = {
-        "max_loss_percent": _upper(
-            (t2_fit.get("packet_loss_percent") or {}).get(upper),
-            t2.get("max_loss_percent", 10.0),
-        ),
-        "max_latency_ms": _upper(
-            (t2_fit.get("latency_ms") or {}).get(upper),
-            t2.get("max_latency_ms", 80.0),
-        ),
+        "max_loss_percent": t2_loss,
+        "max_latency_ms": t2_lat,
     }
     t8 = existing.get("T8_tcp_vs_ping") or {}
     proposed["T8_tcp_vs_ping"] = {"tcp_must_succeed": bool(t8.get("tcp_must_succeed", True))}
@@ -343,11 +399,23 @@ def _background_enabled(noise_id):
 def _counts_as_alarm(result, outcome, thresholds, background=False):
     """A healthy-network alarm.
 
+    Measurement failures are not healthy: a row with `error`, or a T10 with
+    no usable first-try bitrate (missing/errored/backfilled), counts as an
+    alarm. Other probes that returned no usable number (failed ping read
+    without `error`) stay out of this counter and appear in no-reading /
+    error-inclusive rates instead.
+
     With background traffic enabled, packets waiting in a queue are the load
     from config/noise.yaml. A drop is still an alarm. With background off,
     backlog counts.
     """
+    if result.get("error"):
+        return True
+    if result.get("test_id") == "T10_speed" and _unusable(result):
+        return True
     if _no_reading(result):
+        return False
+    if outcome is None:
         return False
     if (
         background
@@ -539,6 +607,16 @@ def build_report(calibration, evaluation, noise_id, existing, full_battery, seed
             f"first-try T10 completeness {t10_completeness:.3f} < {FIRST_TRY_T10_TARGET}; "
             "backfill must not count toward acceptance"
         ]
+    t10_backfilled = sum(
+        1 for bundle in all_runs
+        for result in bundle.get("results") or []
+        if result.get("test_id") == "T10_speed" and _backfilled(result)
+    )
+    if t10_backfilled:
+        notes = list(notes) + [
+            f"{t10_backfilled} T10 row(s) are --fill-speed / backfill (1 s); "
+            "not equivalent to episode 3 s first-try measurements"
+        ]
     return {
         "noise_id": noise_id,
         "calibration_runs": len(calibration),
@@ -560,6 +638,7 @@ def build_report(calibration, evaluation, noise_id, existing, full_battery, seed
                 for result in bundle.get("results") or []
             )
         ),
+        "t10_backfilled_runs": t10_backfilled,
         "threshold_notes": notes,
         "eval_false_alarms": alarms,
         "eval_false_alarm_rate": (alarms / eval_runs) if eval_runs else None,
@@ -675,18 +754,18 @@ def _self_check():
     assert report["tests"]["T1_e2e_ping"]["latency_ms"]["p95"] == 40.0
     assert report["eval_false_alarms"] == 4
     assert report["proposed_thresholds"]["T10_speed"]["min_mbit"] == 7.2
+    assert report["proposed_thresholds"]["T1_e2e_ping"]["max_latency_ms"] == 44.0
+    assert report["proposed_thresholds"]["T1_e2e_ping"]["max_loss_percent"] == 0.0
+    assert any("more permissive than fit" in note for note in report["threshold_notes"]), report["threshold_notes"]
     assert "T10 min_mbit kept at the configured floor" not in report["threshold_notes"]
 
     contaminated = build_report(calm + held_out_eval, [], "N0", existing, True, 0)
     assert contaminated["tests"]["T1_e2e_ping"]["latency_ms"]["p95"] != 40.0
     assert contaminated["eval_false_alarms"] == 0
 
-    slow_row = _healthy_result(mbit=0.3)
-    for item in slow_row:
-        if item["test_id"] == "T10_speed":
-            item["checked"] = True
+    # Genuine slow first-try T10 (not a --fill-speed backfill): never lower the floor.
     slow = build_report(
-        [{"results": slow_row} for _ in range(20)],
+        [{"results": _healthy_result(mbit=0.3)} for _ in range(20)],
         [{"results": _healthy_result()}],
         "N0",
         existing,
@@ -733,8 +812,9 @@ def _self_check():
     dead_rows.append({"results": dead_one})
     dead = build_report(dead_rows, [{"results": dead_one}], "N0", existing, True, 0)
     assert dead["tests"]["T1_e2e_ping"]["packet_loss_percent"]["p95"] == 0.0
-    assert dead["proposed_thresholds"]["T1_e2e_ping"]["max_loss_percent"] == 5.0
-    assert dead["proposed_thresholds"]["T2_hop_ping"]["max_loss_percent"] == 10.0
+    # Fit can tighten a permissive configured floor (0% healthy → 0 limit).
+    assert dead["proposed_thresholds"]["T1_e2e_ping"]["max_loss_percent"] == 0.0
+    assert dead["proposed_thresholds"]["T2_hop_ping"]["max_loss_percent"] == 0.0
     assert dead["tests"]["T9_oneway_loss"]["a2b_loss"]["p95"] == 0.0
     assert dead["eval_false_alarms"] == 0
 
@@ -785,25 +865,53 @@ def _self_check():
     assert missing_speed["tests"]["T10_speed"]["mbit_per_sec"]["n"] == 0
     assert missing_speed["proposed_thresholds"]["T10_speed"]["min_mbit"] == 1.0
     assert any("no bitrate" in note for note in missing_speed["threshold_notes"])
-    assert missing_speed["eval_false_alarms"] == 0
+    # Missing T10 is not a healthy outcome for FAR.
+    assert missing_speed["eval_false_alarms"] == 1
+    assert missing_speed["first_try_t10_completeness"] == 0.0
     # Errors are counted, never dropped: a failed T10 and an errored T1 on a
-    # healthy run raise the error-inclusive rate but not the alarm rate.
+    # healthy run raise both the plain FAR and the error-inclusive rate.
     ok_t1 = {"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0, "latency_ms": 10.0, "raw": "0% packet loss"}
     failed_t10 = {"test_id": "T10_speed", "mbit_per_sec": None, "raw": "iperf3: error - unable to send"}
     errored_t1 = dict(ok_t1, error="ping command_error")
     mixed = [{"results": [ok_t1]}, {"results": [ok_t1, failed_t10]}, {"results": [errored_t1]}]
     runs_bad, per_test = score_no_readings(mixed)
     assert runs_bad == 2 and per_test == {"T10_speed": 1, "T1_e2e_ping": 1}, (runs_bad, per_test)
+    assert score_false_alarms(mixed, existing, "N0") == 2, "missing/errored rows are not healthy"
     filled = _store_speeds([{"results": [ok_t1, failed_t10]}], [0], [8.5], failed_attempts=[2])[0]
     t10_row = next(r for r in filled["results"] if r["test_id"] == "T10_speed")
     assert t10_row["filled_after_failure"] and t10_row["fill_attempts_failed"] == 2
+    assert t10_row.get("fill_not_episode_equivalent") is True
+    assert t10_row.get("fill_speed_seconds") == 1
     assert "unable to send" in t10_row["original_error"]
     assert _backfilled(t10_row) and _backfilled({"test_id": "T10_speed", "mbit_per_sec": 8.0, "checked": True})
     assert not _backfilled({"test_id": "T10_speed", "mbit_per_sec": 8.0, "raw": "ok"})
     assert score_no_readings([filled])[0] == 1, "a backfilled run is not a clean first reading"
     assert first_try_t10_completeness([filled]) == 0.0, "backfill is not a first-try T10 reading"
+    assert score_false_alarms([filled], existing, "N0") == 1, "1s fill is not a healthy first-try T10"
+    # Backfilled bitrate must not enter the fit distribution.
+    fill_only = build_report(
+        [{"results": _healthy_result(mbit=8.0)} for _ in range(19)] + [filled],
+        [{"results": _healthy_result()}],
+        "N0",
+        existing,
+        True,
+        0,
+    )
+    assert fill_only["tests"]["T10_speed"]["mbit_per_sec"]["n"] == 19, fill_only["tests"]["T10_speed"]
+    assert fill_only["t10_backfilled_runs"] >= 1
+    assert any("fill-speed" in note or "backfill" in note for note in fill_only["threshold_notes"])
     assert score_error_inclusive_alarms(mixed, existing, "N0") == 2
-    inclusive_report = dict(report, eval_error_inclusive_false_alarm_rate=0.5, eval_false_alarm_rate=0.0)
+    inclusive_report = dict(
+        report,
+        full_battery=True,
+        calibration_runs=MIN_CALIBRATION_RUNS,
+        eval_runs=50,
+        episode_aligned_battery=True,
+        eval_error_inclusive_false_alarm_rate=0.5,
+        eval_false_alarm_rate=0.0,
+        first_try_t10_completeness=1.0,
+        first_try_t10_target=FIRST_TRY_T10_TARGET,
+    )
     assert not ready_to_write(inclusive_report), "error-inclusive rate must gate --write-thresholds"
     low_t10 = dict(
         report,
@@ -817,6 +925,8 @@ def _self_check():
         first_try_t10_target=FIRST_TRY_T10_TARGET,
     )
     assert not ready_to_write(low_t10), "first-try T10 completeness must gate --write-thresholds"
+    missing_completeness = dict(low_t10, first_try_t10_completeness=None, eval_error_inclusive_false_alarm_rate=0.0)
+    assert not ready_to_write(missing_completeness), "absent T10 completeness must refuse write"
 
     from bench.tests import _parse_mbit_intervals, _summary_mbit
     from bench.traffic import apply_noise
@@ -906,14 +1016,32 @@ def _self_check():
 
     saved = Path(tempfile.mkdtemp()) / "samples.jsonl"
     rows = []
-    for index, mbit in enumerate((8.0, 8.0, 0.05, 2930.0)):
+    # Fit: two good (above committed N0 floor) + one rejected junk bitrate.
+    # Eval: healthy so FAR stays clean when T10 is present.
+    for index, mbit in enumerate((9.0, 9.0, 2930.0, 9.0)):
         bundle = {"results": _healthy_result(mbit=mbit)}
         rows.append({"noise_id": "N0", "index": index, "bundle": bundle})
     saved.write_text("".join(json.dumps(item) + "\n" for item in rows), encoding="utf-8")
     reprinted = report_from_saved(["N0"], 3, 1, sample_path=saved)
-    assert reprinted["N0"]["tests"]["T10_speed"]["mbit_per_sec"]["n"] == 3
+    assert reprinted["N0"]["tests"]["T10_speed"]["mbit_per_sec"]["n"] == 2
     assert reprinted["N0"]["eval_false_alarms"] == 0
+    assert reprinted["N0"]["first_try_t10_completeness"] == 0.75
     assert "create_network" not in inspect.getsource(report_from_saved)
+    # Explicit: rejected/missing T10 in eval counts as an alarm, not healthy.
+    junk_eval = Path(tempfile.mkdtemp()) / "junk.jsonl"
+    junk_rows = []
+    for index, mbit in enumerate((9.0, 9.0, 9.0, 2930.0)):
+        junk_rows.append({
+            "noise_id": "N0",
+            "index": index,
+            "bundle": {"results": _healthy_result(mbit=mbit)},
+        })
+    junk_eval.write_text("".join(json.dumps(item) + "\n" for item in junk_rows), encoding="utf-8")
+    junk_report = report_from_saved(["N0"], 3, 1, sample_path=junk_eval)
+    assert junk_report["N0"]["eval_false_alarms"] == 1
+    assert junk_report["N0"]["first_try_t10_completeness"] == 0.75
+    junk_eval.unlink()
+    junk_eval.parent.rmdir()
     waiting = _healthy_result()
     for item in waiting:
         if item["test_id"] == "T6_queue_stats":
@@ -1256,25 +1384,15 @@ def _store_speeds(bundles, indexes, intervals, failed_attempts=None):
             "mbit_per_sec": mbit,
             "checked": True,
             "filled_after_failure": True,
+            # measure_speed_once is a 1 s probe; episode T10 uses 3 s.
+            "fill_speed_seconds": 1,
+            "fill_not_episode_equivalent": True,
             "original_error": old.get("error") or (str(old.get("raw") or "")[-200:] or None),
             "fill_attempts_failed": int(failed_attempts[pos] if pos < len(failed_attempts) else 0),
         })
         bundles[index]["results"] = results
         updates[index] = bundles[index]
     return updates
-
-
-def _backfilled(result):
-    """A T10 row filled after its first reading failed.
-
-    Legacy fills (before filled_after_failure existed) are the bare
-    {test_id, mbit_per_sec, checked} shape that only _store_speeds wrote.
-    """
-    if result.get("test_id") != "T10_speed" or result.get("checked") is not True:
-        return False
-    if "filled_after_failure" in result:
-        return bool(result["filled_after_failure"])
-    return set(result) <= {"test_id", "mbit_per_sec", "checked"}
 
 
 def _print_iperf_tail(raw):
@@ -1622,8 +1740,12 @@ def report_from_saved(noise_ids, runs, eval_runs, seed=0, sample_path=SAMPLES_PA
         )
         reports[noise_id] = report
         usable = report["tests"]["T10_speed"]["mbit_per_sec"]["n"]
+        t10_c = report.get("first_try_t10_completeness")
+        t10_target = report.get("first_try_t10_target", FIRST_TRY_T10_TARGET)
         print(
             f"  {noise_id}: T10 fit {usable}/{runs}, "
+            f"first-try T10 completeness {t10_c} (target {t10_target}), "
+            f"backfilled T10 {report.get('t10_backfilled_runs')}, "
             f"eval false alarms {report['eval_false_alarms']}/{report['eval_runs']} "
             f"({report['eval_false_alarm_rate']}) {report['eval_alarm_tests']}; "
             f"no-reading runs {report.get('eval_no_reading_runs')} {report.get('eval_no_reading_tests')}, "
@@ -1637,12 +1759,28 @@ def report_from_saved(noise_ids, runs, eval_runs, seed=0, sample_path=SAMPLES_PA
                 f"{SAMPLES_EPISODE_PATH.name} before --write-thresholds.",
                 flush=True,
             )
+        if t10_c is None or t10_c < t10_target:
+            print(
+                f"  {noise_id}: first-try T10 completeness {t10_c} is below target {t10_target}. "
+                "Backfilled 1 s --fill-speed readings do not count. Thresholds will not be written.",
+                flush=True,
+            )
         target = report.get("false_alarm_rate_target", _false_alarm_target())
-        rate = report.get("eval_false_alarm_rate")
+        rate = report.get(
+            "eval_error_inclusive_false_alarm_rate",
+            report.get("eval_false_alarm_rate"),
+        )
         if rate is not None and rate > target:
             print(
-                f"  {noise_id}: false-alarm rate {rate} is above target {target}. "
+                f"  {noise_id}: error-inclusive false-alarm rate {rate} is above target {target}. "
                 "Thresholds will not be written until this improves.",
+                flush=True,
+            )
+        if not ready_to_write(report):
+            print(
+                f"  {noise_id}: not ready_to_write "
+                f"(episode_aligned={report.get('episode_aligned_battery')}, "
+                f"fit={report.get('calibration_runs')}, eval={report.get('eval_runs')}).",
                 flush=True,
             )
     return reports
