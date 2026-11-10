@@ -1,5 +1,6 @@
 """Gate checks: consistency, discrimination, safety."""
 
+import math
 import yaml
 from pathlib import Path
 
@@ -194,15 +195,24 @@ def path_links_up(snapshot, choice):
 NOOP_EVIDENCE_TESTS = ("T1_e2e_ping", "T4_mtu", "T8_tcp_vs_ping", "T10_speed")
 
 
-def noop_justified(snapshot, test_results, thresholds=None):
-    """True when leaving the network unchanged is supported by complete evidence."""
-    from bench.outcomes import grade_result, is_degraded, load_thresholds
+def noop_justified(snapshot, test_results, thresholds=None, noise_id=None):
+    """True when leaving the network unchanged is supported by complete evidence.
 
-    thresholds = thresholds or load_thresholds("N0")
+    Requires an explicit complete threshold set (or noise_id to load one).
+    Incomplete / non-finite thresholds and non-finite measurements refuse.
+    """
+    from bench.outcomes import grade_result, is_degraded, load_thresholds, threshold_set_errors
+
+    if thresholds is None:
+        if noise_id is None:
+            raise ValueError("noop_justified requires thresholds or noise_id")
+        thresholds = load_thresholds(noise_id)
+    if threshold_set_errors(thresholds):
+        return False
     metrics = (snapshot or {}).get("metrics") or {}
-    max_loss = (thresholds.get("T1_e2e_ping") or {}).get("max_loss_percent", 5.0)
+    max_loss = thresholds["T1_e2e_ping"]["max_loss_percent"]
     loss = metrics.get("packet_loss_percent")
-    loss_known = isinstance(loss, (int, float)) and not isinstance(loss, bool)
+    loss_known = isinstance(loss, (int, float)) and not isinstance(loss, bool) and math.isfinite(loss)
     # Contradiction needs an explicit broken reading; a missing number is not one.
     snapshot_broken = metrics.get("connectivity") is False or (loss_known and loss > max_loss)
     by_id = {}
@@ -217,7 +227,11 @@ def noop_justified(snapshot, test_results, thresholds=None):
         row = by_id.get(tid)
         if row is None or row.get("error"):
             return False
-        if is_degraded(tid, grade_result(row, thresholds), thresholds):
+        try:
+            outcome = grade_result(row, thresholds)
+        except ValueError:
+            return False
+        if outcome is None or is_degraded(tid, outcome, thresholds):
             return False
     # Healthy OAM next to a broken snapshot is contradictory evidence.
     return not snapshot_broken

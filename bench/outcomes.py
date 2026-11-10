@@ -18,12 +18,14 @@ test fixtures only and are used only inside `test_thresholds()` /
 """
 
 import contextlib
+import contextvars
 import copy
 import functools
 import hashlib
 import json
 import math
 import re
+import sys
 from pathlib import Path
 
 import yaml
@@ -56,14 +58,24 @@ ACCEPTANCE_BINDING_FIELDS = (
     "false_alarm_rate_target",
     "first_try_t10_completeness",
     "first_try_t10_target",
+    "report_sha256",
+    "samples_sha256",
 )
 
 # Offline / historical analysis only. Never a research-grade mark.
 DIAGNOSTIC_UNACCEPTED_LABEL = "thresholds unaccepted — not research data"
 
 
+def file_sha256(path):
+    """SHA-256 of a file's bytes, or None if missing/unreadable."""
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except (OSError, TypeError):
+        return None
+
+
 def acceptance_binding_hash(noise_id, acceptance, thresholds):
-    """SHA-256 binding noise identity, acceptance evidence, and thresholds."""
+    """SHA-256 binding noise identity, acceptance evidence, file hashes, thresholds."""
     payload = {
         "noise_id": noise_id,
         "acceptance": {key: (acceptance or {}).get(key) for key in ACCEPTANCE_BINDING_FIELDS},
@@ -71,6 +83,18 @@ def acceptance_binding_hash(noise_id, acceptance, thresholds):
     }
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def refuse_live_if_unaccepted(noise_ids, stream=None):
+    """Live/campaign preflight. Return exit code 2 when calibration is unaccepted."""
+    if test_mode_active():
+        print("refusing: live entry under test-mode thresholds", file=stream or sys.stderr)
+        return 2
+    refusal = require_accepted_thresholds(noise_ids)
+    if refusal:
+        print(refusal, file=stream or sys.stderr)
+        return 2
+    return None
 
 
 class ThresholdsUnavailable(RuntimeError):
@@ -95,12 +119,20 @@ def _finite_number(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
-def threshold_set_errors(thresholds):
-    """Why a threshold set is not a complete, well-formed T1/T2/T8/T10 set. [] if it is."""
+def threshold_set_errors(thresholds, tests=None):
+    """Why a threshold set is not a complete, well-formed T1/T2/T8/T10 set. [] if it is.
+
+    tests restricts the check to named test ids (plus callers that need T1 for
+    T9). Research acceptance and noop_justified pass tests=None so the full
+    set is required. Per-row grading only demands the limits for that row.
+    """
     if not isinstance(thresholds, dict):
         return ["threshold set is not a mapping"]
     errors = []
+    wanted = set(REQUIRED_THRESHOLDS) if tests is None else set(tests)
     for test_id, keys in REQUIRED_THRESHOLDS.items():
+        if test_id not in wanted:
+            continue
         limits = thresholds.get(test_id)
         if not isinstance(limits, dict):
             errors.append(f"{test_id} missing")
@@ -121,34 +153,34 @@ def threshold_set_errors(thresholds):
 
 
 # --- test-only thresholds -------------------------------------------------
+# Context-local depth so concurrent contexts and nested with-blocks restore
+# correctly. Live/research entrypoints refuse when this is active (L1).
 
-_TEST_DEPTH = 0
+_TEST_DEPTH = contextvars.ContextVar("verifix_test_threshold_depth", default=0)
 
 
 def test_mode_active():
-    return _TEST_DEPTH > 0
+    return _TEST_DEPTH.get() > 0
 
 
 @contextlib.contextmanager
 def test_thresholds():
     """Grade with bench/test_thresholds.yaml inside this block only (offline checks)."""
-    global _TEST_DEPTH
-    _TEST_DEPTH += 1
+    token = _TEST_DEPTH.set(_TEST_DEPTH.get() + 1)
     try:
         yield
     finally:
-        _TEST_DEPTH -= 1
+        _TEST_DEPTH.reset(token)
 
 
 @contextlib.contextmanager
 def research_mode():
     """Temporarily leave test mode, e.g. to prove research grading refuses."""
-    global _TEST_DEPTH
-    saved, _TEST_DEPTH = _TEST_DEPTH, 0
+    token = _TEST_DEPTH.set(0)
     try:
         yield
     finally:
-        _TEST_DEPTH = saved
+        _TEST_DEPTH.reset(token)
 
 
 def using_test_thresholds(fn):
@@ -189,8 +221,8 @@ def _accepted(candidate, noise_id, where):
     if not isinstance(candidate, dict):
         return None, [f"{where}: level is not a mapping"]
     stated = candidate.get("noise_id")
-    if stated is not None and stated != noise_id:
-        return None, [f"{where}: acceptance is for {stated!r}, not {noise_id!r}"]
+    if stated != noise_id:
+        return None, [f"{where}: acceptance noise_id {stated!r} does not exactly match {noise_id!r}"]
     errors = acceptance_errors(candidate)
     if errors:
         return None, [f"{where}: " + "; ".join(errors)]
@@ -332,19 +364,24 @@ def parse_qdisc_stats(text):
 
 
 def _hop_outcome(hop, thresholds):
-    limits = thresholds.get("T2_hop_ping", {})
-    max_loss = limits.get("max_loss_percent", 10.0)
-    max_lat = limits.get("max_latency_ms", 80.0)
+    limits = thresholds["T2_hop_ping"]
+    max_loss = limits["max_loss_percent"]
+    max_lat = limits["max_latency_ms"]
     loss = hop.get("packet_loss_percent")
     if loss is None:
         loss = 100.0
+    elif not _finite_number(loss):
+        return None
     if loss >= 100.0:
         return "down"
     if loss > max_loss:
         return "loss"
     latency = hop.get("latency_ms")
-    if latency is not None and latency > max_lat:
-        return "delay"
+    if latency is not None:
+        if not _finite_number(latency):
+            return None
+        if latency > max_lat:
+            return "delay"
     return "ok"
 
 
@@ -352,18 +389,25 @@ def _grade_hops(hops, thresholds):
     parts = []
     for hop in hops or []:
         label = HOP_NAMES.get(hop.get("dst_ip"), hop.get("dst_ip") or "?")
-        parts.append(f"{label}={_hop_outcome(hop, thresholds)}")
+        token = _hop_outcome(hop, thresholds)
+        if token is None:
+            return None
+        parts.append(f"{label}={token}")
     return ",".join(parts)
 
 
 def _grade_t1(result, thresholds):
-    limits = thresholds.get("T1_e2e_ping", {})
-    max_loss = limits.get("max_loss_percent", 5.0)
-    max_lat = limits.get("max_latency_ms", 50.0)
+    limits = thresholds["T1_e2e_ping"]
+    max_loss = limits["max_loss_percent"]
+    max_lat = limits["max_latency_ms"]
     loss = result.get("packet_loss_percent")
     if loss is None:
         loss = 100.0
+    elif not _finite_number(loss):
+        return None
     latency = result.get("latency_ms")
+    if latency is not None and not _finite_number(latency):
+        return None
     if loss >= 100.0:
         return "down"
     flags = []
@@ -383,13 +427,22 @@ def _grade_t2(result, thresholds):
         backup = result.get("hops")
     chunks = []
     if primary is not None:
-        chunks.append("primary:" + _grade_hops(primary, thresholds))
+        graded = _grade_hops(primary, thresholds)
+        if graded is None:
+            return None
+        chunks.append("primary:" + graded)
     if backup is not None:
-        chunks.append("backup:" + _grade_hops(backup, thresholds))
+        graded = _grade_hops(backup, thresholds)
+        if graded is None:
+            return None
+        chunks.append("backup:" + graded)
     if chunks:
         return ";".join(chunks)
     path = result.get("path") or "primary"
-    return f"{path}:{_grade_hops(result.get('hops') or [], thresholds)}"
+    graded = _grade_hops(result.get("hops") or [], thresholds)
+    if graded is None:
+        return None
+    return f"{path}:{graded}"
 
 
 def _grade_t5(result):
@@ -467,9 +520,11 @@ def _grade_t8(result):
 
 
 def _grade_t9(result, thresholds):
-    max_loss = thresholds.get("T1_e2e_ping", {}).get("max_loss_percent", 5.0)
+    max_loss = thresholds["T1_e2e_ping"]["max_loss_percent"]
     a2b = (result.get("hostA_to_hostB") or {}).get("packet_loss_percent", 0.0)
     b2a = (result.get("hostB_to_hostA") or {}).get("packet_loss_percent", 0.0)
+    if not _finite_number(a2b) or not _finite_number(b2a):
+        return None
     margin = 5.0
     a_bad = a2b > max_loss
     b_bad = b2a > max_loss
@@ -481,9 +536,13 @@ def _grade_t9(result, thresholds):
 
 
 def _grade_t10(result, thresholds):
-    minimum = thresholds.get("T10_speed", {}).get("min_mbit", 1.0)
+    minimum = thresholds["T10_speed"]["min_mbit"]
     mbit = result.get("mbit_per_sec")
-    if mbit is None or mbit < minimum:
+    if mbit is None:
+        return "slow"
+    if not _finite_number(mbit):
+        return None
+    if mbit < minimum:
         return "slow"
     return "ok"
 
@@ -494,6 +553,8 @@ def grade_result(result, thresholds=None, noise_id="N0"):
     Contract: a row with truthy `error` is infrastructure/measurement
     failure, not a network observation. Return None (no grade). Callers
     must treat that as missing evidence, never as ok/slow/loss/etc.
+    Incomplete or non-finite threshold dictionaries refuse grading (M1).
+    Non-finite measurements are unavailable, never healthy.
     """
     if not isinstance(result, dict):
         return "unknown"
@@ -502,6 +563,15 @@ def grade_result(result, thresholds=None, noise_id="N0"):
     if thresholds is None:
         thresholds = load_thresholds(noise_id)
     test_id = result.get("test_id")
+    needed = set()
+    if test_id in REQUIRED_THRESHOLDS:
+        needed.add(test_id)
+    elif test_id == "T9_oneway_loss":
+        needed.add("T1_e2e_ping")
+    if needed:
+        gaps = threshold_set_errors(thresholds, tests=needed)
+        if gaps:
+            raise ValueError("incomplete thresholds: " + "; ".join(gaps))
     if test_id == "T1_e2e_ping":
         return _grade_t1(result, thresholds)
     if test_id == "T2_hop_ping":

@@ -75,6 +75,12 @@ def main():
         print("Requires root on Mininet VM.", file=sys.stderr)
         sys.exit(2)
 
+    from bench.outcomes import refuse_live_if_unaccepted
+
+    refused = refuse_live_if_unaccepted(["N0"])
+    if refused:
+        sys.exit(refused)
+
     state = create_network()
     net = state["net"]
     fault_ids = args.fault or [f for f in inj._FAULTS if f != "H0"]

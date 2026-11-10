@@ -82,20 +82,20 @@ def main():
     assert NOOP_EVIDENCE_TESTS == ("T1_e2e_ping", "T4_mtu", "T8_tcp_vs_ping", "T10_speed")
 
     # Control: complete positive evidence + permitted cause justifies a no-op.
-    assert noop_justified(_snapshot(), healthy)
+    assert noop_justified(_snapshot(), healthy, noise_id="N0")
     gate_ok = decide(None, noop, _snapshot(), healthy, run_missing_tests=False)
     assert gate_ok["decision"] == "allow", gate_ok
-    assert decide_b5(None, noop, _snapshot(), healthy, run_tests=False)["decision"] == "allow"
+    assert decide_b5(None, noop, _snapshot(), healthy, run_tests=False, noise_id="N0")["decision"] == "allow"
 
     # Incomplete battery (missing T10) never justifies a no-op.
     incomplete = [T1_OK, T4_OK, T8_OK]
-    assert not noop_justified(_snapshot(), incomplete)
+    assert not noop_justified(_snapshot(), incomplete, noise_id="N0")
     assert decide(None, noop, _snapshot(), incomplete, run_missing_tests=False)["decision"] == "escalate"
     assert decide(None, noop, _snapshot(), [], run_missing_tests=False)["decision"] == "escalate"
 
     # Degraded T10 refuses DO_NOTHING.
     slow = [T1_OK, T4_OK, T8_OK, {"test_id": "T10_speed", "mbit_per_sec": 0.1, "error": None}]
-    assert not noop_justified(_snapshot(), slow)
+    assert not noop_justified(_snapshot(), slow, noise_id="N0")
     assert decide(None, noop, _snapshot(), slow, run_missing_tests=False)["decision"] == "escalate"
 
     # Missing cause or cause that forbids DO_NOTHING escalates even with healthy OAM.
@@ -115,20 +115,20 @@ def main():
         _errored(T10_OK, "empty_output"),
     ):
         rows = [broken if row["test_id"] == broken["test_id"] else row for row in healthy]
-        assert not noop_justified(_snapshot(), rows), broken
+        assert not noop_justified(_snapshot(), rows, noise_id="N0"), broken
         gate_out = decide(None, noop, _snapshot(), rows, run_missing_tests=False)
         assert gate_out["decision"] == "escalate" and "test unavailable" in gate_out["reason"], gate_out
-        assert decide_b5(None, noop, _snapshot(), rows, run_tests=False)["decision"] == "escalate"
+        assert decide_b5(None, noop, _snapshot(), rows, run_tests=False, noise_id="N0")["decision"] == "escalate"
 
     # Contradictory evidence: healthy OAM next to a broken snapshot.
     for snap in (_snapshot(loss=40.0), _snapshot(loss=100.0, connectivity=False)):
-        assert not noop_justified(snap, healthy)
+        assert not noop_justified(snap, healthy, noise_id="N0")
         assert decide(None, noop, snap, healthy, run_missing_tests=False)["decision"] == "escalate"
-        assert decide_b5(None, noop, snap, healthy, run_tests=False)["decision"] == "escalate"
+        assert decide_b5(None, noop, snap, healthy, run_tests=False, noise_id="N0")["decision"] == "escalate"
     # Snapshot without a loss number is not evidence of health by itself.
     blank = _snapshot()
     blank["metrics"].pop("packet_loss_percent")
-    assert not noop_justified(blank, [])
+    assert not noop_justified(blank, [], noise_id="N0")
 
     # Risky action: every test errored. No elimination, no allow, errors logged.
     proposal = good_proposal()

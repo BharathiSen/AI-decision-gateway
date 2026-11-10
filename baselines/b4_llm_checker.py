@@ -63,7 +63,15 @@ def decide(proposal, snapshot, test_results, net=None, run_missing_tests=None, n
         }
 
     primary = causes[0]["cause_id"]
-    ok, errs, frozen = load_frozen_context(noise_id or "N0")
+    if noise_id is None:
+        return {
+            "method": "B4",
+            "decision": "escalate",
+            "action": proposal.get("action"),
+            "tests_run": [row.get("test_id") for row in (test_results or []) if row.get("test_id")],
+            "reason": "noise_id required",
+        }
+    ok, errs, frozen = load_frozen_context(noise_id)
     if not ok:
         return {
             "method": "B4",
@@ -99,7 +107,7 @@ def decide(proposal, snapshot, test_results, net=None, run_missing_tests=None, n
             test_results,
             mode="full",
             run_missing_tests=run_missing,
-            noise_id=noise_id or "N0",
+            noise_id=noise_id,
             budget_seconds=budget_seconds,
         )
     except Exception as exc:

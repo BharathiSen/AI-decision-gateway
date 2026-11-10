@@ -114,8 +114,10 @@ def _action_for_fault(fault_id):
     return "ESCALATE"
 
 
-def predict_action(test_results, snapshot=None, net=None, budget_seconds=None, noise_id=None):
-    thresholds = load_thresholds(noise_id or "N0")
+def predict_action(test_results, snapshot=None, net=None, budget_seconds=None, noise_id="N0"):
+    if noise_id is None:
+        raise ValueError("B3 requires noise_id (episode traffic level)")
+    thresholds = load_thresholds(noise_id)
     selected = _select_results(test_results, net, budget_seconds)
     fault_id, score = _match_fault(selected, thresholds=thresholds)
     predicted = _action_for_fault(fault_id)
@@ -146,7 +148,7 @@ def decide(proposal, snapshot, test_results, net=None, budget_seconds=None, nois
         "predicted": pred,
         "matched_fault": fault_id,
         "match_score": score,
-        "noise_id": noise_id or "N0",
+        "noise_id": noise_id,
         "tests_run": [row.get("test_id") for row in selected if row.get("test_id")],
         "reason": "matrix nn" if fault_id else "t1 fallback",
     }

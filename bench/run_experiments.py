@@ -186,7 +186,7 @@ def b5_safe_proposal(proposal):
     return cleaned
 
 
-def run_b5_independent(proposal, snapshot, test_results, net=None, budget_seconds=None, noise_id=None):
+def run_b5_independent(proposal, snapshot, test_results, net=None, budget_seconds=None, noise_id="N0"):
     """B5 on a sanitized proposal. Empty input is escalate, not invented DO_NOTHING.
 
     noise_id grades B5 with the same traffic-level thresholds as the gate.
@@ -213,7 +213,9 @@ def run_strategies(proposal, snapshot, test_results, net=None, noise_id="N0", bu
     kw = {"run_missing_tests": False, "budget_seconds": cap, "noise_id": noise_id}
     out = {}
     for name in METHODS:
-        out[name] = run_method(name, proposal, snapshot, oam, net=net, budget_seconds=cap)
+        out[name] = run_method(
+            name, proposal, snapshot, oam, net=net, budget_seconds=cap, noise_id=noise_id
+        )
     verifix = gate_full(net, proposal, snapshot, oam, **kw)
     out["verifix"] = _contract(verifix, proposal, "verifix", cap)
     out["gate_full"] = dict(out["verifix"], method="gate_full")

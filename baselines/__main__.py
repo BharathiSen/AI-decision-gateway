@@ -14,6 +14,12 @@ def _live():
         print("baselines --live must run as root on the Mininet VM.", file=sys.stderr)
         return 2
 
+    from bench.outcomes import refuse_live_if_unaccepted
+
+    refused = refuse_live_if_unaccepted(["N0"])
+    if refused:
+        return refused
+
     from bench import inject as inj
     from bench import tests as oam
     from bench.mininet_util import mn_cleanup
@@ -45,13 +51,13 @@ def _live():
         battery = oam.run_all(net)
         results = battery.get("results") or []
         for method in ("B0", "B1", "B2", "B3", "B4", "B5"):
-            out = run_method(method, proposal, snap, results)
+            out = run_method(method, proposal, snap, results, noise_id="N0")
             if out.get("decision") not in {"allow", "block", "escalate"}:
                 failures.append(f"{method} decision {out}")
-        b2 = run_method("B2", proposal, snap, results)
+        b2 = run_method("B2", proposal, snap, results, noise_id="N0")
         if b2.get("action") == "REROUTE":
             failures.append(f"B2 rerouted onto down backup {b2}")
-        b3 = run_method("B3", proposal, snap, results)
+        b3 = run_method("B3", proposal, snap, results, noise_id="N0")
         if not b3.get("budget", {}).get("within_budget"):
             failures.append(f"B3 over budget {b3.get('budget')}")
         if "T10_speed" in (b3.get("tests_run") or []):

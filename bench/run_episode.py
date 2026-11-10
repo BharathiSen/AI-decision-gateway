@@ -2490,6 +2490,13 @@ def _self_check():
     print("negative safety: PASS")
 
 
+def _live_preflight(noise_ids=("N0",)):
+    """Refuse live Mininet modes when calibration is unaccepted (H2)."""
+    from bench.outcomes import refuse_live_if_unaccepted
+
+    return refuse_live_if_unaccepted(list(noise_ids))
+
+
 def live_oam_cost():
     """Full OAM battery on the diamond; checks measured cost fields.
 
@@ -2502,6 +2509,9 @@ def live_oam_cost():
     if not hasattr(os, "geteuid") or os.geteuid() != 0:
         print("live OAM cost check must run as root on the Mininet VM.", file=sys.stderr)
         return 2
+    refused = _live_preflight()
+    if refused:
+        return refused
     from bench.mininet_util import mn_cleanup, stop_iperf3_server
     from network.topology import create_network
 
@@ -2572,6 +2582,9 @@ def live_diamond():
     if not hasattr(os, "geteuid") or os.geteuid() != 0:
         print("diamond integration must run as root on the Mininet VM.", file=sys.stderr)
         return 2
+    refused = _live_preflight()
+    if refused:
+        return refused
     from bench.mininet_util import mn_cleanup
     from network.topology import create_network
 
@@ -2648,6 +2661,9 @@ def live_model():
     if not hasattr(os, "geteuid") or os.geteuid() != 0:
         print("live model check must run as root on the Mininet VM.", file=sys.stderr)
         return 2
+    refused = _live_preflight()
+    if refused:
+        return refused
     from agent.decision_agent import propose_with_predictions, provider_config
 
     cfg = provider_config()
@@ -2721,6 +2737,9 @@ def live_recheck():
     if not hasattr(os, "geteuid") or os.geteuid() != 0:
         print("live recheck must run as root on the Mininet VM.", file=sys.stderr)
         return 2
+    refused = _live_preflight()
+    if refused:
+        return refused
     from bench.mininet_util import mn_cleanup, run_in_node
     from control.actions import execute, proposal_to_action
     from gate.integrity import bind_gate_decision
@@ -2839,6 +2858,9 @@ def live_gate_inputs():
     if not hasattr(os, "geteuid") or os.geteuid() != 0:
         print("gate inputs live check must run as root on the Mininet VM.", file=sys.stderr)
         return 2
+    refused = _live_preflight()
+    if refused:
+        return refused
     from bench.mininet_util import mn_cleanup
     from gate.decide import decide as gate_decide
     from gate.inputs import load_frozen_context, validate_snapshot
@@ -2906,6 +2928,9 @@ def live_gate():
     if not hasattr(os, "geteuid") or os.geteuid() != 0:
         print("gate algorithm live check must run as root on the Mininet VM.", file=sys.stderr)
         return 2
+    refused = _live_preflight()
+    if refused:
+        return refused
     from bench.mininet_util import mn_cleanup
     from gate.decide import decide as gate_decide
     from gate.inputs import load_frozen_context
@@ -3005,6 +3030,9 @@ def live_integrity():
     if not hasattr(os, "geteuid") or os.geteuid() != 0:
         print("verification integrity must run as root on the Mininet VM.", file=sys.stderr)
         return 2
+    refused = _live_preflight()
+    if refused:
+        return refused
     from bench.mininet_util import mn_cleanup
     from gate.integrity import bind_gate_decision
     from network.topology import create_network
@@ -3130,6 +3158,9 @@ def live_safety():
     if not hasattr(os, "geteuid") or os.geteuid() != 0:
         print("negative safety must run as root on the Mininet VM.", file=sys.stderr)
         return 2
+    refused = _live_preflight()
+    if refused:
+        return refused
     from agent.validate import MAX_EXPECTED_LEN
     from bench.mininet_util import mn_cleanup, run_in_node
     from control.actions import execute, proposal_to_action

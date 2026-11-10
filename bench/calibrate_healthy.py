@@ -829,6 +829,8 @@ ACCEPTANCE_FIELDS = (
     "false_alarm_rate_target",
     "first_try_t10_completeness",
     "first_try_t10_target",
+    "report_sha256",
+    "samples_sha256",
 )
 
 
@@ -888,10 +890,17 @@ def ready_to_write(report):
     return not acceptance_errors(report)
 
 
-def update_thresholds_yaml(reports, path=THRESHOLDS_PATH):
+def update_thresholds_yaml(
+    reports,
+    path=THRESHOLDS_PATH,
+    report_path=None,
+    samples_path=None,
+):
     """Record accepted levels under accepted_by_noise_level, with their evidence.
 
-    Every level must pass ready_to_write, or nothing is written.
+    Every level must pass ready_to_write, or nothing is written. Acceptance is
+    bound to the exact noise_id and to SHA-256 digests of the report and sample
+    files that justified the write (M2).
     """
     refused = []
     for noise, report in reports.items():
@@ -908,11 +917,28 @@ def update_thresholds_yaml(reports, path=THRESHOLDS_PATH):
     if not isinstance(accepted, dict):
         accepted = {}
     doc["accepted_by_noise_level"] = accepted
-    from bench.outcomes import acceptance_binding_hash
+    from bench.outcomes import acceptance_binding_hash, file_sha256
+
+    report_file = Path(report_path) if report_path else None
+    sample_file = Path(samples_path) if samples_path else None
+    report_digest = file_sha256(report_file) if report_file else None
+    samples_digest = None
+    if sample_file:
+        samples_digest = file_sha256(sample_file)
+    elif samples_path is None:
+        samples_digest = file_sha256(SAMPLES_EPISODE_PATH) or file_sha256(SAMPLES_PATH)
 
     for noise, report in reports.items():
+        if report.get("noise_id") not in (None, noise):
+            raise ValueError(f"{noise}: report noise_id {report.get('noise_id')!r} mismatch")
         acceptance = {key: report.get(key) for key in ACCEPTANCE_FIELDS}
         acceptance["noise_id"] = noise
+        acceptance["report_sha256"] = report.get("report_sha256") or report_digest
+        acceptance["samples_sha256"] = report.get("samples_sha256") or samples_digest
+        if not acceptance["report_sha256"] or not acceptance["samples_sha256"]:
+            raise ValueError(
+                f"{noise}: report_sha256 and samples_sha256 are required for acceptance binding"
+            )
         thresholds = json.loads(json.dumps(report["proposed_thresholds"]))
         accepted[noise] = {
             "thresholds": thresholds,
@@ -979,6 +1005,9 @@ def _accepted_fixture(**overrides):
         "first_try_t10_completeness": 1.0,
         "first_try_t10_target": FIRST_TRY_T10_TARGET,
         "proposed_thresholds": json.loads(json.dumps(_COMPLETE_TEST_SET)),
+        # Fixture digests so write/grade binding tests do not need live samples.
+        "report_sha256": "a" * 64,
+        "samples_sha256": "b" * 64,
     }
     level.update(overrides)
     return level
@@ -995,6 +1024,8 @@ def _check_research_thresholds():
     withdrawn = json.loads((ROOT / "results" / "calibration_report.json").read_text(encoding="utf-8"))
     config = yaml.safe_load(THRESHOLDS_PATH.read_text(encoding="utf-8"))
     assert "by_noise_level" not in config, "withdrawn by_noise_level must not be research config"
+    # M3: withdrawn report path is disabled; only accepted_by_noise_level grades.
+    assert config.get("calibration", {}).get("grading_from_report") is False, config.get("calibration")
     for noise in ("N0", "N1", "N2"):
         # The committed report holds the withdrawn values and fails acceptance.
         assert acceptance_errors(withdrawn["levels"][noise]), noise
@@ -1042,10 +1073,25 @@ def _check_research_thresholds():
         raise AssertionError(f"{label}: unaccepted thresholds were used for grading")
 
     try:
+        # M3: with grading_from_report false, even a ready_to_write report
+        # level does not grade until --write-thresholds records it.
         _write({"version": 1, "levels": {"N0": _accepted_fixture()}})
+        _refused("accepted report while grading_from_report is false")
+        # Optional path still works when the flag is explicitly enabled and
+        # the level passes ready_to_write (withdrawn values still refuse).
+        _write(
+            {"version": 1, "levels": {"N0": _accepted_fixture()}},
+            dict(base_cfg, calibration=dict(base_cfg.get("calibration") or {}, grading_from_report=True)),
+        )
         with outcomes.research_mode():
             assert outcomes.load_thresholds("N0") == _COMPLETE_TEST_SET
             assert outcomes.threshold_status("N0")["source"] == "calibration_report.json"
+        # Refuse cases below enable the report path so unaccepted report levels
+        # are actually consulted — and still fail closed.
+        report_on = dict(
+            base_cfg,
+            calibration=dict(base_cfg.get("calibration") or {}, grading_from_report=True),
+        )
         # Strengthened acceptance (Sprint 2B §3): each of these must refuse.
         graded_only = _accepted_fixture(eval_false_alarm_rate=0.0)
         del graded_only[WRITE_DECISION_METRIC]
@@ -1072,10 +1118,10 @@ def _check_research_thresholds():
         for label, level in cases.items():
             assert not ready_to_write(level), label
             assert acceptance_errors(level), label
-            _write({"version": 1, "levels": {"N0": level}})
+            _write({"version": 1, "levels": {"N0": level}}, report_on)
             _refused(label)
         # Evidence for another level never grades this one (checked at grading and write).
-        _write({"version": 1, "levels": {"N0": _accepted_fixture(noise_id="N2")}})
+        _write({"version": 1, "levels": {"N0": _accepted_fixture(noise_id="N2")}}, report_on)
         _refused("level for another noise id")
         try:
             update_thresholds_yaml({"N0": _accepted_fixture(noise_id="N2")}, yaml_path)
@@ -1092,7 +1138,7 @@ def _check_research_thresholds():
             "level is a string": json.dumps({"levels": {"N0": "x"}}),
             "proposed is a list": json.dumps({"levels": {"N0": _accepted_fixture(proposed_thresholds=[1])}}),
         }.items():
-            _write(raw)
+            _write(raw, report_on)
             with outcomes.research_mode():
                 assert outcomes.threshold_status("N0")["status"] == "unaccepted", label
             _refused(label)
@@ -1133,6 +1179,19 @@ def _check_research_thresholds():
         tampered["accepted_by_noise_level"]["N0"]["acceptance_sha256"] = "0" * 64
         _write(None, tampered)
         _refused("accepted entry with mismatched acceptance_sha256")
+        # M2: mutating bound report/sample digests must invalidate the hash.
+        tampered = json.loads(json.dumps(written))
+        tampered["accepted_by_noise_level"]["N0"]["acceptance"]["report_sha256"] = "c" * 64
+        _write(None, tampered)
+        _refused("accepted entry with mutated report_sha256")
+        tampered = json.loads(json.dumps(written))
+        tampered["accepted_by_noise_level"]["N0"]["acceptance"]["samples_sha256"] = "d" * 64
+        _write(None, tampered)
+        _refused("accepted entry with mutated samples_sha256")
+        tampered = json.loads(json.dumps(written))
+        tampered["accepted_by_noise_level"]["N0"]["acceptance"]["noise_id"] = "N1"
+        _write(None, tampered)
+        _refused("accepted entry with non-exact noise_id")
         # The writer refuses every invalid level and writes nothing.
         _write(None)
         before_cfg = yaml_path.read_text(encoding="utf-8")
@@ -1143,11 +1202,121 @@ def _check_research_thresholds():
             except ValueError:
                 pass
         assert yaml_path.read_text(encoding="utf-8") == before_cfg
+
+        # M3 mutation: flipping grading_from_report cannot activate withdrawn
+        # report values that fail ready_to_write.
+        withdrawn_cfg = dict(
+            base_cfg,
+            calibration=dict(base_cfg.get("calibration") or {}, grading_from_report=True),
+        )
+        _write({"version": 1, "levels": withdrawn["levels"]}, withdrawn_cfg)
+        with outcomes.research_mode():
+            for noise in ("N0", "N1", "N2"):
+                status = outcomes.threshold_status(noise)
+                assert status["status"] == "unaccepted", (noise, status)
+                assert status["source"] is None, (noise, status)
+                try:
+                    outcomes.load_thresholds(noise)
+                    raise AssertionError(f"{noise}: mutated grading_from_report activated withdrawn report")
+                except ThresholdsUnavailable:
+                    pass
+
+        # M1: incomplete / non-finite threshold dicts and NaN measurements refuse.
+        # Full-set check (noop / acceptance): T1-only is incomplete.
+        partial = {"T1_e2e_ping": {"max_loss_percent": 5.0, "max_latency_ms": 100.0}}
+        assert threshold_set_errors(partial), "partial set must fail full-set check"
+        try:
+            grade_result({"test_id": "T10_speed", "mbit_per_sec": 5.0, "error": None}, partial)
+            raise AssertionError("T10 graded without T10 thresholds")
+        except ValueError as exc:
+            assert "incomplete thresholds" in str(exc)
+        nan_limits = dict(
+            _COMPLETE_TEST_SET,
+            T1_e2e_ping={"max_loss_percent": math.nan, "max_latency_ms": 100.0},
+        )
+        try:
+            grade_result({"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0, "latency_ms": 10.0}, nan_limits)
+            raise AssertionError("NaN threshold graded as ok")
+        except ValueError as exc:
+            assert "incomplete thresholds" in str(exc)
+        assert (
+            grade_result(
+                {"test_id": "T1_e2e_ping", "packet_loss_percent": math.nan, "latency_ms": 10.0},
+                _COMPLETE_TEST_SET,
+            )
+            is None
+        )
+        assert (
+            grade_result(
+                {"test_id": "T10_speed", "mbit_per_sec": math.nan, "error": None},
+                _COMPLETE_TEST_SET,
+            )
+            is None
+        )
+
+        # H1: test-mode restores; research mode refuses without accepted levels.
+        assert outcomes.test_mode_active()
+        with outcomes.research_mode():
+            assert not outcomes.test_mode_active()
+            try:
+                outcomes.load_thresholds("N0")
+                raise AssertionError("research mode graded without accepted thresholds")
+            except ThresholdsUnavailable:
+                pass
+        assert outcomes.test_mode_active()
+        # L1: suspended generator must not leak test-mode into a fresh context.
+        import contextvars
+
+        def _gen():
+            with outcomes.research_mode():
+                with outcomes.test_thresholds():
+                    yield outcomes.test_mode_active()
+                yield outcomes.test_mode_active()
+
+        g = _gen()
+        assert next(g) is True  # suspended inside nested test_thresholds
+        leaked = []
+
+        def _sibling():
+            leaked.append(outcomes.test_mode_active())
+
+        # Empty context (not a copy) must see the ContextVar default of 0.
+        contextvars.Context().run(_sibling)
+        assert leaked == [False], leaked
+        assert next(g) is False  # research_mode still active after inner exit
+
     finally:
         outcomes._REPORT, outcomes._THRESHOLDS = saved
         for item in (report_path, yaml_path):
             item.unlink(missing_ok=True)
         tmp.rmdir()
+
+
+def _check_fresh_process_fail_closed():
+    """H1: a clean interpreter without test mode refuses research grading."""
+    import subprocess
+    import sys
+
+    script = (
+        "from bench.outcomes import ThresholdsUnavailable, load_thresholds, test_mode_active\n"
+        "assert not test_mode_active()\n"
+        "try:\n"
+        "    load_thresholds('N0')\n"
+        "except ThresholdsUnavailable as exc:\n"
+        "    assert exc.status == 'unaccepted'\n"
+        "    print('fresh-process-fail-closed: PASS')\n"
+        "else:\n"
+        "    raise SystemExit('fresh process graded without accepted thresholds')\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, (proc.returncode, proc.stdout, proc.stderr)
+    assert "fresh-process-fail-closed: PASS" in proc.stdout
 
 
 def _check_data_only_recalibration():
@@ -1159,7 +1328,7 @@ def _check_data_only_recalibration():
     withdrawn_t10 = load_test_thresholds("N0")["T10_speed"]["min_mbit"]
     policy = calibration_policy("N0")
     assert set(policy) == {"T8_tcp_vs_ping"}, policy
-    assert calibration_policy("N2")["T8_tcp_vs_ping"]["tcp_must_succeed"] is False
+    assert calibration_policy("N2")["T8_tcp_vs_ping"]["tcp_must_succeed"] is True
     n = MIN_N_TO_TIGHTEN
     # Healthy VM slower than the withdrawn 8.09 Mbit: T10 moves below it.
     slow = build_report(
@@ -1597,6 +1766,7 @@ def _self_check():
     saved.parent.rmdir()
 
     _check_research_thresholds()
+    _check_fresh_process_fail_closed()
     _check_data_only_recalibration()
 
     # A run skipped mid-sitting must not make the next sitting reuse an index.
@@ -2223,12 +2393,28 @@ def _emit_reports(reports, report_path, write_thresholds=False):
     out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     print(json.dumps(payload, indent=2))
     if write_thresholds:
-        passing = {noise: report for noise, report in reports.items() if ready_to_write(report)}
-        for noise in reports:
-            if noise not in passing:
-                print(f"  {noise}: not written to {THRESHOLDS_PATH.name}; it did not pass the write guard.", flush=True)
+        from bench.outcomes import file_sha256
+
+        # Bind acceptance to the bytes just written and the sample file used.
+        # Digests live in thresholds.yaml acceptance; do not mutate the report
+        # file after hashing (circular self-hash).
+        report_digest = file_sha256(out)
+        sample_file = SAMPLES_EPISODE_PATH if SAMPLES_EPISODE_PATH.is_file() else SAMPLES_PATH
+        samples_digest = file_sha256(sample_file)
+        passing = {}
+        for noise, report in reports.items():
+            if not ready_to_write(report):
+                print(
+                    f"  {noise}: not written to {THRESHOLDS_PATH.name}; it did not pass the write guard.",
+                    flush=True,
+                )
+                continue
+            stamped = dict(report)
+            stamped["report_sha256"] = report.get("report_sha256") or report_digest
+            stamped["samples_sha256"] = report.get("samples_sha256") or samples_digest
+            passing[noise] = stamped
         if passing:
-            update_thresholds_yaml(passing)
+            update_thresholds_yaml(passing, report_path=out, samples_path=sample_file)
             print(f"  wrote {', '.join(passing)} to {THRESHOLDS_PATH.name}", flush=True)
 
 

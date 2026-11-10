@@ -29,6 +29,8 @@ def decide_b5(
     noise_id="N0",
     budget_seconds=None,
 ):
+    if noise_id is None:
+        raise ValueError("B5 requires noise_id (episode traffic level)")
     measured = list(test_results or [])
     tests_run = [t for t in measured if not t.get("error")]
     errored = sorted({t.get("test_id") for t in measured if t.get("error") and t.get("test_id")})
@@ -44,20 +46,20 @@ def decide_b5(
             "tests_run": list(ran),
             "decision": "block",
             "reason": str(exc),
-            "noise_id": noise_id or "N0",
+            "noise_id": noise_id,
         }
     record = {
         "method": "B5",
         "action": action.value,
         "tests_run": list(ran),
-        "noise_id": noise_id or "N0",
+        "noise_id": noise_id,
     }
     if errored:
         record["errored_tests"] = errored
 
     causes = [c.get("cause_id") for c in (proposal or {}).get("causes") or [] if c.get("cause_id")]
     primary = causes[0] if causes else None
-    ok, _errs, frozen = load_frozen_context(noise_id or "N0")
+    ok, _errs, frozen = load_frozen_context(noise_id)
     fixes = (frozen or {}).get("fixes") or {}
     hidden = ((frozen or {}).get("held_out") or set()) if ok else set()
 
@@ -74,7 +76,7 @@ def decide_b5(
                 "decision": "escalate",
                 "reason": "no-op not justified: DO_NOTHING not permitted for cause",
             }
-        if noop_justified(snapshot, measured, thresholds):
+        if noop_justified(snapshot, measured, thresholds, noise_id=noise_id):
             return {**record, "decision": "allow", "reason": "healthy no-op"}
         return {**record, "decision": "escalate", "reason": "no-op not justified"}
     if action not in RISKY_ACTIONS:

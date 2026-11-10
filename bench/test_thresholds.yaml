@@ -40,6 +40,6 @@ test_only_by_noise_level:
       max_loss_percent: 25.0
       max_latency_ms: 250.0
     T8_tcp_vs_ping:
-      tcp_must_succeed: false
+      tcp_must_succeed: true
     T10_speed:
       min_mbit: 4.1850000000000005

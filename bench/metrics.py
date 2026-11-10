@@ -1301,6 +1301,11 @@ def live_metrics():
     if not hasattr(os, "geteuid") or os.geteuid() != 0:
         print("metrics engine must run as root on the Mininet VM.", file=sys.stderr)
         return 2
+    from bench.outcomes import refuse_live_if_unaccepted
+
+    refused = refuse_live_if_unaccepted(["N0"])
+    if refused:
+        return refused
     from baselines.b0_ungated import run as b0_run
     from bench import inject as inj
     from bench import tests as oam

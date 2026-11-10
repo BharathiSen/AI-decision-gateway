@@ -10,12 +10,14 @@ from baselines.common import (
 _DECISIONS = {"allow", "block", "escalate"}
 
 
-def run_method(method, proposal, snapshot, test_results, net=None, budget_seconds=None, noise_id=None):
+def run_method(method, proposal, snapshot, test_results, net=None, budget_seconds=None, noise_id="N0"):
     """Run one method on the shared proposal, snapshot, and OAM results.
 
     The true fault id is not an input. net is used only when a method
     needs to run extra OAM tests. B0 does not change the network here.
-    noise_id selects grading thresholds for B4/B5, the same ones the gate uses.
+    noise_id selects grading thresholds for B2–B5 (same levels as the gate).
+    Callers with an episode must pass that episode's noise_id. There is no
+    silent cross-level fallback; None is refused.
     """
     name = (method or "").upper()
     proposal = proposal or {}
@@ -24,6 +26,8 @@ def run_method(method, proposal, snapshot, test_results, net=None, budget_second
     cap = DEFAULT_BUDGET_SECONDS if budget_seconds is None else budget_seconds
     if name not in METHODS:
         raise ValueError(f"unknown method {method!r}")
+    if noise_id is None:
+        raise ValueError(f"{name}: noise_id is required (pass the episode noise level)")
     from bench.outcomes import ThresholdsUnavailable
 
     try:
@@ -38,6 +42,17 @@ def run_method(method, proposal, snapshot, test_results, net=None, budget_second
             "reason": f"thresholds unavailable: {exc}",
             "threshold_status": exc.status,
         }
+    except ValueError as exc:
+        if "incomplete thresholds" in str(exc) or "noise_id" in str(exc):
+            result = {
+                "method": name,
+                "decision": "escalate",
+                "action": proposal.get("action"),
+                "tests_run": [],
+                "reason": str(exc),
+            }
+        else:
+            raise
 
     result = attach_contract(result, proposal, budget_seconds=cap)
     if result.get("decision") not in _DECISIONS or "method" not in result or "action" not in result:
@@ -46,6 +61,10 @@ def run_method(method, proposal, snapshot, test_results, net=None, budget_second
 
 
 def _dispatch(name, proposal, snapshot, test_results, net, cap, noise_id):
+    # Episode noise level is required for grading. Callers must pass the
+    # episode's N0/N1/N2; there is no silent cross-level fallback here.
+    if noise_id is None:
+        raise ValueError(f"{name}: noise_id is required (pass the episode noise level)")
     if name == "B0":
         from baselines.b0_ungated import decide
         result = decide(proposal, snapshot, test_results)
@@ -54,7 +73,9 @@ def _dispatch(name, proposal, snapshot, test_results, net, cap, noise_id):
         result = decide(proposal, snapshot, test_results)
     elif name == "B2":
         from baselines.b2_llm_checker import decide
-        result = decide(proposal, snapshot, test_results, net=net, run_battery=net is not None)
+        result = decide(
+            proposal, snapshot, test_results, net=net, run_battery=net is not None, noise_id=noise_id
+        )
     elif name == "B3":
         from baselines.b3_ml_classifier import decide
         result = decide(
@@ -63,7 +84,7 @@ def _dispatch(name, proposal, snapshot, test_results, net, cap, noise_id):
             test_results,
             net=net,
             budget_seconds=cap,
-            noise_id=noise_id or "N0",
+            noise_id=noise_id,
         )
     elif name == "B4":
         from baselines.b4_llm_checker import decide
@@ -72,14 +93,14 @@ def _dispatch(name, proposal, snapshot, test_results, net, cap, noise_id):
             snapshot,
             test_results,
             net=net,
-            noise_id=noise_id or "N0",
+            noise_id=noise_id,
             budget_seconds=cap,
         )
     elif name == "B5":
         from baselines.b5_adaptive import decide_b5
         from bench.outcomes import load_thresholds
 
-        thresholds = load_thresholds(noise_id or "N0")
+        thresholds = load_thresholds(noise_id)
         result = decide_b5(
             net,
             proposal,
@@ -87,7 +108,7 @@ def _dispatch(name, proposal, snapshot, test_results, net, cap, noise_id):
             test_results,
             run_tests=net is not None,
             thresholds=thresholds,
-            noise_id=noise_id or "N0",
+            noise_id=noise_id,
             budget_seconds=cap,
         )
     else:

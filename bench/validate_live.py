@@ -369,6 +369,18 @@ def _self_check():
     assert calm_out.get("decision") == "allow", calm_out
     assert "healthy no-op" in (calm_out.get("reason") or ""), calm_out
 
+    # Negative regression: held-out U1 with empty OAM must not allow as a no-op.
+    held_out_empty = {
+        "action": "DO_NOTHING",
+        "target": "HostA_to_HostB",
+        "reason": "claimed healthy",
+        "proposed_path": ["r1", "r2", "r4"],
+        "causes": [{"cause_id": "U1", "predicted_tests": []}],
+    }
+    held_out = decide(None, held_out_empty, healthy, [], mode="full", run_missing_tests=False)
+    assert held_out.get("decision") != "allow", held_out
+    assert "healthy no-op" not in (held_out.get("reason") or ""), held_out
+
     try:
         write_report({"no": True}, FROZEN_RESULTS[0])
         raise AssertionError("frozen overwrite was not refused")

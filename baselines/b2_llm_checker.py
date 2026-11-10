@@ -10,12 +10,12 @@ from gate.checks import path_links_up
 from baselines.common import BACKUP_PATH, PERMITTED_ACTIONS
 
 
-def _grades(test_results):
+def _grades(test_results, noise_id):
     out = {}
     for row in test_results or []:
         tid = row.get("test_id")
         if tid:
-            out[tid] = grade_result(row)
+            out[tid] = grade_result(row, noise_id=noise_id)
     return out
 
 
@@ -63,12 +63,12 @@ def _rule_action(grades, snapshot):
     return "DO_NOTHING"
 
 
-def decide(proposal, snapshot, test_results, net=None, run_battery=False):
+def decide(proposal, snapshot, test_results, net=None, run_battery=False, noise_id="N0"):
     results = list(test_results or [])
     if run_battery and net is not None:
         bundle = oam.run_all(net)
         results = list(bundle.get("results") or results)
-    grades = _grades(results)
+    grades = _grades(results, noise_id)
     action = _rule_action(grades, snapshot)
     if action not in PERMITTED_ACTIONS:
         action = "ESCALATE"

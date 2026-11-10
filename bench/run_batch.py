@@ -535,6 +535,11 @@ def live_dataset():
     if not hasattr(os, "geteuid") or os.geteuid() != 0:
         print("master dataset must run as root on the Mininet VM.", file=sys.stderr)
         return 2
+    from bench.outcomes import refuse_live_if_unaccepted
+
+    refused = refuse_live_if_unaccepted(["N0"])
+    if refused:
+        return refused
     from bench import inject as inj
     from bench.mininet_util import mn_cleanup
     from network.topology import create_network
@@ -632,6 +637,11 @@ def overnight(args):
     if not hasattr(os, "geteuid") or os.geteuid() != 0:
         print("run_batch.py requires root on Mininet VM.", file=sys.stderr)
         return 2
+    from bench.outcomes import refuse_live_if_unaccepted
+
+    refused = refuse_live_if_unaccepted([args.noise or "N0"])
+    if refused:
+        return refused
     from bench import inject as inj
     from bench.mininet_util import mn_cleanup, ensure_iperf3_server
     from network.topology import create_network

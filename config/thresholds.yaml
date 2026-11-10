@@ -16,8 +16,8 @@ version: 2
 accepted_by_noise_level: {}
 
 # Fixed protocol policy, not a fitted number and not a floor. Calibration
-# copies it into each proposed level. N2 runs 5 Mbit background traffic
-# (config/noise.yaml), where a TCP connect failure is not by itself a fault.
+# copies it into each proposed level. TCP must succeed at every noise level
+# (including N2 with background traffic): a TCP connect failure is a fault signal.
 policy_by_noise_level:
   N0:
     T8_tcp_vs_ping:
@@ -27,12 +27,14 @@ policy_by_noise_level:
       tcp_must_succeed: true
   N2:
     T8_tcp_vs_ping:
-      tcp_must_succeed: false
+      tcp_must_succeed: true
 
 calibration:
   healthy_runs_target: 200
   false_alarm_rate_target: 0.05
-  grading_from_report: true
+  # Withdrawn report values must not grade. Accepted levels live only under
+  # accepted_by_noise_level after --write-thresholds.
+  grading_from_report: false
   battery:
     ping_count: 10
     ping_interval: 0.2
