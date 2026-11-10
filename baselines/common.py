@@ -1,5 +1,8 @@
 """Shared baseline contract: permitted actions and comparable test budgets.
 
+Authoritative arm definitions and parity rules:
+  protocol/EXPERIMENT_PROTOCOL.md §2 (research freeze v1).
+
 Budget documentation (H5):
 - DEFAULT_BUDGET_SECONDS (8.0) caps newly executed OAM for B3/B4/B5/VeriFix.
 - B3 fills cheapest-first from the catalog until the cap.
