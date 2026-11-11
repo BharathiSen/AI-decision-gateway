@@ -19,6 +19,25 @@ def _grades(test_results, noise_id):
     return out
 
 
+# Tests whose ungradable reading must not fall through to the healthy default.
+REQUIRED_EVIDENCE = ("T1_e2e_ping",)
+
+
+def _unavailable_required(test_results, grades):
+    """Required tests that were measured without an error but could not be graded.
+
+    A missing or non-finite T1 loss grades None. Treating that as healthy would
+    let B2 authorize DO_NOTHING on no evidence. Rows with an explicit error keep
+    their existing handling.
+    """
+    out = []
+    for row in test_results or []:
+        tid = row.get("test_id")
+        if tid in REQUIRED_EVIDENCE and not row.get("error") and grades.get(tid) is None:
+            out.append(tid)
+    return out
+
+
 def _backup_unreachable(snapshot, grades):
     up, _down = path_links_up(snapshot, "backup")
     if not up:
@@ -71,6 +90,17 @@ def decide(proposal, snapshot, test_results, net=None, run_battery=False, noise_
         bundle = oam.run_all(net)
         results = list(bundle.get("results") or results)
     grades = _grades(results, noise_id)
+    unavailable = _unavailable_required(results, grades)
+    if unavailable:
+        return {
+            "method": "B2",
+            "decision": "escalate",
+            "action": "ESCALATE",
+            "path": [],
+            "tests_run": [row.get("test_id") for row in results if row.get("test_id")],
+            "reason": f"required evidence unavailable: {', '.join(unavailable)}",
+            "missing_evidence": unavailable,
+        }
     action = _rule_action(grades, snapshot)
     if action not in PERMITTED_ACTIONS:
         action = "ESCALATE"

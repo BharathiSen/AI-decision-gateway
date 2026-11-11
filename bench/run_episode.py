@@ -272,13 +272,14 @@ def pre_remediation_observations(oam_bundle):
 def _classify_recovery(results, noise_id="N0"):
     """Map measured results to recovery_status without using command success.
 
-    Required recovery tests with errors or absences are measurement_unavailable,
-    never recovered. Partial means connectivity is back but performance is not.
+    Required recovery tests that are absent, errored or ungradable (e.g. T1
+    loss None) are measurement_unavailable, never recovered, partial or
+    failed. Partial means connectivity is back but performance is not.
     """
     from bench.signature_checks import (
         RECOVERY_T10_MIN_MBIT,
-        REQUIRED_RECOVERY_TESTS,
         degraded_tests,
+        missing_recovery_evidence,
     )
     from bench.outcomes import signature
 
@@ -293,13 +294,9 @@ def _classify_recovery(results, noise_id="N0"):
         for tid, row in by_id.items()
         if row.get("error")
     }
-    missing_required = []
-    for tid in REQUIRED_RECOVERY_TESTS:
-        row = by_id.get(tid)
-        if row is None or row.get("error"):
-            missing_required.append(tid)
     conditions = traffic_conditions(results)
     outcomes = signature(results, noise_id=noise_id)
+    missing_required = missing_recovery_evidence(results, outcomes)
     t10 = by_id.get("T10_speed")
     samples = []
     if isinstance(t10, dict) and not t10.get("error"):
@@ -1207,6 +1204,30 @@ def _self_check():
         missing = measure_traffic_recovery(object(), noise_id="N0")
         assert missing["recovery_status"] == RECOVERY_UNAVAILABLE and missing["traffic_recovered"] is None, missing
         assert "T8_tcp_vs_ping" in missing["missing_evidence"]
+        # T1 measured with no error but loss None / non-finite → unavailable,
+        # never partial/failed/recovered (P2 closure).
+        for bad_loss in (None, float("nan"), float("inf")):
+            oam.run_all = lambda _net, test_ids=None, _l=bad_loss, **_kwargs: {
+                "results": _recovery_rows(loss=_l),
+            }
+            no_loss = measure_traffic_recovery(object(), noise_id="N0")
+            assert no_loss["recovery_status"] == RECOVERY_UNAVAILABLE, (bad_loss, no_loss)
+            assert no_loss["traffic_recovered"] is None, (bad_loss, no_loss)
+            assert no_loss["missing_evidence"] == ["T1_e2e_ping"], (bad_loss, no_loss)
+        # Degraded but finite T1 (40% loss, connectivity) is a measured outcome, not unavailable.
+        oam.run_all = lambda _net, test_ids=None, **_kwargs: {
+            "results": _recovery_rows(loss=40.0),
+        }
+        lossy = measure_traffic_recovery(object(), noise_id="N0")
+        assert lossy["recovery_status"] in (RECOVERY_PARTIAL, RECOVERY_FAILED), lossy
+        assert lossy["traffic_recovered"] is False and lossy["missing_evidence"] == [], lossy
+        assert "T1_e2e_ping" in lossy["degraded"], lossy
+        # T10 is optional: absent or rate None does not block a recovered verdict.
+        for t10_rows in (_recovery_rows(omit=("T10_speed",)), _recovery_rows(mbit=None)):
+            oam.run_all = lambda _net, test_ids=None, _r=t10_rows, **_kwargs: {"results": _r}
+            no_t10 = measure_traffic_recovery(object(), noise_id="N0")
+            assert no_t10["recovery_status"] == RECOVERY_RECOVERED, no_t10
+            assert no_t10["traffic_recovered"] is True and no_t10["missing_evidence"] == [], no_t10
         # Battery exception → unavailable (not failed recovery).
         def _boom(_net, test_ids=None, **_kwargs):
             raise RuntimeError("iperf server down")

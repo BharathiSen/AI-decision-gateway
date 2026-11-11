@@ -90,6 +90,27 @@ def best_mbit(samples):
     return max(values) if values else None
 
 
+def missing_recovery_evidence(results, outcomes, tests=REQUIRED_RECOVERY_TESTS):
+    """Required recovery tests with no usable reading.
+
+    A test is missing when its row is absent, carries an error, or was
+    measured but could not be graded (e.g. T1 packet_loss_percent None or
+    non-finite). Missing evidence makes recovery unknown, never degraded or
+    recovered. T10 is optional and never listed here.
+    """
+    rows = {
+        row.get("test_id"): row
+        for row in results or []
+        if isinstance(row, dict) and row.get("test_id")
+    }
+    missing = []
+    for tid in tests:
+        row = rows.get(tid)
+        if row is None or row.get("error") or (outcomes or {}).get(tid) is None:
+            missing.append(tid)
+    return missing
+
+
 def degraded_tests(outcomes, tests=REQUIRED_RECOVERY_TESTS, t10_samples=None):
     """Recovery tests that did not read healthy. A missing test counts as degraded.
 

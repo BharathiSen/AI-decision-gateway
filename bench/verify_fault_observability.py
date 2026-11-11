@@ -35,6 +35,7 @@ from bench.signature_checks import (
     REMEDIATIONS,
     degraded_tests,
     expected_actions,
+    missing_recovery_evidence,
     fix_pairs,
     load_expected,
     outcome_map,
@@ -181,7 +182,10 @@ def measure_action(net, action):
         out["raw"] = _raw(results, speed)
         out["outcomes"] = signature(results, noise_id=NOISE_ID)
         out["degraded"] = degraded_tests(out["outcomes"], t10_samples=speed)
-        out["recovered"] = not out["degraded"]
+        out["missing_evidence"] = missing_recovery_evidence(results, out["outcomes"])
+        # Same semantics as run_episode._classify_recovery: missing required
+        # evidence leaves recovery unknown (None), which valid_fix_set refuses.
+        out["recovered"] = None if out["missing_evidence"] else not out["degraded"]
     except Exception as exc:
         out["error"] = f"{type(exc).__name__}: {exc}"
     finally:
@@ -474,7 +478,7 @@ def main(argv=None):
             print(f"  raw: {record.get('raw')}", flush=True)
             for action, result in (record.get("actions") or {}).items():
                 if action in MEASURED_ACTIONS:
-                    status = {True: "recovered", False: f"not recovered {result.get('degraded')}", None: f"error {result.get('error')}"}[result["recovered"]]
+                    status = {True: "recovered", False: f"not recovered {result.get('degraded')}", None: f"error {result.get('error')}" if result.get("error") else f"measurement unavailable {result.get('missing_evidence')}"}[result["recovered"]]
                     print(f"  {action}: path {result.get('path_after')} {status} {result.get('raw')}", flush=True)
             for err in record["errors"] + record.get("residual", []):
                 print(f"  ! {err}", flush=True)
@@ -590,7 +594,8 @@ def _self_check():
         results = []
         for tid in ids:
             if tid == "T1_e2e_ping":
-                results.append({"test_id": tid, "packet_loss_percent": 100 if down else 0, "latency_ms": None if down else 20})
+                loss = None if world.get("t1_loss_none") else (100 if down else 0)
+                results.append({"test_id": tid, "packet_loss_percent": loss, "latency_ms": None if down else 20})
             elif tid == "T8_tcp_vs_ping":
                 results.append({"test_id": tid, "ping_ok": not down, "tcp_ok": not (down or tcp_fail)})
             elif tid == "T10_speed":
@@ -611,7 +616,8 @@ def _self_check():
             if tid == "T7_route_check":
                 out[tid] = f"seen:{r['r1_to_dest']}"
             elif tid == "T1_e2e_ping":
-                out[tid] = "down" if r["packet_loss_percent"] == 100 else "ok"
+                loss = r["packet_loss_percent"]
+                out[tid] = None if loss is None else ("down" if loss == 100 else "ok")
             elif tid == "T8_tcp_vs_ping":
                 out[tid] = "both_ok" if r["tcp_ok"] else ("ping_ok_tcp_fail" if r["ping_ok"] else "both_fail")
             elif tid == "T10_speed":
@@ -699,6 +705,18 @@ def _self_check():
         check("the battery's T10 is retried the same way", healthy["raw"]["T10_mbit_samples"] == [9.5])
         world["slow_speeds"] = []
         check("a broken path is not retried into recovery", by_id["F1"]["actions"]["DO_NOTHING"]["raw"]["T10_mbit_samples"] == [0.0, 0.0, 0.0])
+
+        # Labels use the recovery semantics: T1 loss None (no error) is unknown, not degraded.
+        world["t1_loss_none"] = True
+        no_loss = measure_action(None, "DO_NOTHING")
+        world["t1_loss_none"] = False
+        check("label: T1 loss None leaves recovery unknown",
+              no_loss["recovered"] is None and no_loss["missing_evidence"] == ["T1_e2e_ping"], str(no_loss))
+        check("label: unknown baseline recovery yields no valid-fix set",
+              valid_fix_set({"DO_NOTHING": no_loss, "REROUTE": {"recovered": True}, "REBALANCE": {"recovered": True}}) is None)
+        healthy_action = measure_action(None, "DO_NOTHING")
+        check("label: finite healthy T1 still recovered",
+              healthy_action["recovered"] is True and healthy_action["missing_evidence"] == [], str(healthy_action))
 
         world["fail_battery"] = {"F1"}
         failed = measure_scenario(None, "F1")

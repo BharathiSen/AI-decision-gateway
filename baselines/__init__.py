@@ -205,6 +205,21 @@ def _self_check():
     assert b2_f12["action"] == "ESCALATE", b2_f12
     # Replay (net is None) must not pretend a battery ran.
     assert b2_reroute["tests_run"] == ["T1_e2e_ping"]
+    # Missing T1 evidence (loss None / non-finite, no error) must not fall
+    # through to the healthy DO_NOTHING/allow default.
+    t1_ok = [{"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0, "latency_ms": 12, "connectivity": True}]
+    b2_ok = run_method("B2", shared, healthy, t1_ok, noise_id="N0")
+    assert b2_ok["action"] == "DO_NOTHING" and b2_ok["decision"] == "allow", b2_ok
+    for bad in (None, float("nan"), float("inf")):
+        t1_missing = [dict(t1_ok[0], packet_loss_percent=bad)]
+        b2_missing = run_method("B2", shared, healthy, t1_missing, noise_id="N0")
+        assert b2_missing["decision"] == "escalate" and b2_missing["action"] == "ESCALATE", (bad, b2_missing)
+        assert b2_missing["missing_evidence"] == ["T1_e2e_ping"], (bad, b2_missing)
+        assert b2_missing["path"] == [], (bad, b2_missing)
+    # Explicit structured T1 errors keep their existing handling (not this rule).
+    t1_err = [dict(t1_ok[0], packet_loss_percent=None, error="TimeoutError: ping timed out")]
+    b2_err = run_method("B2", shared, healthy, t1_err, noise_id="N0")
+    assert "missing_evidence" not in b2_err and b2_err["reason"] == "full battery then rules", b2_err
 
     t10 = {"test_id": "T10_speed", "mbit_per_sec": 0.1}
     b3 = run_method("B3", shared, healthy, t1_loss + [t10], budget_seconds=3.0, noise_id="N0")

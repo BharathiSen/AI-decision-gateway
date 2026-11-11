@@ -13,6 +13,7 @@ from bench.signature_checks import (
     expected_actions,
     fix_pairs,
     load_expected,
+    missing_recovery_evidence,
     outcome_map,
     separation_errors,
     valid_fix_set,
@@ -300,6 +301,28 @@ def test_ground_truth_rules():
     check("T10-only slow is not a failed recovery", degraded_tests({**healthy, "T10_speed": "slow"}) == [])
     check("T10 at 7.5 Mbit is VM noise", degraded_tests(healthy, t10_samples=[7.5, 8.1]) == [])
     check("T10 at 1.4 Mbit is a failed recovery", degraded_tests(healthy, t10_samples=[1.37, 1.71]) == ["T10_speed"])
+
+    # Missing required recovery evidence (shared by recovery and labels).
+    def rows(t1=None, t10="keep"):
+        out = [
+            {"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0, "latency_ms": 10.0, "connectivity": True, "error": None, **(t1 or {})},
+            {"test_id": "T4_mtu", "df_ping_ok": True, "error": None},
+            {"test_id": "T8_tcp_vs_ping", "ping_ok": True, "tcp_ok": True, "error": None},
+        ]
+        if t10 == "keep":
+            out.append({"test_id": "T10_speed", "mbit_per_sec": 8.0, "error": None})
+        return out
+
+    def missing(results):
+        return missing_recovery_evidence(results, signature(results, THRESHOLDS))
+
+    check("healthy T1: no missing evidence", missing(rows()) == [])
+    check("degraded finite T1: not missing", missing(rows({"packet_loss_percent": 40.0})) == [])
+    check("T1 loss None: missing", missing(rows({"packet_loss_percent": None})) == ["T1_e2e_ping"])
+    check("T1 loss NaN: missing", missing(rows({"packet_loss_percent": float("nan")})) == ["T1_e2e_ping"])
+    check("T1 explicit error: missing", missing(rows({"error": "TimeoutError"})) == ["T1_e2e_ping"])
+    check("T1 absent: missing", missing(rows()[1:]) == ["T1_e2e_ping"])
+    check("T10 absent is optional", missing(rows(t10=None)) == [])
 
     check("fine unchanged: DO_NOTHING only", valid_fix_set(_actions(True, True, True)) == ["DO_NOTHING"])
     check("fine unchanged even if reroute errored", valid_fix_set(_actions(True, None, None)) == ["DO_NOTHING"])
