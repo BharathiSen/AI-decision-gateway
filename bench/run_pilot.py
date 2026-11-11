@@ -321,6 +321,7 @@ def _empty_bucket():
         "episode_seconds_known": 0,
         "recovery_seconds_sum": 0.0,
         "recovery_known": 0,
+        "recovery_excluded": 0,
     }
 
 
@@ -359,6 +360,7 @@ def empty_stats(episodes, seed, agent):
         "episode_seconds_known": 0,
         "recovery_seconds_sum": 0.0,
         "recovery_known": 0,
+        "recovery_excluded": 0,
         "invalid_output": 0,
         "diagnosis_top1": 0,
         "diagnosis_topk": 0,
@@ -437,7 +439,17 @@ def record_episode(stats, scenario, proposal, fault_id, gate, baseline, record, 
             thresholds=load_thresholds(noise_id),
         )
     elapsed = episode_seconds(record)
-    recovered = elapsed if record.get("remediation_succeeded") is True else None
+    from bench.metrics import recovery_seconds as _recovery_seconds
+
+    # Protocol §7: recovery time only from independent traffic recovery, never
+    # from remediation_succeeded / command success.
+    recovered_secs = _recovery_seconds(record)
+    recovery_status = (record or {}).get("recovery_status")
+    recovery_excluded = int(
+        recovered_secs is None
+        and recovery_status
+        in ("failed", "partial", "measurement_unavailable", "not_attempted")
+    )
 
     if valid:
         stats["episodes"] += 1
@@ -458,8 +470,9 @@ def record_episode(stats, scenario, proposal, fault_id, gate, baseline, record, 
         prediction_matched=pred_matched,
         episode_seconds_sum=elapsed or 0.0,
         episode_seconds_known=int(elapsed is not None),
-        recovery_seconds_sum=recovered or 0.0,
-        recovery_known=int(recovered is not None),
+        recovery_seconds_sum=recovered_secs or 0.0,
+        recovery_known=int(recovered_secs is not None),
+        recovery_excluded=recovery_excluded,
     )
     _bump(
         bucket,
@@ -478,8 +491,9 @@ def record_episode(stats, scenario, proposal, fault_id, gate, baseline, record, 
         prediction_matched=pred_matched,
         episode_seconds_sum=elapsed or 0.0,
         episode_seconds_known=int(elapsed is not None),
-        recovery_seconds_sum=recovered or 0.0,
-        recovery_known=int(recovered is not None),
+        recovery_seconds_sum=recovered_secs or 0.0,
+        recovery_known=int(recovered_secs is not None),
+        recovery_excluded=recovery_excluded,
     )
 
 
@@ -502,6 +516,7 @@ def _finalize_bucket(bucket):
     bucket["prediction_accuracy"] = _rate(bucket.get("prediction_matched", 0), checked)
     bucket["mean_episode_seconds"] = _rate(bucket.get("episode_seconds_sum", 0.0), known)
     bucket["mean_recovery_seconds"] = _rate(bucket.get("recovery_seconds_sum", 0.0), recovered)
+    bucket["recovery_excluded"] = int(bucket.get("recovery_excluded") or 0)
     return bucket
 
 
@@ -571,6 +586,11 @@ def finalize_stats(stats):
     stats.pop("agent_quality_rows", None)
     stats["mean_episode_seconds"] = _rate(stats["episode_seconds_sum"], stats["episode_seconds_known"])
     stats["mean_recovery_seconds"] = _rate(stats["recovery_seconds_sum"], stats["recovery_known"])
+    stats["recovery_excluded"] = int(stats.get("recovery_excluded") or 0)
+    stats["rate_denominators"] = {
+        **(stats.get("rate_denominators") or {}),
+        "mean_recovery_seconds": "recovery_known (traffic recovered only; excludes failed/partial/unavailable)",
+    }
     for bucket in stats.get("by_scenario", {}).values():
         _finalize_bucket(bucket)
     stats["generated_at"] = datetime.now(timezone.utc).isoformat()
@@ -1258,6 +1278,9 @@ def run_loop(args, net, links):
 
         def gate_fn(episode, _net=net):
             oam_results = (episode.get("oam") or {}).get("results") or []
+            noise_id = episode.get("noise_id")
+            if not noise_id:
+                raise ValueError("pilot gate_fn requires episode noise_id (N0/N1/N2)")
             return decide(
                 _net,
                 episode.get("agent_proposal"),
@@ -1265,7 +1288,7 @@ def run_loop(args, net, links):
                 oam_results,
                 mode="full",
                 run_missing_tests=False,
-                noise_id=episode.get("noise_id") or "N0",
+                noise_id=noise_id,
             )
 
         try:
@@ -1318,12 +1341,17 @@ def run_loop(args, net, links):
         stats["episodes_attempted"] = stats.get("episodes_attempted", 0) + 1
         record_agent_quality(stats, record)
         oam_results = (record.get("oam") or {}).get("results") or []
+        # run_episode teardown runs before this returns; never run live OAM on
+        # the post-teardown net. Replay with frozen snapshot/OAM (net=None).
+        b5_noise = record.get("noise_id") or scenario.get("noise_id")
+        if not b5_noise:
+            raise ValueError("pilot B5 requires episode/scenario noise_id (N0/N1/N2)")
         b = run_b5_independent(
             raw_proposal(record),
             record.get("network_snapshot") or {},
             oam_results,
-            net=net,
-            noise_id=record.get("noise_id") or scenario["noise_id"],
+            net=None,
+            noise_id=b5_noise,
         )
         record["b5_decision"] = b
         stats["episodes_with_b5"] = stats.get("episodes_with_b5", 0) + 1

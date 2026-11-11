@@ -259,20 +259,34 @@ def display_block(name, record, comparison=None, ping_after=None):
     return block
 
 
+SUITE_TIMEOUT_SECONDS = 360
+
+
+def _timeout_failure_detail(seconds):
+    return f"TIMEOUT after {seconds}s (command killed)"
+
+
 def run_suite():
     results = []
     failures = []
     for cmd in SUITE:
         label = " ".join(cmd[1:])
         print(f"  suite  {label}", flush=True)
+        # SUITE_TIMEOUT_SECONDS bounds hung children only. A finishing child that
+        # returns 0 still must satisfy its own assertions; timeout never becomes PASS.
         try:
             proc = subprocess.run(
                 cmd,
                 cwd=str(ROOT),
                 capture_output=True,
                 text=True,
-                timeout=180,
+                timeout=SUITE_TIMEOUT_SECONDS,
             )
+        except subprocess.TimeoutExpired:
+            detail = _timeout_failure_detail(SUITE_TIMEOUT_SECONDS)
+            results.append({"cmd": label, "returncode": 1, "error": detail, "timed_out": True})
+            failures.append(f"{label}: {detail}")
+            continue
         except (OSError, subprocess.SubprocessError) as exc:
             results.append({"cmd": label, "returncode": 1, "error": str(exc)})
             failures.append(f"{label}: {exc}")
@@ -362,6 +376,19 @@ def _self_check():
         write_json(FROZEN_RESULTS[0], {"no": True})
         failures.append("frozen overwrite was not refused")
     except ValueError:
+        pass
+
+    # Timeout termination: hung children fail closed with an explicit TIMEOUT mark.
+    assert "TIMEOUT" in _timeout_failure_detail(SUITE_TIMEOUT_SECONDS)
+    try:
+        subprocess.run(
+            [sys.executable, "-c", "import time; time.sleep(5)"],
+            capture_output=True,
+            text=True,
+            timeout=0.2,
+        )
+        failures.append("short sleep did not raise TimeoutExpired")
+    except subprocess.TimeoutExpired:
         pass
 
     suite_rows, suite_fail = run_suite()

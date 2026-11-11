@@ -91,7 +91,12 @@ def _load(path=None):
 
 
 def correct_actions(scenario_id, path=None):
-    """Measured correct actions within the system's action space."""
+    """Measured correct actions within the system's action space.
+
+    Returns the measured set even when the label is untrusted. Confirmatory
+    scoring must call `label_trust` / `score_arm` and exclude untrusted rows;
+    do not treat an empty set from a missing scenario as a trusted failure.
+    """
     row = _load(path)["labels"].get(scenario_id)
     if row is None:
         return set()
@@ -99,8 +104,25 @@ def correct_actions(scenario_id, path=None):
     return usable or {"ESCALATE"}
 
 
+def label_trust(scenario_id, path=None):
+    """Trust status for confirmatory ground truth.
+
+    Returns True (trusted), False (present but untrusted), or None (missing).
+    Protocol §3/§5: untrusted labels are reported separately and excluded from
+    primary rates. Missing is not a failure label.
+    """
+    row = _load(path)["labels"].get(scenario_id)
+    if row is None:
+        return None
+    return bool(row["trusted"])
+
+
 def is_labelled(scenario_id, path=None):
     return scenario_id in _load(path)["labels"]
+
+
+def is_trusted(scenario_id, path=None):
+    return label_trust(scenario_id, path) is True
 
 
 def provenance(path=None):
@@ -159,6 +181,19 @@ def _self_check():
         alt = Path(tmp) / "gt2.json"
         alt.write_text(json.dumps({"scenarios": {"X": {"expected_actions": ["REBALANCE"]}}}), encoding="utf-8")
         assert correct_actions("X", alt) == {"ESCALATE"}
+        trust_doc = {
+            "scenarios": {
+                "T1": {"expected_actions": ["REROUTE"], "trusted": True},
+                "T2": {"expected_actions": ["REROUTE"], "trusted": False},
+            }
+        }
+        trust_path = Path(tmp) / "trust.json"
+        trust_path.write_text(json.dumps(trust_doc), encoding="utf-8")
+        assert label_trust("T1", trust_path) is True
+        assert label_trust("T2", trust_path) is False
+        assert label_trust("NOPE", trust_path) is None
+        assert is_trusted("T1", trust_path) and not is_trusted("T2", trust_path)
+        assert correct_actions("T2", trust_path) == {"REROUTE"}, "measured set still readable"
     print("labels: PASS")
     return 0
 

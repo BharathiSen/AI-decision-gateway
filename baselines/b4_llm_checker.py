@@ -17,22 +17,37 @@ from gate.selector import covering_separating_tests, held_out_ids
 
 
 def _compact_expected(test_id, expected):
-    """Fit catalog outcomes into the proposal expected-length contract."""
-    if not isinstance(expected, str) or len(expected) <= MAX_EXPECTED_LEN:
-        return expected
+    """Fit catalog outcomes into the proposal expected-length contract.
+
+    Never blind-truncate: a corrupted prefix would give B4 different scoring
+    semantics than VeriFix. T2 may drop ok hops (partial match is intentional).
+    Returns None when no safe representation fits MAX_EXPECTED_LEN.
+    """
+    if not isinstance(expected, str):
+        return None
     if test_id == "T2_hop_ping":
         parsed = parse_t2_prediction(expected)
         if not parsed.get("ok"):
-            return expected[:MAX_EXPECTED_LEN]
-        # Partial prediction: only non-ok hops (still match observed grades).
-        by_path = {"primary": [], "backup": []}
-        for (path, hop), outcome in (parsed.get("pairs") or {}).items():
-            if outcome != "ok" and path in by_path:
-                by_path[path].append(f"{hop}={outcome}")
-        parts = [f"{path}:" + ",".join(hops) for path, hops in by_path.items() if hops]
-        compact = ";".join(parts) if parts else expected[:MAX_EXPECTED_LEN]
-        return compact if len(compact) <= MAX_EXPECTED_LEN else compact[:MAX_EXPECTED_LEN]
-    return expected[:MAX_EXPECTED_LEN]
+            return None
+        if len(expected) <= MAX_EXPECTED_LEN:
+            return expected
+    elif len(expected) <= MAX_EXPECTED_LEN:
+        return expected
+    else:
+        return None
+    if test_id != "T2_hop_ping":
+        return None
+    # len(expected) > MAX_EXPECTED_LEN and parse already succeeded.
+    # Partial prediction: only non-ok hops (still match observed grades).
+    by_path = {"primary": [], "backup": []}
+    for (path, hop), outcome in (parsed.get("pairs") or {}).items():
+        if outcome != "ok" and path in by_path:
+            by_path[path].append(f"{hop}={outcome}")
+    parts = [f"{path}:" + ",".join(hops) for path, hops in by_path.items() if hops]
+    if not parts:
+        return None
+    compact = ";".join(parts)
+    return compact if len(compact) <= MAX_EXPECTED_LEN else None
 
 
 def _catalog_predictions(cause_id, test_ids, matrix):
@@ -45,8 +60,11 @@ def _catalog_predictions(cause_id, test_ids, matrix):
             (row["outcome"] for row in matrix if row["fault_id"] == cause_id and row["test_id"] == tid),
             None,
         )
-        if expected is not None:
-            preds.append({"test_id": tid, "expected": _compact_expected(tid, expected)})
+        if expected is None:
+            continue
+        compact = _compact_expected(tid, expected)
+        if compact is not None:
+            preds.append({"test_id": tid, "expected": compact})
     return preds
 
 

@@ -65,7 +65,7 @@ budget for newly executed OAM: `DEFAULT_BUDGET_SECONDS = 8.0`
 |---|---|---|
 | **VeriFix** (`gate.decide` / `gate_full`) | Gate with AI `predicted_tests`, covering separators, safety, discrimination, discriminating-scope consistency | Treatment |
 | **B4** | Same `gate.decide`; primary expected outcomes filled from the development observability matrix. **Not an LLM.** | Primary control (isolates prediction source) |
-| **B5** | Non-AI adaptive: covering separators when available; positive-support separation; same noise thresholds and DO_NOTHING cause-permit rule as VeriFix | Primary control (non-AI adaptive) |
+| **B5** | Non-AI adaptive: same candidate/relevant sets and covering separators as VeriFix/B4; catalog outcomes for H6 positive-support elimination of **every** relevant alternative; same noise thresholds and DO_NOTHING cause-permit rule | Primary control (non-AI adaptive) |
 | **B3** | Catalog nearest-neighbour on cheapest-first tests within the 8 s budget; episode noise thresholds. **Not a trained ML model.** | Non-AI reference |
 | **B2** | Full OAM battery then fixed rules (may exceed 8 s live) | Full-OAM cost upper bound |
 | **B1** | Fixed loss-then-reroute rules on telemetry; no tests | Minimal-OAM reference |
@@ -175,6 +175,11 @@ agent’s proposed action.
 
 Command success is never recovery: episode `recovery_status` /
 `traffic_recovered` come from post-action OAM (`bench/run_episode.py`).
+Absent, errored, or ungradable required recovery rows (T1/T4/T8) yield
+`measurement_unavailable` / `traffic_recovered=None`; `valid_fix_set` then
+refuses a trusted label. T10 remains optional under the frozen recovery rule.
+Historical labels produced under older T4/T8 missing-row treatment are not
+rewritten; new campaigns use this rule.
 
 ---
 
@@ -224,11 +229,16 @@ halts.
 
 - Per arm and slice: rate with **Wilson 95% CI**.
 - Primary test: exact two-sided **McNemar** on discordant configurations for
-  false-ALLOW, VeriFix vs B4 and VeriFix vs B5, **Holm-adjusted**, α = 0.05.
+  false-ALLOW, VeriFix vs B4 and VeriFix vs B5, **Holm-adjusted**, α = 0.05
+  (`bench/metrics.py`: `mcnemar_holm_p` on those pairs only).
 - All other comparisons are **descriptive** (no confirmatory p-values).
 - Cost: paired mean difference with percentile bootstrap CI over
   configurations (implement before claiming cost superiority; do not invent
-  numbers).
+  numbers). **Unresolved method details** (must be fixed before coding a
+  confirmatory cost CI): bootstrap replicate count `B`, percentile endpoints
+  (e.g. 2.5/97.5 vs other), RNG seed policy, exact cost field
+  (`test_cost_seconds` vs wall time), and missing-cost handling. Until those
+  are specified, report descriptive cost means only.
 - Slices: known / held-out / compound / noise / stress; report null and
   negative results.
 

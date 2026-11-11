@@ -195,9 +195,12 @@ def _self_check():
     b1_loss = run_method("B1", shared, lossy, [], noise_id="N0")
     assert b1_loss["action"] == "REROUTE" and b1_loss["path"] == ["r1", "r3", "r4"]
 
+    t1_ok = [{"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0, "latency_ms": 12, "connectivity": True}]
     t8_fail = [{"test_id": "T8_tcp_vs_ping", "ping_ok": True, "tcp_ok": False}]
-    b2_acl = run_method("B2", shared, healthy, t8_fail, noise_id="N0")
+    # ACL rule still fires when required T1 is present and healthy.
+    b2_acl = run_method("B2", shared, healthy, t1_ok + t8_fail, noise_id="N0")
     assert b2_acl["action"] == "ESCALATE", b2_acl
+    assert "missing_evidence" not in b2_acl, b2_acl
     t1_loss = [{"test_id": "T1_e2e_ping", "packet_loss_percent": 40, "latency_ms": 12, "connectivity": True}]
     b2_reroute = run_method("B2", shared, healthy, t1_loss, noise_id="N0")
     assert b2_reroute["action"] == "REROUTE", b2_reroute
@@ -205,21 +208,26 @@ def _self_check():
     assert b2_f12["action"] == "ESCALATE", b2_f12
     # Replay (net is None) must not pretend a battery ran.
     assert b2_reroute["tests_run"] == ["T1_e2e_ping"]
-    # Missing T1 evidence (loss None / non-finite, no error) must not fall
-    # through to the healthy DO_NOTHING/allow default.
-    t1_ok = [{"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0, "latency_ms": 12, "connectivity": True}]
+    # Missing / ungradable / errored T1 must not fall through to DO_NOTHING.
     b2_ok = run_method("B2", shared, healthy, t1_ok, noise_id="N0")
     assert b2_ok["action"] == "DO_NOTHING" and b2_ok["decision"] == "allow", b2_ok
+    b2_absent = run_method("B2", shared, healthy, [], noise_id="N0")
+    assert b2_absent["decision"] == "escalate" and b2_absent["action"] == "ESCALATE", b2_absent
+    assert b2_absent["missing_evidence"] == ["T1_e2e_ping"], b2_absent
+    # T8-only battery without T1 escalates on missing required evidence.
+    b2_t8_only = run_method("B2", shared, healthy, t8_fail, noise_id="N0")
+    assert b2_t8_only["decision"] == "escalate" and b2_t8_only["missing_evidence"] == ["T1_e2e_ping"], b2_t8_only
     for bad in (None, float("nan"), float("inf")):
         t1_missing = [dict(t1_ok[0], packet_loss_percent=bad)]
         b2_missing = run_method("B2", shared, healthy, t1_missing, noise_id="N0")
         assert b2_missing["decision"] == "escalate" and b2_missing["action"] == "ESCALATE", (bad, b2_missing)
         assert b2_missing["missing_evidence"] == ["T1_e2e_ping"], (bad, b2_missing)
         assert b2_missing["path"] == [], (bad, b2_missing)
-    # Explicit structured T1 errors keep their existing handling (not this rule).
     t1_err = [dict(t1_ok[0], packet_loss_percent=None, error="TimeoutError: ping timed out")]
     b2_err = run_method("B2", shared, healthy, t1_err, noise_id="N0")
-    assert "missing_evidence" not in b2_err and b2_err["reason"] == "full battery then rules", b2_err
+    assert b2_err["decision"] == "escalate" and b2_err["action"] == "ESCALATE", b2_err
+    assert b2_err["missing_evidence"] == ["T1_e2e_ping"], b2_err
+    assert "required evidence unavailable" in (b2_err.get("reason") or ""), b2_err
 
     t10 = {"test_id": "T10_speed", "mbit_per_sec": 0.1}
     b3 = run_method("B3", shared, healthy, t1_loss + [t10], budget_seconds=3.0, noise_id="N0")
@@ -238,6 +246,34 @@ def _self_check():
     b4_f1 = run_method("B4", caused, healthy, t1_loss, noise_id="N0")
     assert b4_f1["decision"] in _DECISIONS
     assert b4_f1["method"] == "B4"
+    # B4 must never blind-truncate catalog T2 into an unparseable prefix.
+    from agent.validate import MAX_EXPECTED_LEN
+    from baselines.b4_llm_checker import _catalog_predictions, _compact_expected
+
+    long_ok = "primary:hostA-r1=ok,r1-r2=ok,r2-r4=ok,r4-hostB=ok;backup:hostA-r1=ok,r1-r3=ok,r3-r4=ok,r4-hostB=ok"
+    assert len(long_ok) > MAX_EXPECTED_LEN
+    assert _compact_expected("T2_hop_ping", long_ok) is None
+    assert _compact_expected("T1_e2e_ping", "x" * (MAX_EXPECTED_LEN + 1)) is None
+    assert _compact_expected("T2_hop_ping", "not-a-t2-grade") is None
+    assert _compact_expected("T2_hop_ping", "") is None
+    assert _compact_expected("T2_hop_ping", None) is None
+    # Incomplete / unparseable structured text must not become a truncated prefix.
+    assert _compact_expected("T2_hop_ping", "primary:hostA-r1=ok,r1-r2=") is None
+    oversized_prefix = long_ok[:MAX_EXPECTED_LEN]
+    assert _compact_expected("T2_hop_ping", long_ok) != oversized_prefix
+    f1_t2 = next(row["outcome"] for row in _load_matrix() if row["fault_id"] == "F1" and row["test_id"] == "T2_hop_ping")
+    compact_f1 = _compact_expected("T2_hop_ping", f1_t2)
+    assert compact_f1 is not None and len(compact_f1) <= MAX_EXPECTED_LEN, compact_f1
+    assert "r2-r4=down" in compact_f1 and "=ok" not in compact_f1, compact_f1
+    from bench.contracts import parse_t2_prediction
+
+    assert parse_t2_prediction(compact_f1).get("ok") is True, compact_f1
+    filled = _catalog_predictions("F1", ["T2_hop_ping", "T1_e2e_ping"], _load_matrix())
+    assert any(p["test_id"] == "T2_hop_ping" and len(p["expected"]) <= MAX_EXPECTED_LEN for p in filled), filled
+    assert all(len(p["expected"]) <= MAX_EXPECTED_LEN for p in filled), filled
+    # H0 all-ok T2 is too long and has no non-ok hops: omit rather than truncate.
+    h0_preds = _catalog_predictions("H0", ["T2_hop_ping"], _load_matrix())
+    assert not any(p["test_id"] == "T2_hop_ping" for p in h0_preds), h0_preds
 
     b5 = run_method("B5", shared, healthy, [], noise_id="N0")
     assert b5["decision"] == "escalate" and b5["reason"] == "no cause"
@@ -273,6 +309,33 @@ def _self_check():
         noise_id="N0",
     )
     assert b5_no_cause["decision"] == "escalate" and "missing cause" in b5_no_cause["reason"], b5_no_cause
+    # B5 must evaluate every relevant alternative (not alts[0] only).
+    from baselines.b5_adaptive import decide_b5
+    import inspect as _inspect
+
+    b5_src = _inspect.getsource(decide_b5)
+    assert "alts[0]" not in b5_src
+    assert "for alt in relevant" in b5_src
+    # Multi-cause proposal expands candidates so ≥2 relevant alts need elimination.
+    multi = {
+        "action": "REROUTE",
+        "target": "HostA_to_HostB",
+        "reason": "multi-alt",
+        "proposed_path": ["r1", "r3", "r4"],
+        "causes": [
+            {"cause_id": "F1", "predicted_tests": []},
+            {"cause_id": "F10", "predicted_tests": []},
+            {"cause_id": "F11", "predicted_tests": []},
+        ],
+    }
+    b5_multi = decide_b5(None, multi, lossy, t1_loss, run_tests=False, noise_id="N0")
+    assert len(b5_multi.get("relevant_alternatives") or []) >= 2, b5_multi
+    # Incomplete evidence across the full relevant set must not allow.
+    assert b5_multi["decision"] != "allow", b5_multi
+    assert b5_multi["decision"] == "escalate", b5_multi
+    assert set(b5_multi.get("remaining_alternatives") or []) == set(
+        b5_multi.get("relevant_alternatives") or []
+    ), b5_multi
     # H5: B3/B4/B5 receive the same noise_id thresholds / budget contract.
     b3_n1 = run_method("B3", shared, healthy, t1_loss, noise_id="N1")
     assert b3_n1.get("noise_id") == "N1"

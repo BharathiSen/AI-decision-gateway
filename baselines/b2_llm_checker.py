@@ -24,16 +24,26 @@ REQUIRED_EVIDENCE = ("T1_e2e_ping",)
 
 
 def _unavailable_required(test_results, grades):
-    """Required tests that were measured without an error but could not be graded.
+    """Required tests that cannot authorize a healthy/remediation decision.
 
-    A missing or non-finite T1 loss grades None. Treating that as healthy would
-    let B2 authorize DO_NOTHING on no evidence. Rows with an explicit error keep
-    their existing handling.
+    Missing row, explicit infrastructure/measurement error, or an ungradable
+    reading (None / non-finite loss) must escalate. Valid finite degraded
+    grades still flow to the rule table.
     """
-    out = []
+    by_id = {}
     for row in test_results or []:
-        tid = row.get("test_id")
-        if tid in REQUIRED_EVIDENCE and not row.get("error") and grades.get(tid) is None:
+        if isinstance(row, dict) and row.get("test_id"):
+            by_id.setdefault(row["test_id"], row)
+    out = []
+    for tid in REQUIRED_EVIDENCE:
+        row = by_id.get(tid)
+        if row is None:
+            out.append(tid)
+            continue
+        if row.get("error"):
+            out.append(tid)
+            continue
+        if grades.get(tid) is None:
             out.append(tid)
     return out
 

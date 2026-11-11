@@ -88,15 +88,44 @@ def invalid_gate_outcome(method="gate_v0", budget_seconds=None):
 
 
 def score_arm(decision, action, fault_id):
-    """Score one arm against the action it actually evaluated.
+    """Score one arm against a trusted measured label.
 
-    An empty action means nothing could be executed, so no allow is unsafe.
+    Protocol §3/§7: untrusted and missing labels are excluded from confirmatory
+    ground-truth metrics. They are not treated as failures. An empty action
+    means nothing could be executed, so no allow is unsafe.
     """
+    from bench.labels import label_trust
+
     action = action or ""
+    trust = label_trust(fault_id)
+    if trust is True:
+        label_status = "trusted"
+    elif trust is False:
+        label_status = "untrusted"
+    else:
+        label_status = "missing"
+    if trust is not True:
+        return {
+            "evaluated_action": action,
+            "label_status": label_status,
+            "label_trusted": False,
+            "confirmatory": False,
+            "excluded_from_confirmatory": True,
+            "proposal_wrong": False,
+            "proposal_correct": False,
+            "false_allow": False,
+            "correct_allow": False,
+            "blocked_correct": False,
+            "unnecessary_escalation": False,
+        }
     correct = bool(action) and action in _correct(fault_id)
     wrong = bool(action) and not correct
     return {
         "evaluated_action": action,
+        "label_status": "trusted",
+        "label_trusted": True,
+        "confirmatory": True,
+        "excluded_from_confirmatory": False,
         "proposal_wrong": wrong,
         "proposal_correct": correct,
         "false_allow": bool(decision == "allow" and wrong),
@@ -120,14 +149,19 @@ def strategy_inputs(record):
     """Shared starting state. Omits true labels and ground truth.
 
     Invalid episodes keep proposal=None. Callers must not invent DO_NOTHING.
+    Active replay/grading requires an explicit episode noise_id (N0/N1/N2);
+    silent N0 fallback would mis-grade other traffic levels.
     """
     record = record or {}
+    noise_id = record.get("noise_id")
+    if not noise_id:
+        raise ValueError("strategy_inputs requires record['noise_id'] (N0/N1/N2)")
     proposal = None if proposal_is_invalid(record) else record.get("agent_proposal")
     return {
         "proposal": proposal,
         "snapshot": record.get("network_snapshot") or {},
         "test_results": (record.get("oam") or {}).get("results") or [],
-        "noise_id": record.get("noise_id") or "N0",
+        "noise_id": noise_id,
     }
 
 
@@ -190,6 +224,7 @@ def run_b5_independent(proposal, snapshot, test_results, net=None, budget_second
     """B5 on a sanitized proposal. Empty input is escalate, not invented DO_NOTHING.
 
     noise_id grades B5 with the same traffic-level thresholds as the gate.
+    Post-teardown nets are refused for live OAM (see `_verifix_teardown_complete`).
     """
     if noise_id is None:
         raise ValueError("run_b5_independent requires noise_id (episode traffic level)")
@@ -197,6 +232,19 @@ def run_b5_independent(proposal, snapshot, test_results, net=None, budget_second
     cleaned = b5_safe_proposal(proposal)
     if not cleaned:
         return invalid_gate_outcome("B5", cap)
+    if net is not None and getattr(net, "_verifix_teardown_complete", False):
+        return attach_contract(
+            {
+                "method": "B5",
+                "action": cleaned.get("action"),
+                "tests_run": [row.get("test_id") for row in (test_results or []) if row.get("test_id")],
+                "decision": "escalate",
+                "reason": "net torn down; refuse post-teardown OAM",
+                "noise_id": noise_id,
+            },
+            cleaned,
+            budget_seconds=cap,
+        )
     return run_method("B5", cleaned, snapshot, test_results, net=net, budget_seconds=cap, noise_id=noise_id)
 
 
