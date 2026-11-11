@@ -1491,10 +1491,37 @@ from bench.outcomes import using_test_thresholds  # offline checks grade with te
 @using_test_thresholds
 def _self_check():
     """Offline Stage 13 checks. Does not touch Mininet or results/pilot/summary.json."""
+    import os
     import tempfile
+
+    from bench import labels as labels_mod
 
     summary = DEFAULT_OUT
     before = summary.read_bytes() if summary.exists() else None
+
+    scratch_dir = tempfile.TemporaryDirectory()
+    scratch_path = Path(scratch_dir.name) / "trusted_consensus.json"
+    gt_doc = json.loads((ROOT / "results" / "ground_truth.json").read_text(encoding="utf-8"))
+    for _sid, row in (gt_doc.get("scenarios") or {}).items():
+        if isinstance(row, dict):
+            row["trusted"] = True
+    scratch_path.write_text(json.dumps(gt_doc), encoding="utf-8")
+    prev_labels = os.environ.get("VERIFIX_LABELS")
+    os.environ["VERIFIX_LABELS"] = str(scratch_path)
+    labels_mod._CACHE.clear()
+    try:
+        return _self_check_body(summary, before)
+    finally:
+        if prev_labels is None:
+            os.environ.pop("VERIFIX_LABELS", None)
+        else:
+            os.environ["VERIFIX_LABELS"] = prev_labels
+        labels_mod._CACHE.clear()
+        scratch_dir.cleanup()
+
+
+def _self_check_body(summary, before):
+    import tempfile
 
     hidden = inj.held_out_ids()
     kinds = {"healthy": 0, "normal": 0, "stress": 0}
@@ -1666,7 +1693,11 @@ def _self_check():
     record = {
         "started_at": now.isoformat(),
         "completed_at": now.isoformat(),
+        "noise_id": "N0",
         "remediation_succeeded": True,
+        # Command success without traffic recovery must not count as recovery time.
+        "recovery_status": "failed",
+        "traffic_recovered": False,
         "oam": {"results": oam},
     }
     stats = empty_stats(3, 1, "stub")
@@ -1705,13 +1736,52 @@ def _self_check():
         {"decision": "allow", "action": "REROUTE", "tests_run": []},
         record,
     )
+    # Genuine measured recovery contributes; command-success-only does not.
+    recovered_rec = {
+        "started_at": now.isoformat(),
+        "completed_at": now.isoformat(),
+        "noise_id": "N0",
+        "remediation_succeeded": False,
+        "recovery_status": "recovered",
+        "traffic_recovered": True,
+        "recovery_time_seconds": 7.5,
+        "oam": {"results": oam},
+    }
+    record_episode(
+        stats,
+        {"kind": "normal"},
+        correct,
+        "F1",
+        {"decision": "allow", "tests_run": []},
+        {"decision": "allow", "action": "REROUTE", "tests_run": []},
+        recovered_rec,
+    )
+    unavailable_rec = dict(
+        recovered_rec,
+        recovery_status="measurement_unavailable",
+        traffic_recovered=None,
+        recovery_time_seconds=None,
+        remediation_succeeded=True,
+    )
+    record_episode(
+        stats,
+        {"kind": "normal"},
+        correct,
+        "F1",
+        {"decision": "block", "tests_run": []},
+        {"decision": "escalate", "action": "REROUTE", "tests_run": []},
+        unavailable_rec,
+    )
     final = finalize_stats(stats)
-    assert final["episodes"] == 3
-    assert final["gate_v0_block_correct"] == 1
+    assert final["episodes"] == 5
+    assert final["gate_v0_block_correct"] >= 1
     assert final["b5_block_correct"] == 0
     assert final["gate_v0_unsafe"] >= 1
     assert "prediction_accuracy" in final
     assert "mean_episode_seconds" in final
+    assert final["mean_recovery_seconds"] == 7.5, final["mean_recovery_seconds"]
+    assert final["recovery_known"] == 1, final["recovery_known"]
+    assert final["recovery_excluded"] >= 2, final["recovery_excluded"]
     quality_stats = empty_stats(2, 1, "stub")
     record_agent_quality(
         quality_stats,
@@ -1745,7 +1815,7 @@ def _self_check():
     assert set(final["by_scenario"]) == {"healthy", "normal", "stress"}
     assert final["by_scenario"]["stress"]["episodes"] == 1
     assert final["paired"] is False
-    assert final["episodes_scored"] == 3
+    assert final["episodes_scored"] == 5
     invalid_stats = empty_stats(2, 1, "stub")
     record_episode(
         invalid_stats,

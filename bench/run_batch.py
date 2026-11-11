@@ -336,6 +336,9 @@ def _stub_and_gate(scenario, net=None):
 
     def gate_fn(episode, _net=net):
         oam_results = (episode.get("oam") or {}).get("results") or []
+        noise_id = episode.get("noise_id") or scenario.get("noise_id")
+        if not noise_id:
+            raise ValueError("batch gate_fn requires episode/scenario noise_id (N0/N1/N2)")
         return decide(
             _net,
             episode.get("agent_proposal"),
@@ -343,7 +346,7 @@ def _stub_and_gate(scenario, net=None):
             oam_results,
             mode="pilot_v0" if scenario.get("strategy") == "gate_v0" else "full",
             run_missing_tests=False,
-            noise_id=episode.get("noise_id") or scenario.get("noise_id") or "N0",
+            noise_id=noise_id,
         )
 
     return agent_fn, gate_fn
@@ -355,11 +358,14 @@ def run_one(net, links, scenario, timeout_seconds=0):
     compound_id = scenario.get("compound_id")
 
     def _run():
+        noise_id = scenario.get("noise_id")
+        if not noise_id:
+            raise ValueError("batch run_one requires scenario['noise_id'] (N0/N1/N2)")
         return run_episode(
             net,
             links,
             fault_id=fault_id,
-            noise_id=scenario.get("noise_id") or "N0",
+            noise_id=noise_id,
             seed=scenario.get("seed"),
             compound_id=compound_id,
             run_oam=True,

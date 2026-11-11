@@ -861,10 +861,14 @@ def summarize(scored_rows):
 
     clustered_out = {}
     for name, bucket in clustered.items():
+        n_conf = bucket["n_confirmatory"] or 0
         clustered_out[name] = {
             "n_configs": bucket["n"],
-            "false_allow_config_mean": (bucket["false_allow"] / bucket["n"]) if bucket["n"] else None,
-            "unsafe_action_config_mean": (bucket["unsafe_action"] / bucket["n"]) if bucket["n"] else None,
+            "n_confirmatory_configs": n_conf,
+            "excluded_untrusted": bucket["excluded_untrusted"],
+            "excluded_missing_label": bucket["excluded_missing_label"],
+            "false_allow_config_mean": (bucket["false_allow"] / n_conf) if n_conf else None,
+            "unsafe_action_config_mean": (bucket["unsafe_action"] / n_conf) if n_conf else None,
         }
 
     return {
@@ -940,8 +944,45 @@ from bench.outcomes import using_test_thresholds  # offline checks grade with te
 
 @using_test_thresholds
 def _self_check():
+    import os
+
+    from bench import labels as labels_mod
+
     before = _snapshot_frozen()
     hidden = held_out_ids()
+
+    # Scratch consensus: mark measured scenarios trusted so confirmatory rates
+    # exercise the protocol path. Never rewrite results/ground_truth.json.
+    scratch_dir = tempfile.TemporaryDirectory()
+    scratch_path = Path(scratch_dir.name) / "trusted_consensus.json"
+    gt_doc = json.loads((ROOT / "results" / "ground_truth.json").read_text(encoding="utf-8"))
+    for _sid, row in (gt_doc.get("scenarios") or {}).items():
+        if isinstance(row, dict):
+            row["trusted"] = True
+    scratch_path.write_text(json.dumps(gt_doc), encoding="utf-8")
+    prev_labels = os.environ.get("VERIFIX_LABELS")
+    os.environ["VERIFIX_LABELS"] = str(scratch_path)
+    labels_mod._CACHE.clear()
+
+    try:
+        _self_check_body(before, hidden)
+    finally:
+        if prev_labels is None:
+            os.environ.pop("VERIFIX_LABELS", None)
+        else:
+            os.environ["VERIFIX_LABELS"] = prev_labels
+        labels_mod._CACHE.clear()
+        scratch_dir.cleanup()
+    print(f"live-metrics build: {LIVE_METRICS_BUILD}")
+    print("metrics engine: PASS")
+    return 0
+
+
+def _self_check_body(before, hidden):
+    import os
+
+    from bench import labels as labels_mod
+    from bench.labels import label_trust
 
     lo, hi = wilson_ci(0, 10)
     assert 0.0 <= lo <= hi <= 1.0
@@ -1010,6 +1051,9 @@ def _self_check():
         "started_at": "2026-01-01T00:00:00+00:00",
         "completed_at": "2026-01-01T00:00:08+00:00",
         "remediation_succeeded": True,
+        "recovery_status": "recovered",
+        "traffic_recovered": True,
+        "recovery_time_seconds": 5.0,
         "agent_proposal": {"action": "REROUTE", "proposed_path": ["r1", "r3", "r4"]},
         "decisions": {
             "B0": {"decision": "allow", "tests_run": []},
@@ -1430,10 +1474,92 @@ def _self_check():
     except ValueError:
         pass
 
+    # Recovery time: independent traffic recovery only (protocol §7).
+    recovered_rec = {
+        "recovery_status": "recovered",
+        "traffic_recovered": True,
+        "recovery_time_seconds": 12.5,
+        "remediation_succeeded": False,
+    }
+    assert recovery_seconds(recovered_rec) == 12.5
+    cmd_ok_no_traffic = {
+        "remediation_succeeded": True,
+        "recovery_status": "failed",
+        "traffic_recovered": False,
+        "recovery_time_seconds": 99.0,
+        "started_at": "2026-01-01T00:00:00+00:00",
+        "completed_at": "2026-01-01T00:01:00+00:00",
+    }
+    assert recovery_seconds(cmd_ok_no_traffic) is None
+    cmd_fail_but_recovered = {
+        "remediation_succeeded": False,
+        "recovery_status": "recovered",
+        "traffic_recovered": True,
+        "recovery_time_seconds": 4.0,
+    }
+    assert recovery_seconds(cmd_fail_but_recovered) == 4.0
+    unavailable = {
+        "remediation_succeeded": True,
+        "recovery_status": "measurement_unavailable",
+        "traffic_recovered": None,
+    }
+    assert recovery_seconds(unavailable) is None
+    partial = {"recovery_status": "partial", "traffic_recovered": False, "remediation_succeeded": True}
+    assert recovery_seconds(partial) is None
+    legacy_cmd_only = {"remediation_succeeded": True, "started_at": "2026-01-01T00:00:00+00:00", "completed_at": "2026-01-01T00:00:30+00:00"}
+    assert recovery_seconds(legacy_cmd_only) is None
+
+    # Trusted → untrusted mutation removes confirmatory false_allow (scratch copy).
+    with tempfile.TemporaryDirectory() as tmp:
+        untrusted_path = Path(tmp) / "untrusted.json"
+        trusted_doc = json.loads(Path(os.environ["VERIFIX_LABELS"]).read_text(encoding="utf-8"))
+        for row in (trusted_doc.get("scenarios") or {}).values():
+            if isinstance(row, dict):
+                row["trusted"] = False
+        untrusted_path.write_text(json.dumps(trusted_doc), encoding="utf-8")
+        unsafe_ep = {
+            "episode_id": "trust-mut",
+            "fault_id": "F12",
+            "seed": 1,
+            "topology": "diamond",
+            "mode": "normal",
+            "noise_id": "N0",
+            "agent_proposal": {"action": "REROUTE", "proposed_path": ["r1", "r3", "r4"]},
+            "decisions": {
+                "B0": {"decision": "allow", "action": "REROUTE", "tests_run": []},
+                "verifix": {"decision": "block", "action": "REROUTE", "tests_run": []},
+            },
+        }
+        trusted_report, trusted_rows = evaluate_records([unsafe_ep])
+        assert trusted_rows[0]["label_trusted"] is True
+        assert trusted_rows[0]["strategies"]["B0"]["false_allow"] is True
+        assert trusted_report["slices"]["all"]["B0"]["false_allow"]["count"] == 1
+        assert trusted_report["slices"]["all"]["B0"]["false_allow"]["denominator"] == 1
+        prev = os.environ["VERIFIX_LABELS"]
+        os.environ["VERIFIX_LABELS"] = str(untrusted_path)
+        labels_mod._CACHE.clear()
+        try:
+            assert label_trust("F12") is False
+            untrusted_report, untrusted_rows = evaluate_records([unsafe_ep])
+            assert untrusted_rows[0]["label_trusted"] is False
+            assert untrusted_rows[0]["strategies"]["B0"]["false_allow"] is False
+            assert untrusted_rows[0]["strategies"]["B0"]["excluded_from_confirmatory"] is True
+            b0u = untrusted_report["slices"]["all"]["B0"]
+            assert b0u["false_allow"]["count"] == 0
+            assert b0u["false_allow"]["denominator"] == 0
+            assert b0u["excluded_untrusted"] == 1
+            assert b0u["n"] == 1 and b0u["n_confirmatory"] == 0
+        finally:
+            os.environ["VERIFIX_LABELS"] = prev
+            labels_mod._CACHE.clear()
+
+    # Missing label is not a confirmatory failure.
+    missing_score = score_arm("allow", "REROUTE", "NO_SUCH_SCENARIO")
+    assert missing_score["excluded_from_confirmatory"] is True
+    assert missing_score["false_allow"] is False
+    assert missing_score["label_status"] == "missing"
+
     _assert_frozen(before)
-    print(f"live-metrics build: {LIVE_METRICS_BUILD}")
-    print("metrics engine: PASS")
-    return 0
 
 
 def live_metrics():

@@ -589,10 +589,37 @@ from bench.outcomes import using_test_thresholds  # offline checks grade with te
 @using_test_thresholds
 def _self_check():
     """Offline Stage 14 checks. Does not write results/experiment_summary.json."""
+    import os
     import tempfile
+
+    from bench import labels as labels_mod
 
     summary_path = ROOT / "results" / "experiment_summary.json"
     before = summary_path.read_bytes() if summary_path.exists() else None
+
+    scratch_dir = tempfile.TemporaryDirectory()
+    scratch_path = Path(scratch_dir.name) / "trusted_consensus.json"
+    gt_doc = json.loads((ROOT / "results" / "ground_truth.json").read_text(encoding="utf-8"))
+    for _sid, row in (gt_doc.get("scenarios") or {}).items():
+        if isinstance(row, dict):
+            row["trusted"] = True
+    scratch_path.write_text(json.dumps(gt_doc), encoding="utf-8")
+    prev_labels = os.environ.get("VERIFIX_LABELS")
+    os.environ["VERIFIX_LABELS"] = str(scratch_path)
+    labels_mod._CACHE.clear()
+    try:
+        return _self_check_body(summary_path, before)
+    finally:
+        if prev_labels is None:
+            os.environ.pop("VERIFIX_LABELS", None)
+        else:
+            os.environ["VERIFIX_LABELS"] = prev_labels
+        labels_mod._CACHE.clear()
+        scratch_dir.cleanup()
+
+
+def _self_check_body(summary_path, before):
+    import tempfile
 
     assert "fault_id" not in inspect.signature(run_method).parameters
     assert "fault_id" not in inspect.signature(run_strategies).parameters
@@ -634,7 +661,9 @@ def _self_check():
     inputs = strategy_inputs(record)
     assert "fault_id" not in inputs
     assert "ground_truth" not in inputs
-    missing = strategy_inputs({"agent_error": "invalid agent output", "agent_proposal": None})
+    missing = strategy_inputs(
+        {"agent_error": "invalid agent output", "agent_proposal": None, "noise_id": "N0"}
+    )
     assert missing["proposal"] is None
     alias_wrong = _wrong({"action": "no_action"}, "H0")
     assert alias_wrong is True
@@ -852,6 +881,16 @@ def _self_check():
         raise AssertionError("run_strategies accepted missing noise_id")
     except ValueError as exc:
         assert "noise_id" in str(exc)
+    try:
+        strategy_inputs({"agent_proposal": proposal, "network_snapshot": snap, "oam": {"results": oam}})
+        raise AssertionError("strategy_inputs accepted missing noise_id")
+    except ValueError as exc:
+        assert "noise_id" in str(exc)
+    for level in ("N0", "N1", "N2"):
+        leveled_inputs = strategy_inputs(
+            {"agent_proposal": proposal, "network_snapshot": snap, "oam": {"results": oam}, "noise_id": level}
+        )
+        assert leveled_inputs["noise_id"] == level
     strat_src = inspect.getsource(run_strategies)
     assert "noise_id=noise_id" in strat_src
     assert 'noise_id="N0"' not in strat_src and "noise_id='N0'" not in strat_src
@@ -859,6 +898,12 @@ def _self_check():
         leveled = run_strategies(proposal, snap, oam, net=None, noise_id=level)
         assert leveled["B3"].get("noise_id") == level, (level, leveled["B3"])
         assert leveled["B5"].get("noise_id") == level, (level, leveled["B5"])
+    # Post-teardown net must not run live B5 OAM.
+    class _Torn:
+        _verifix_teardown_complete = True
+
+    torn = run_b5_independent(proposal, snap, oam, net=_Torn(), noise_id="N0")
+    assert torn["decision"] == "escalate" and "torn down" in (torn.get("reason") or ""), torn
     if decisions["B3"].get("matched_fault") in hidden:
         raise AssertionError(f"B3 used held-out label {decisions['B3'].get('matched_fault')}")
 

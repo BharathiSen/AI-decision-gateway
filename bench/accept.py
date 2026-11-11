@@ -164,6 +164,9 @@ def misleading_proposal(_snapshot=None):
 def make_gate_fn(net, mode="full"):
     def gate_fn(episode, _net=net, _mode=mode):
         oam_results = (episode.get("oam") or {}).get("results") or []
+        noise_id = episode.get("noise_id")
+        if not noise_id:
+            raise ValueError("accept gate_fn requires episode noise_id (N0/N1/N2)")
         return decide(
             _net,
             episode.get("agent_proposal"),
@@ -171,7 +174,7 @@ def make_gate_fn(net, mode="full"):
             oam_results,
             mode=_mode,
             run_missing_tests=False,
-            noise_id=episode.get("noise_id") or "N0",
+            noise_id=noise_id,
         )
 
     return gate_fn

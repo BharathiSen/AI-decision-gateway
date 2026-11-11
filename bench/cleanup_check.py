@@ -60,7 +60,7 @@ def main():
 
     # Clean episode: teardown recorded as clean.
     events = []
-    rec = run_episode(None, None, fault_id="F1", agent_fn=_agent, gate_fn=None,
+    rec = run_episode(None, None, noise_id="N0", fault_id="F1", agent_fn=_agent, gate_fn=None,
                       _components=_fakes(events, pre=CLEAN, post=CLEAN), run_oam=False)
     assert rec["teardown"]["clean"] is True and rec["teardown"]["cleared"] == 1, rec.get("teardown")
 
@@ -68,7 +68,7 @@ def main():
     events = []
     dirty = dict(CLEAN, residual={"corr-0": {"qdisc": "netem loss 20%"}})
     try:
-        run_episode(None, None, fault_id="F1", agent_fn=_agent, _components=_fakes(events, pre=dirty, post=CLEAN), run_oam=False)
+        run_episode(None, None, noise_id="N0", fault_id="F1", agent_fn=_agent, _components=_fakes(events, pre=dirty, post=CLEAN), run_oam=False)
     except TopologyContaminated as exc:
         assert "pre-episode reset" in str(exc) and "residual" in str(exc), exc
     else:
@@ -85,7 +85,7 @@ def main():
     ):
         events = []
         try:
-            run_episode(None, None, fault_id="F1", agent_fn=_agent,
+            run_episode(None, None, noise_id="N0", fault_id="F1", agent_fn=_agent,
                         _components=_fakes(events, pre=CLEAN, post=post, clear_raises=clear_raises), run_oam=False)
         except TopologyContaminated as exc:
             assert needle in str(exc), (needle, str(exc))
@@ -144,7 +144,7 @@ def main():
         run_episode(
             None,
             None,
-            fault_id="F1",
+            noise_id="N0", fault_id="F1",
             agent_fn=_agent,
             run_oam=False,
             _components=_fakes(events, pre=CLEAN, post=CLEAN) | {"reset_all": boom_reset},
@@ -178,7 +178,7 @@ def main():
         run_episode(
             None,
             None,
-            fault_id="F1",
+            noise_id="N0", fault_id="F1",
             agent_fn=_agent,
             run_oam=False,
             _components={
@@ -216,7 +216,7 @@ def main():
             run_episode(
                 None,
                 None,
-                fault_id="H0",
+                noise_id="N0", fault_id="H0",
                 agent_fn=_agent,
                 run_oam=False,
                 _components=comps,

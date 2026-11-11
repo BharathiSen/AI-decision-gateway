@@ -441,7 +441,6 @@ def attach_post_action_recovery(
     executed=False). Never sets traffic_recovered from remediation_succeeded.
     """
     record = record if isinstance(record, dict) else {}
-    noise_id = noise_id or record.get("noise_id") or "N0"
     measure_fn = measure_fn or measure_traffic_recovery
     pre = record.get("pre_remediation")
     if pre is None:
@@ -454,6 +453,10 @@ def attach_post_action_recovery(
         record["recovery_measurement_duration_seconds"] = None
         record.setdefault("post_oam", None)
         return record
+
+    noise_id = noise_id or record.get("noise_id")
+    if not noise_id:
+        raise ValueError("attach_post_action_recovery requires noise_id (N0/N1/N2)")
 
     live_net = net is not None and callable(getattr(net, "get", None))
     after_snapshot = None
@@ -636,7 +639,7 @@ def run_episode(
     net,
     links,
     fault_id="H0",
-    noise_id="N0",
+    noise_id=None,
     seed=None,
     compound_id=None,
     run_oam=True,
@@ -651,7 +654,10 @@ def run_episode(
     gate_fn(episode_so_far) -> gate decision or None
     execute_fn(proposal) -> execution result. Invoked only after allow
         and a fresh route/path recheck against network_snapshot.
+    noise_id must be the episode traffic level (N0/N1/N2); no silent default.
     """
+    if not noise_id:
+        raise ValueError("run_episode requires noise_id (N0/N1/N2)")
     parts = dict(default_components())
     if _components:
         parts.update(_components)
@@ -837,7 +843,7 @@ def run_episode(
             net,
             read_state=parts["read_state"],
             links=links,
-            noise_id=record.get("noise_id") or "N0",
+            noise_id=record.get("noise_id") or noise_id,
         )
         record["completed_at"] = datetime.now(timezone.utc).isoformat()
         return record
@@ -887,6 +893,13 @@ def run_episode(
                 None,
                 record=record,
             ) from exc
+        finally:
+            # Mark after teardown attempt so post-episode B5 cannot run live OAM
+            # on a reset net (pilot previously passed net=net after return).
+            try:
+                setattr(net, "_verifix_teardown_complete", True)
+            except Exception:
+                pass
         problem = teardown_problem(teardown, real_reset, check_health=True)
         if clear_error:
             problem = f"{problem}; {clear_error}" if problem else clear_error
@@ -1605,7 +1618,7 @@ def _self_check():
     connected = run_episode(
         object(),
         {},
-        fault_id="F1",
+        noise_id="N0", fault_id="F1",
         run_oam=True,
         agent_fn=local_agent,
         gate_fn=local_gate,
@@ -1641,7 +1654,7 @@ def _self_check():
         run_episode(
             object(),
             {},
-            fault_id="H0",
+            noise_id="N0", fault_id="H0",
             run_oam=False,
             agent_fn=local_agent,
             gate_fn=local_gate,
@@ -1666,7 +1679,7 @@ def _self_check():
         run_episode(
             object(),
             {},
-            fault_id="H0",
+            noise_id="N0", fault_id="H0",
             run_oam=False,
             agent_fn=local_agent,
             gate_fn=local_gate,
@@ -1690,7 +1703,7 @@ def _self_check():
     invalid_telemetry = run_episode(
         object(),
         {},
-        fault_id="H0",
+        noise_id="N0", fault_id="H0",
         run_oam=False,
         agent_fn=lambda state: skipped.append("agent"),
         gate_fn=lambda record: skipped.append("gate"),
@@ -1703,7 +1716,7 @@ def _self_check():
     invalid_gate = run_episode(
         object(),
         {},
-        fault_id="H0",
+        noise_id="N0", fault_id="H0",
         run_oam=False,
         agent_fn=local_agent,
         gate_fn=lambda record: {"decision": "approve"},
@@ -1731,7 +1744,7 @@ def _self_check():
 
     with_q = dict(full, qdiscs=shaped)
     injected_between = run_episode(
-        object(), {}, fault_id="H0", run_oam=False,
+        object(), {}, noise_id="N0", fault_id="H0", run_oam=False,
         agent_fn=reroute_agent, gate_fn=allow_gate,
         execute_fn=lambda proposal: skipped.append("execute"),
         _components=dict(fakes, read_state=stateful(with_q, dict(full, qdiscs=lossy))),
@@ -1749,7 +1762,7 @@ def _self_check():
         return reads_left.pop(0)(net, links)
 
     no_baseline = run_episode(
-        object(), {}, fault_id="H0", run_oam=False,
+        object(), {}, noise_id="N0", fault_id="H0", run_oam=False,
         agent_fn=reroute_agent, gate_fn=allow_gate,
         execute_fn=lambda proposal: skipped.append("execute"),
         _components=dict(fakes, read_state=flaky_read),
@@ -1759,7 +1772,7 @@ def _self_check():
     assert no_baseline["execution_error"] == "gate snapshot has no path qdisc fingerprint"
 
     rerouted = run_episode(
-        object(), {}, fault_id="H0", run_oam=False,
+        object(), {}, noise_id="N0", fault_id="H0", run_oam=False,
         agent_fn=reroute_agent, gate_fn=allow_gate,
         execute_fn=lambda proposal: {"executed": True, "action": "REROUTE"},
         _components=dict(fakes, read_state=stateful(
@@ -2490,7 +2503,7 @@ def _self_check():
     blocked_ep = run_episode(
         object(),
         {},
-        fault_id="H0",
+        noise_id="N0", fault_id="H0",
         run_oam=False,
         agent_fn=reroute_agent,
         gate_fn=refuse_gate,
@@ -2633,7 +2646,7 @@ def live_diamond():
         record = run_episode(
             net,
             links,
-            fault_id="H0",
+            noise_id="N0", fault_id="H0",
             run_oam=True,
             agent_fn=agent_fn,
             gate_fn=gate_fn,
