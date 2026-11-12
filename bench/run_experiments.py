@@ -32,7 +32,7 @@ from baselines.ablations import (
     gate_no_predictions,
 )
 from baselines.common import DEFAULT_BUDGET_SECONDS, PERMITTED_ACTIONS, attach_contract
-from bench.contracts import refuse_protected_path
+from bench.contracts import atomic_write_text, refuse_protected_path
 from gate.decide import decide
 from gate.selector import held_out_ids
 
@@ -478,7 +478,7 @@ def main(argv=None):
         print(str(exc), file=sys.stderr)
         return 2
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    atomic_write_text(out, json.dumps(summary, indent=2))
     print(json.dumps(summary, indent=2))
     return 0
 

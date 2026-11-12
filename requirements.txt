@@ -18,8 +18,11 @@
 # network/telemetry layer, this has no dependency on Mininet/Linux and
 # can run anywhere Python and this package are installed. It also
 # loads its policy context from policy/policy.yaml, hence pyyaml.
-openai
-pyyaml
+# Exact versions: an unpinned SDK runs as root next to the network controller.
+# These are the versions the offline suite was run against (2026-11-12).
+# Confirm `pip show openai pyyaml` on the VM before reinstalling there.
+openai==2.45.0
+pyyaml==6.0.3
 
 # Future components (crypto signing, etc.) will add their own
 # dependencies here.

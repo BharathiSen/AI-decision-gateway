@@ -255,7 +255,9 @@ def main():
         print(f"refusing to overwrite {out}, which appeared during the run", file=sys.stderr)
         sys.exit(2)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    from bench.contracts import atomic_write_text
+
+    atomic_write_text(out, json.dumps(report, indent=2))
     print(f"wrote {out}", flush=True)
     for noise_id, lines in report["noise_cleanup_residual"].items():
         if lines:

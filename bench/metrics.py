@@ -440,10 +440,26 @@ def recovery_seconds(record):
 
 
 def b0_harm_from_result(result):
-    """Copy B0 harm-before-rollback fields. Missing measurement is unevaluable."""
+    """Copy B0 harm-before-rollback fields. Missing measurement is unevaluable.
+
+    An action the controller refused or failed was never applied, so harm is
+    not measurable for it. It is counted as an execution error, apart from the
+    harm rate, and never as "no harm". Records saved before the
+    execution_error field existed are read from execution.error.
+    """
     result = result or {}
     if "harm" not in result:
         return {"evaluated": False, "harm": None, "rolled_back": None}
+    execution = result.get("execution") if isinstance(result.get("execution"), dict) else {}
+    execution_error = result.get("execution_error") or execution.get("error")
+    if execution_error:
+        return {
+            "evaluated": False,
+            "harm": None,
+            "rolled_back": bool(result.get("rolled_back")),
+            "execution_error": str(execution_error),
+            "executed": execution.get("executed"),
+        }
     return {
         "evaluated": True,
         "harm": bool(result.get("harm")),
@@ -613,6 +629,7 @@ def _empty_method():
         "episode_times": [],
         "b0_harm": 0,
         "b0_evaluated": 0,
+        "b0_execution_errors": 0,
     }
 
 
@@ -643,6 +660,8 @@ def _accumulate(bucket, scored, strategy_name):
             if harm.get("evaluated"):
                 bucket["b0_evaluated"] += 1
                 bucket["b0_harm"] += int(bool(harm.get("harm")))
+            elif harm.get("execution_error"):
+                bucket["b0_execution_errors"] += 1
         return
     bucket["n_confirmatory"] += 1
     for key in (
@@ -672,6 +691,8 @@ def _accumulate(bucket, scored, strategy_name):
         if harm.get("evaluated"):
             bucket["b0_evaluated"] += 1
             bucket["b0_harm"] += int(bool(harm.get("harm")))
+        elif harm.get("execution_error"):
+            bucket["b0_execution_errors"] += 1
 
 
 def _finalize_method(bucket):
@@ -720,7 +741,12 @@ def _finalize_method(bucket):
         "b0_harm_before_rollback": rate_block(
             bucket["b0_harm"],
             bucket["b0_evaluated"],
-            "B0 T1 worse after execute, before path restore",
+            "B0 T1 worse after execute, before path restore; excludes actions the controller refused or failed",
+        ),
+        "b0_execution_errors": rate_block(
+            bucket["b0_execution_errors"],
+            bucket["b0_evaluated"] + bucket["b0_execution_errors"],
+            "B0 action refused or failed in the controller; harm not measurable, not counted as no harm",
         ),
     }
 
@@ -1236,6 +1262,36 @@ def _self_check_body(before, hidden):
     assert harm["evaluated"] is True and harm["harm"] is True
     missing = b0_harm_from_result({})
     assert missing["evaluated"] is False and missing["harm"] is None
+    # A refused or failed B0 action is not evaluable harm, in new records
+    # (execution_error) and in records saved before that field existed.
+    for refused_b0 in (
+        {"harm": None, "execution_error": "ValueError: no policy path", "execution": {"executed": False, "error": "ValueError: no policy path"}},
+        {"harm": False, "execution": {"executed": False, "error": "ValueError: REROUTE needs path"}},
+    ):
+        refused_harm = b0_harm_from_result(refused_b0)
+        assert refused_harm["evaluated"] is False and refused_harm["harm"] is None, refused_harm
+        assert refused_harm["execution_error"].startswith("ValueError"), refused_harm
+    no_op_b0 = b0_harm_from_result({"harm": False, "execution": {"executed": False}, "execution_error": None})
+    assert no_op_b0["evaluated"] is True and no_op_b0["harm"] is False, no_op_b0
+    # Aggregation: refused actions leave the harm denominator and get their own
+    # count, for episodes with a trusted label and for those without one.
+    for label_trusted in (False, True):
+        tally = _empty_method()
+        for b0_result in (
+            {"harm": True, "rolled_back": True, "execution": {"executed": True}},
+            {"harm": False, "rolled_back": True, "execution": {"executed": True}},
+            {"harm": None, "execution_error": "ValueError: no policy path", "execution": {"executed": False}},
+        ):
+            _accumulate(
+                tally,
+                {"strategies": {"B0": {}}, "label_trusted": label_trusted, "b0_harm": b0_harm_from_result(b0_result)},
+                "B0",
+            )
+        tallied = _finalize_method(tally)
+        assert tallied["n_confirmatory"] == (3 if label_trusted else 0), tallied["n_confirmatory"]
+        harm_rate, error_rate = tallied["b0_harm_before_rollback"], tallied["b0_execution_errors"]
+        assert (harm_rate["count"], harm_rate["denominator"]) == (1, 2), (label_trusted, harm_rate)
+        assert (error_rate["count"], error_rate["denominator"]) == (1, 3), (label_trusted, error_rate)
 
     bad, _scored = evaluate_records([{"episode_id": "z"}])
     assert bad["scored"] == 0 and bad["errors"]

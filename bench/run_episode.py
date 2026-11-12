@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 
 from bench import inject as inj
 from bench import tests as oam
-from bench.contracts import refuse_protected_path, validate_record
+from bench.contracts import atomic_write_text, refuse_protected_path, validate_record
 from bench.traffic import apply_noise, clear_noise
 from telemetry.collector import collect_current_state
 
@@ -528,13 +528,15 @@ def attach_post_action_recovery(
     return record
 
 
-def apply_authorized_action(gate_decision, proposal, execute_fn, approved_snapshot, read_state):
+def apply_authorized_action(gate_decision, proposal, execute_fn, approved_snapshot, read_state, evidence=None):
     """Single boundary between a gate decision and remediation.
 
     On allow, the proposal is revalidated, a bound decision is matched to
-    approved_snapshot, read_state() is compared with that snapshot, and
-    execute_fn runs only when those checks succeed. state_verified is
-    recorded from the comparison. Callers cannot pass it in.
+    approved_snapshot, to the proposal and its reroute path, and to evidence
+    (the OAM rows the decision was bound with; None means it was bound with
+    none). read_state() is compared with that snapshot, and execute_fn runs
+    only when those checks succeed. state_verified is recorded from the
+    comparison. Callers cannot pass it in.
     """
     outcome = {
         "execution_attempted": False,
@@ -556,7 +558,7 @@ def apply_authorized_action(gate_decision, proposal, execute_fn, approved_snapsh
     if rejection:
         outcome["execution_error"] = rejection["execution_error"]
         return outcome
-    bind_errs = binding_errors(gate_decision, approved_snapshot, proposal)
+    bind_errs = binding_errors(gate_decision, approved_snapshot, proposal, evidence)
     if bind_errs:
         outcome["execution_error"] = bind_errs[0]
         return outcome
@@ -814,10 +816,10 @@ def run_episode(
 
         approved = dict(record.get("network_snapshot") or {})
         approved["qdiscs"] = record["execution_baseline"]["qdiscs"]
+        oam_results = (record.get("oam") or {}).get("results") or []
         if isinstance(record.get("gate_decision"), dict):
             from gate.integrity import bind_gate_decision
 
-            oam_results = (record.get("oam") or {}).get("results") or []
             record["gate_decision"] = bind_gate_decision(
                 record["gate_decision"],
                 approved,
@@ -831,6 +833,7 @@ def run_episode(
             execute_fn,
             approved,
             lambda: parts["read_state"](net, links),
+            evidence=oam_results,
         ))
         record["remediation_completed_at"] = datetime.now(timezone.utc).isoformat()
         result_ok, result_errors = validate_record("execution_result", _execution_view(record))
@@ -1031,7 +1034,7 @@ def save_episode(record, directory):
     directory = Path(directory)
     path = refuse_protected_path(directory / f"{record['episode_id']}.json")
     directory.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(record, indent=2), encoding="utf-8")
+    atomic_write_text(path, json.dumps(record, indent=2))
     return path
 
 
@@ -2062,8 +2065,54 @@ def _self_check():
         signed = bind_gate_decision(dict(integrity_allow), healthy, proposal, [])
         assert signed["binding"]["signed"] is True and signed["binding"]["signature"]
         assert not binding_errors(signed, healthy, proposal)
+        genuine_signature = signed["binding"]["signature"]
         signed["binding"]["signature"] = "dead"
         assert binding_errors(signed, healthy, proposal) == ["decision signature is invalid"]
+        # A token claiming a signature must not pass when the verifier has no
+        # key: neither a genuine one nor a forged signed=True.
+        signed["binding"]["signature"] = genuine_signature
+        _os.environ.pop("VERIFIX_GATE_HMAC", None)
+        no_key = ["decision signature cannot be verified: VERIFIX_GATE_HMAC is not set"]
+        assert binding_errors(signed, healthy, proposal) == no_key
+        forged_signed = bind_gate_decision(dict(integrity_allow), healthy, proposal, [])
+        forged_signed["binding"].update(signed=True, signature="f" * 64)
+        assert binding_errors(forged_signed, healthy, proposal) == no_key
+        refused = apply_authorized_action(forged_signed, proposal, execute, healthy, lambda: healthy)
+        assert refused["execution_attempted"] is False and refused["execution_error"] == no_key[0], refused
+
+        # The controller resolves a reroute path exactly as the gate does.
+        from control import actions as _actions
+        from gate.checks import reroute_choice as _choice
+
+        _moved = []
+        _real_set = _actions.ctl.set_active_path
+        _actions.ctl.set_active_path = lambda _net, path: _moved.append(path)
+        try:
+            for bad in (
+                {"proposed_path": ["r1", "r3", "r2", "r4"]},
+                {"proposed_path": "r3"},
+                {"path": "backup", "proposed_path": ["r1", "r2", "r4"]},
+                {"path": "sideways"},
+                {},
+            ):
+                assert _choice(bad) is None
+                try:
+                    _actions.execute(None, "REROUTE", bad)
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError(f"controller acted on a path the gate rejects: {bad!r}")
+            assert _moved == [], _moved
+            for good, want in (
+                ({"path": "backup"}, "backup"),
+                ({"proposed_path": ["r1", "r3", "r4"]}, "backup"),
+                ({"proposed_path": ["r1", "r2", "r4"]}, "primary"),
+                ({"path": "primary", "proposed_path": ["r1", "r2", "r4"]}, "primary"),
+            ):
+                assert _actions.execute(None, "REROUTE", good)["path"] == want == _choice(good)
+            assert _moved == ["backup", "backup", "primary", "primary"], _moved
+        finally:
+            _actions.ctl.set_active_path = _real_set
     finally:
         if previous_hmac is None:
             _os.environ.pop("VERIFIX_GATE_HMAC", None)
@@ -2072,6 +2121,89 @@ def _self_check():
     unsigned = bind_gate_decision(dict(integrity_allow), healthy, proposal, [])
     assert unsigned["binding"]["signed"] is False
     assert not binding_errors(unsigned, healthy, proposal)
+
+    # B2: the decision is bound to the reroute path it resolved. A label is
+    # part of the digest, and the bound path is checked on its own.
+    labelled = dict(proposal)
+    labelled.pop("proposed_path")
+    labelled["proposed_path_label"] = "backup"
+    path_bound = bind_gate_decision(dict(integrity_allow), healthy, labelled, [])
+    assert path_bound["binding"]["reroute_path"] == "backup", path_bound["binding"]
+    assert not binding_errors(path_bound, healthy, labelled)
+    swapped = dict(labelled, proposed_path_label="primary")
+    swap_errors = binding_errors(path_bound, healthy, swapped)
+    assert "proposal changed since the gate decision" in swap_errors, swap_errors
+    assert "reroute path changed since the gate decision" in swap_errors, swap_errors
+    calls.clear()
+    swap_run = apply_authorized_action(path_bound, swapped, execute, healthy, lambda: healthy)
+    assert calls == [] and swap_run["execution_attempted"] is False, swap_run
+    assert swap_run["execution_error"] == "proposal changed since the gate decision", swap_run
+    no_path = bind_gate_decision(dict(integrity_allow), healthy, proposal, [])
+    del no_path["binding"]["reroute_path"]
+    assert binding_errors(no_path, healthy, proposal) == ["decision is missing bound reroute path"]
+    wrong_path = bind_gate_decision(dict(integrity_allow), healthy, proposal, [])
+    wrong_path["binding"]["reroute_path"] = "primary"
+    assert binding_errors(wrong_path, healthy, proposal) == ["reroute path changed since the gate decision"]
+    calls.clear()
+    wrong_run = apply_authorized_action(wrong_path, proposal, execute, healthy, lambda: healthy)
+    assert calls == [] and wrong_run["execution_error"] == "reroute path changed since the gate decision", wrong_run
+    quiet = bind_gate_decision(dict(integrity_allow), healthy, dict(proposal, action="DO_NOTHING"), [])
+    assert quiet["binding"]["reroute_path"] is None
+
+    # B3: the decision is bound to the OAM rows it was made on.
+    rows_seen = [
+        {"test_id": "T1_e2e_ping", "observed_at": "2026-01-01T00:00:00+00:00", "state_fingerprint": "fp"},
+        {"test_id": "T4_mtu", "observed_at": "2026-01-01T00:00:01+00:00", "state_fingerprint": "fp"},
+    ]
+    with_rows = bind_gate_decision(dict(integrity_allow), healthy, proposal, rows_seen)
+    assert not binding_errors(with_rows, healthy, proposal, list(reversed(rows_seen)))
+    changed = ["evidence changed since the gate decision"]
+    assert binding_errors(with_rows, healthy, proposal, rows_seen[:1]) == changed
+    assert binding_errors(with_rows, healthy, proposal, [dict(rows_seen[0], observed_at="2026-01-01T00:09:00+00:00"), rows_seen[1]]) == changed
+    assert binding_errors(with_rows, healthy, proposal, [dict(rows_seen[0], state_fingerprint="other"), rows_seen[1]]) == changed
+    assert binding_errors(with_rows, healthy, proposal) == changed
+    assert binding_errors(with_rows, healthy, proposal, rows_seen + [{"test_id": "T8_tcp_vs_ping"}]) == changed
+    calls.clear()
+    evidence_swap = apply_authorized_action(with_rows, proposal, execute, healthy, lambda: healthy, evidence=rows_seen[:1])
+    assert calls == [] and evidence_swap["execution_error"] == changed[0], evidence_swap
+    evidence_ok = apply_authorized_action(
+        with_rows, proposal, execute, healthy, _reads(healthy, on_backup), evidence=rows_seen
+    )
+    assert calls == [proposal] and evidence_ok["remediation_succeeded"] is True, evidence_ok
+
+    # B10a: an interrupted write leaves the previous file whole and no temp file.
+    import tempfile as _tempfile
+
+    from bench import contracts as _contracts
+
+    atomic_dir = Path(_tempfile.mkdtemp(prefix="verifix-atomic-"))
+    target = atomic_dir / "record.json"
+    assert _contracts.atomic_write_text(target, "first") == target and target.read_text(encoding="utf-8") == "first"
+    _real_replace = _contracts.os.replace
+
+    def _killed(_src, _dst):
+        raise OSError("simulated crash before rename")
+
+    _contracts.os.replace = _killed
+    try:
+        try:
+            _contracts.atomic_write_text(target, "second-and-longer")
+        except OSError:
+            pass
+        else:
+            raise AssertionError("interrupted write did not raise")
+    finally:
+        _contracts.os.replace = _real_replace
+    assert target.read_text(encoding="utf-8") == "first"
+    assert [item.name for item in atomic_dir.iterdir()] == ["record.json"], list(atomic_dir.iterdir())
+    _contracts.atomic_write_text(target, "second")
+    assert target.read_text(encoding="utf-8") == "second"
+    saved = save_episode({"episode_id": "atomic-check", "x": 1}, atomic_dir)
+    assert json.loads(saved.read_text(encoding="utf-8")) == {"episode_id": "atomic-check", "x": 1}
+    assert sorted(item.name for item in atomic_dir.iterdir()) == ["atomic-check.json", "record.json"]
+    saved.unlink()
+    target.unlink()
+    atomic_dir.rmdir()
 
     from gate.checks import _prediction_matches, check_consistency
     from bench.contracts import expected_grade_ok, prediction_matches

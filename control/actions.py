@@ -51,19 +51,19 @@ def execute(net, action, proposal=None):
         return {"executed": False, "action": action.value, "escalated": True}
 
     if action == Action.REROUTE:
-        path = proposal.get("path") or proposal.get("proposed_path_label")
-        if path in ("primary", "backup"):
-            ctl.set_active_path(net, path)
-            return {"executed": True, "action": action.value, "path": path}
-        # Infer from proposed_path node list
-        nodes = proposal.get("proposed_path") or []
-        if "r3" in nodes:
-            ctl.set_active_path(net, "backup")
-            return {"executed": True, "action": action.value, "path": "backup"}
-        if "r2" in nodes:
-            ctl.set_active_path(net, "primary")
-            return {"executed": True, "action": action.value, "path": "primary"}
-        raise ValueError(f"REROUTE needs path primary|backup or proposed_path; got {proposal!r}")
+        # Resolve the path with the same rule the gate's safety check and the
+        # execution recheck use, so the controller can never act on a path the
+        # gate did not evaluate (no substring inference, no label/node conflict).
+        from gate.checks import reroute_choice
+
+        path = reroute_choice(proposal)
+        if path is None:
+            raise ValueError(
+                "REROUTE needs an exact policy path (label primary|backup, or the "
+                f"policy node list, and the two must agree); got {proposal!r}"
+            )
+        ctl.set_active_path(net, path)
+        return {"executed": True, "action": action.value, "path": path}
 
     if action == Action.REBALANCE:
         # Diamond topology: rebalance == switch to less-loaded path (backup for now)

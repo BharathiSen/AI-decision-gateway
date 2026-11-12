@@ -1254,7 +1254,10 @@ def _check_costs():
             return _Proc()
 
     saved_dir = mu.RUN_DIR
-    mu.RUN_DIR = Path(tempfile.gettempdir())
+    # A fresh directory, never the shared default: on Linux gettempdir() is
+    # /tmp, which run_dir() would not treat as an override.
+    mu.RUN_DIR = Path(tempfile.mkdtemp(prefix="verifix-rundir-"))
+    assert mu.RUN_DIR != mu._SHARED_RUN_DIR
     try:
         late = mu.run_in_node(_EarlyNode(), "ping -c 5 10.0.1.1", timeout=5)
         assert "0% packet loss" in late, late
@@ -1266,8 +1269,36 @@ def _check_costs():
         assert ["kill", "-TERM", "--", "7777"] in _TimeoutNode.kills, _TimeoutNode.kills
         assert ["kill", "-KILL", "--", "7777"] in _TimeoutNode.kills, _TimeoutNode.kills
         assert not any("pkill" in arg for args in _TimeoutNode.kills for arg in args), _TimeoutNode.kills
+        # An overridden RUN_DIR is used as is.
+        assert mu.run_dir() == mu.RUN_DIR
     finally:
+        import shutil as _rm
+
+        _rm.rmtree(mu.RUN_DIR, ignore_errors=True)
         mu.RUN_DIR = saved_dir
+
+    # Default: command files go to one owner-only directory, not the shared one.
+    import os as _os
+    import shutil as _shutil
+
+    saved_private = mu._private_run_dir
+    shared = Path(tempfile.mkdtemp(prefix="verifix-shared-"))
+    mu.RUN_DIR = mu._SHARED_RUN_DIR = shared
+    mu._private_run_dir = None
+    try:
+        private = mu.run_dir()
+        assert private != shared and private.parent == shared and private.is_dir(), private
+        assert mu.run_dir() == private, "private run dir must be created once"
+        if _os.name == "posix":
+            assert (_os.stat(private).st_mode & 0o777) == 0o700, oct(_os.stat(private).st_mode)
+        late_private = mu.run_in_node(_EarlyNode(), "ping -c 5 10.0.1.1", timeout=5)
+        assert "0% packet loss" in late_private, late_private
+        assert not list(shared.glob("adg-hostA-*")), "command files must not land in the shared directory"
+        assert not list(private.glob("adg-hostA-*")), "run_in_node left files behind"
+    finally:
+        mu.RUN_DIR = mu._SHARED_RUN_DIR = saved_dir
+        mu._private_run_dir = saved_private
+        _shutil.rmtree(shared, ignore_errors=True)
 
 
 def _check_one_way():
@@ -1469,7 +1500,10 @@ def _check_h2_measurement_errors():
             return _Proc()
 
     saved_dir = mu.RUN_DIR
-    mu.RUN_DIR = Path(tempfile.gettempdir())
+    # A fresh directory, never the shared default: on Linux gettempdir() is
+    # /tmp, which run_dir() would not treat as an override.
+    mu.RUN_DIR = Path(tempfile.mkdtemp(prefix="verifix-rundir-"))
+    assert mu.RUN_DIR != mu._SHARED_RUN_DIR
     try:
         def write_ok(out, done, text="", code="0"):
             Path(out).write_text(text, encoding="utf-8")
@@ -1533,14 +1567,9 @@ def _check_h2_measurement_errors():
         )
         assert missing["error"] == "missing_completion", missing
     finally:
-        for leftover in Path(tempfile.gettempdir()).glob("adg-hostA-*"):
-            try:
-                if leftover.is_dir():
-                    leftover.rmdir()
-                else:
-                    leftover.unlink()
-            except OSError:
-                pass
+        import shutil as _rm
+
+        _rm.rmtree(mu.RUN_DIR, ignore_errors=True)
         mu.RUN_DIR = saved_dir
 
     class _Node:

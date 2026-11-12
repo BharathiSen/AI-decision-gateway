@@ -59,6 +59,11 @@ def run(net, proposal, measure=True, noise_id=None):
     Harm remains a T1 before/after comparison. Recovery status comes from the
     independent post-remediation OAM battery and is never inferred from
     execution.executed. noise_id grades recovery with the episode traffic level.
+
+    When the controller refuses or fails the action (for example a REROUTE
+    whose path is not an exact policy path), nothing was applied, so the
+    before/after comparison says nothing about the proposal. That is reported
+    as execution_error with harm None. It is never scored as "no harm".
     """
     from bench.tests import T1_e2e_ping
     from bench.run_episode import measure_traffic_recovery, traffic_conditions
@@ -116,7 +121,8 @@ def run(net, proposal, measure=True, noise_id=None):
             except Exception as exc:
                 after_t1 = {"test_id": "T1_e2e_ping", "error": f"{type(exc).__name__}: {exc}"}
 
-    harm = _harm(before_t1, after_t1)
+    execution_error = execution.get("error")
+    harm = None if execution_error else _harm(before_t1, after_t1)
     rolled_back = False
     rollback_error = path_error
     if execution.get("executed") and before_path in ("primary", "backup"):
@@ -140,6 +146,7 @@ def run(net, proposal, measure=True, noise_id=None):
         "decision": "allow",
         "action": (proposal or {}).get("action"),
         "execution": execution,
+        "execution_error": execution_error,
         "harm": harm,
         "rolled_back": rolled_back,
         "before_path": before_path,

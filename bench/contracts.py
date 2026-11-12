@@ -652,6 +652,32 @@ def _norm(path):
     return os.path.normcase(str(Path(path).resolve()))
 
 
+def atomic_write_text(path, text, encoding="utf-8", newline=None):
+    """Write a whole file so a reader sees the old content or the new, never a part.
+
+    The text goes to a temporary file in the same directory, is flushed to
+    disk, and then replaces the target in one step. An interrupted write
+    leaves the target untouched and removes the temporary file.
+    """
+    import uuid
+
+    path = Path(path)
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with tmp.open("w", encoding=encoding, newline=newline) as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+    return path
+
+
 def refuse_protected_path(out_path):
     """Fail closed instead of writing to or inside preserved evidence."""
     target = _norm(out_path)

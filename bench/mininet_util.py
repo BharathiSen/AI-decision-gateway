@@ -46,6 +46,39 @@ def recover_shell(node):
 
 
 RUN_DIR = Path("/tmp")
+_SHARED_RUN_DIR = RUN_DIR
+_private_run_dir = None
+
+
+def make_private_run_dir(base):
+    """Create an owner-only directory under base for command output files.
+
+    run_in_node trusts the exit code and the PID it reads back from these
+    files, and signals that PID as root. In a world-writable directory any
+    local user could plant them.
+    """
+    import tempfile
+
+    path = Path(tempfile.mkdtemp(prefix="adg-run-", dir=str(base)))
+    os.chmod(path, 0o700)
+    return path
+
+
+def run_dir():
+    """Where run_in_node keeps its files. The node shares the host filesystem.
+
+    A caller that sets RUN_DIR (offline self-checks) gets that directory as is.
+    Otherwise one private directory is created on first use and removed at exit.
+    """
+    global _private_run_dir
+    if RUN_DIR != _SHARED_RUN_DIR:
+        return RUN_DIR
+    if _private_run_dir is None or not _private_run_dir.is_dir():
+        import atexit
+
+        _private_run_dir = make_private_run_dir(RUN_DIR)
+        atexit.register(shutil.rmtree, str(_private_run_dir), True)
+    return _private_run_dir
 
 
 def _kill_node_pid(node, pid):
@@ -93,7 +126,7 @@ def run_in_node(node, command, timeout=60.0, structured=False):
     Nonzero exit with usable output leaves error=None; callers grade the
     network from the text (ping loss often exits 1).
     """
-    stem = (RUN_DIR / f"adg-{node.name}-{uuid.uuid4().hex}").as_posix()
+    stem = (run_dir() / f"adg-{node.name}-{uuid.uuid4().hex}").as_posix()
     path = Path(f"{stem}.out")
     done = Path(f"{stem}.done")
     pid_path = Path(f"{stem}.pid")

@@ -48,5 +48,7 @@ def train_grader(samples):
         key = f"{s['test_id']}|{(s.get('expected') or '').lower()}"
         table[key] = float(s.get("label", 0))
     _MODEL.parent.mkdir(parents=True, exist_ok=True)
-    _MODEL.write_text(json.dumps(table, indent=2), encoding="utf-8")
+    from bench.contracts import atomic_write_text
+
+    atomic_write_text(_MODEL, json.dumps(table, indent=2))
     return table

@@ -28,6 +28,9 @@ def proposal_digest(proposal):
             "target": proposal.get("target"),
             "proposed_path": proposal.get("proposed_path"),
             "path": proposal.get("path"),
+            # Every field reroute_choice() reads must be covered, or the path
+            # could be changed after the decision without changing the digest.
+            "proposed_path_label": proposal.get("proposed_path_label"),
             "causes": proposal.get("causes"),
             "observed_at": proposal.get("observed_at"),
         }
@@ -48,6 +51,26 @@ def evidence_digest(test_results):
         )
     rows.sort(key=lambda row: str(row.get("test_id") or ""))
     return _digest(rows)
+
+
+def bound_reroute_path(proposal):
+    """The policy path a risky proposal resolves to (primary|backup), else None.
+
+    Stored in the binding at decision time and re-derived at execution time.
+    The controller resolves the path with the same rule, so it can only act
+    on the path the decision was bound to.
+    """
+    if not isinstance(proposal, dict):
+        return None
+    from control.actions import RISKY_ACTIONS, normalize_action
+    from gate.checks import reroute_choice
+
+    try:
+        if normalize_action(proposal.get("action")) not in RISKY_ACTIONS:
+            return None
+    except (ValueError, TypeError):
+        return None
+    return reroute_choice(proposal)
 
 
 def signatures_required():
@@ -82,7 +105,9 @@ def optional_verify_errors(binding):
         return []
     secret = os.environ.get("VERIFIX_GATE_HMAC")
     if not secret:
-        return []
+        # A token that claims a signature cannot be checked without the key.
+        # Passing it would let anyone set signed=True and satisfy require_signatures.
+        return ["decision signature cannot be verified: VERIFIX_GATE_HMAC is not set"]
     payload = {key: value for key, value in binding.items() if key not in ("signed", "signature")}
     expected = hmac.new(
         secret.encode("utf-8"),
@@ -112,6 +137,7 @@ def bind_gate_decision(decision, snapshot, proposal, test_results=None):
         "snapshot_fingerprint": evidence_fingerprint(snapshot),
         "proposal_digest": proposal_digest(proposal),
         "evidence_digest": evidence_digest(test_results),
+        "reroute_path": bound_reroute_path(proposal),
         "snapshot_timestamp": (snapshot or {}).get("timestamp") if isinstance(snapshot, dict) else None,
         "signed": False,
         "signature": None,
@@ -121,8 +147,9 @@ def bind_gate_decision(decision, snapshot, proposal, test_results=None):
     return bound
 
 
-def binding_errors(decision, snapshot, proposal):
-    """Allow requires a bind token. Bound tokens must match this snapshot."""
+def binding_errors(decision, snapshot, proposal, test_results=None):
+    """Allow requires a bind token. Bound tokens must match this snapshot,
+    this proposal, this reroute path and this evidence (None means no rows)."""
     if not isinstance(decision, dict):
         return ["missing gate decision"]
     binding = decision.get("binding")
@@ -140,6 +167,12 @@ def binding_errors(decision, snapshot, proposal):
         errors.append("decision not bound to this snapshot")
     if binding.get("proposal_digest") != proposal_digest(proposal):
         errors.append("proposal changed since the gate decision")
+    if "reroute_path" not in binding:
+        errors.append("decision is missing bound reroute path")
+    elif binding.get("reroute_path") != bound_reroute_path(proposal):
+        errors.append("reroute path changed since the gate decision")
+    if binding.get("evidence_digest") != evidence_digest(test_results):
+        errors.append("evidence changed since the gate decision")
     ts = binding.get("snapshot_timestamp")
     snap_ts = (snapshot or {}).get("timestamp") if isinstance(snapshot, dict) else None
     if ts and snap_ts and ts != snap_ts:

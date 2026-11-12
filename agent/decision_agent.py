@@ -587,7 +587,6 @@ def _speed_check():
     if not cfg["api_key"]:
         raise SystemExit(f"set {cfg['key_env']} before a speed check (LLM_PROVIDER={cfg['provider']})")
     key = cfg["api_key"]
-    print(f"key_len={len(key)} key_prefix={key[:4]!r}")
     hint = _key_mismatch_hint(cfg)
     if hint:
         raise SystemExit(hint)

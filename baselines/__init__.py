@@ -471,6 +471,23 @@ def _self_check():
     assert skipped["rolled_back"] is False
     assert skipped.get("post_oam") is not None, "DO_NOTHING still gets post-action measurement"
     assert "recovery_status" in skipped
+    assert skipped["execution_error"] is None and live["execution_error"] is None
+
+    # A reroute the controller refuses was never applied: harm is unknown,
+    # reported as an execution error, and never scored as "no harm".
+    for refused_path in (["hostA", "r1", "r3", "r4", "hostB"], [], ["r1", "r3", "r2", "r4"]):
+        refused_proposal = dict(shared, proposed_path=refused_path)
+        net.path = "primary"
+        oam_mod.run_in_node = fake_run
+        try:
+            refused = b0_run(net, refused_proposal, noise_id="N0")
+        finally:
+            oam_mod.run_in_node = saved
+        assert refused["execution"].get("executed") is False, refused["execution"]
+        assert refused["execution_error"] and "ValueError" in refused["execution_error"], refused
+        assert refused["harm"] is None, refused["harm"]
+        assert refused["rolled_back"] is False and net.path == "primary", (refused["rolled_back"], net.path)
+        assert refused.get("post_oam") is not None, "a refused action still gets post-action measurement"
 
 
 if __name__ == "__main__":

@@ -328,10 +328,15 @@ def run_failures(report, spec, full_run=True):
 
 def write_outputs(report, results_dir=RESULTS):
     results_dir.mkdir(parents=True, exist_ok=True)
-    with (results_dir / "observability_matrix.csv").open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["fault_id", "test_id", "outcome"])
-        writer.writeheader()
-        writer.writerows(report["rows"])
+    import io
+
+    from bench.contracts import atomic_write_text
+
+    buffer = io.StringIO(newline="")
+    writer = csv.DictWriter(buffer, fieldnames=["fault_id", "test_id", "outcome"])
+    writer.writeheader()
+    writer.writerows(report["rows"])
+    atomic_write_text(results_dir / "observability_matrix.csv", buffer.getvalue(), newline="")
     ground_truth = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "noise_id": NOISE_ID,
@@ -347,8 +352,8 @@ def write_outputs(report, results_dir=RESULTS):
         "scenarios": report["scenarios"],
         "pairs": report["pairs"],
     }
-    (results_dir / "ground_truth.json").write_text(json.dumps(ground_truth, indent=2) + "\n", encoding="utf-8")
-    (results_dir / "inseparable_pairs.json").write_text(json.dumps(report["pairs"], indent=2) + "\n", encoding="utf-8")
+    atomic_write_text(results_dir / "ground_truth.json", json.dumps(ground_truth, indent=2) + "\n")
+    atomic_write_text(results_dir / "inseparable_pairs.json", json.dumps(report["pairs"], indent=2) + "\n")
 
 
 def print_report(report):
@@ -513,7 +518,9 @@ def main(argv=None):
             "git_tree": rev.get("tree_sha256"),
             "failures": list(failures),
         }
-        (out_dir / "label_run_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+        from bench.contracts import atomic_write_text
+
+        atomic_write_text(out_dir / "label_run_manifest.json", json.dumps(manifest, indent=2) + "\n")
         print(f"\nWrote {out_dir} ({len(report['rows'])} matrix rows, {len(records)} scenarios, complete={complete})")
     if failures:
         print("\nObservability and remediation checks failed:")
