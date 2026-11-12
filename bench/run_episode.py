@@ -2150,26 +2150,213 @@ def _self_check():
     quiet = bind_gate_decision(dict(integrity_allow), healthy, dict(proposal, action="DO_NOTHING"), [])
     assert quiet["binding"]["reroute_path"] is None
 
-    # B3: the decision is bound to the OAM rows it was made on.
+    # B3: the decision is bound to every field of every OAM row, in order
+    # (evidence digest version 2). Rows are shaped like the live battery:
+    # no observed_at and no state_fingerprint, so only measured values differ.
+    import copy as _copy
+
+    from gate import integrity as _integrity
+
     rows_seen = [
-        {"test_id": "T1_e2e_ping", "observed_at": "2026-01-01T00:00:00+00:00", "state_fingerprint": "fp"},
-        {"test_id": "T4_mtu", "observed_at": "2026-01-01T00:00:01+00:00", "state_fingerprint": "fp"},
+        {
+            "test_id": "T1_e2e_ping",
+            "error": None,
+            "packet_loss_percent": 0.0,
+            "latency_ms": 42.5,
+            "connectivity": True,
+            "rtt_ms": [41.9, 43.1],
+            "raw": "2 packets transmitted, 2 received",
+        },
+        {"test_id": "T8_tcp_vs_ping", "error": None, "ping_ok": True, "tcp_ok": True},
     ]
+    # Known answers pin both definitions: version 1 stays readable for old
+    # records, and version 2 cannot drift without this failing.
+    assert _integrity.evidence_digest_v1(rows_seen) == "ebb7adbe64727729abfeec1b2c0978a7be486557d8cf181269cc0edb35c17504"
+    assert _integrity.evidence_digest_v2(rows_seen) == "4551ad88f350bf8a300e3f2dae07f49aadc07d5ca69f3fc2beca9825b2b595c2"
+    assert _integrity.evidence_digest(rows_seen) == _integrity.evidence_digest_v2(rows_seen)
+    assert _integrity.evidence_digest(rows_seen, version=1) == _integrity.evidence_digest_v1(rows_seen)
+    for unknown_version in (0, 3, True, "2", None):
+        try:
+            _integrity.evidence_digest(rows_seen, version=unknown_version)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"unknown digest version accepted: {unknown_version!r}")
+
     with_rows = bind_gate_decision(dict(integrity_allow), healthy, proposal, rows_seen)
-    assert not binding_errors(with_rows, healthy, proposal, list(reversed(rows_seen)))
+    assert with_rows["binding"]["evidence_digest_version"] == 2
+    assert with_rows["binding"]["evidence_digest"] == _integrity.evidence_digest_v2(rows_seen)
+    assert not binding_errors(with_rows, healthy, proposal, rows_seen)
+    # Same content, different key order or a fresh copy: same evidence.
+    assert not binding_errors(with_rows, healthy, proposal, _copy.deepcopy(rows_seen))
+    assert not binding_errors(with_rows, healthy, proposal, [dict(reversed(list(row.items()))) for row in rows_seen])
+    assert not binding_errors(with_rows, healthy, proposal, json.loads(json.dumps(rows_seen)))
+
     changed = ["evidence changed since the gate decision"]
-    assert binding_errors(with_rows, healthy, proposal, rows_seen[:1]) == changed
-    assert binding_errors(with_rows, healthy, proposal, [dict(rows_seen[0], observed_at="2026-01-01T00:09:00+00:00"), rows_seen[1]]) == changed
-    assert binding_errors(with_rows, healthy, proposal, [dict(rows_seen[0], state_fingerprint="other"), rows_seen[1]]) == changed
-    assert binding_errors(with_rows, healthy, proposal) == changed
-    assert binding_errors(with_rows, healthy, proposal, rows_seen + [{"test_id": "T8_tcp_vs_ping"}]) == changed
+
+    def _edit(index, **fields):
+        rows = _copy.deepcopy(rows_seen)
+        rows[index].update(fields)
+        return rows
+
+    def _drop(index, key):
+        rows = _copy.deepcopy(rows_seen)
+        del rows[index][key]
+        return rows
+
+    value_edits = {
+        "loss 0 -> 100": _edit(0, packet_loss_percent=100.0),
+        "loss 0.0 -> 0.1": _edit(0, packet_loss_percent=0.1),
+        "latency changed": _edit(0, latency_ms=420.5),
+        "latency null": _edit(0, latency_ms=None),
+        "latency key missing": _drop(0, "latency_ms"),
+        "latency nan": _edit(0, latency_ms=float("nan")),
+        "latency inf": _edit(0, latency_ms=float("inf")),
+        "connectivity flipped": _edit(0, connectivity=False),
+        "error set": _edit(0, error="TimeoutError: ping timed out"),
+        "error empty string": _edit(0, error=""),
+        "error key missing": _drop(0, "error"),
+        "nested sample changed": _edit(0, rtt_ms=[41.9, 43.2]),
+        "nested sample dropped": _edit(0, rtt_ms=[41.9]),
+        "nested samples reordered": _edit(0, rtt_ms=[43.1, 41.9]),
+        "raw output changed": _edit(0, raw="2 packets transmitted, 0 received"),
+        "tcp flipped": _edit(1, tcp_ok=False),
+        "bool -> int": _edit(1, tcp_ok=1),
+        "float -> int": _edit(0, packet_loss_percent=0),
+        "float -> false": _edit(0, packet_loss_percent=False),
+        "timestamp added": _edit(0, observed_at="2026-01-01T00:00:00+00:00"),
+        "fingerprint added": _edit(0, state_fingerprint="fp"),
+        "unit field added": _edit(0, latency_unit="s"),
+        "test id renamed": _edit(1, test_id="T4_mtu"),
+        "row removed": rows_seen[:1],
+        "row added": rows_seen + [{"test_id": "T4_mtu", "df_ping_ok": True}],
+        "row duplicated": rows_seen + [_copy.deepcopy(rows_seen[0])],
+        "rows reordered": list(reversed(rows_seen)),
+        "non-row added": rows_seen + [None],
+        "no evidence": [],
+        "evidence omitted": None,
+    }
+    seen_digests = {_integrity.evidence_digest_v2(rows_seen): "original"}
+    for label, edited in value_edits.items():
+        assert binding_errors(with_rows, healthy, proposal, edited) == changed, label
+        mark = _integrity.evidence_digest_v2(edited)
+        # "no evidence" and "evidence omitted" are the one intended equal pair.
+        if label != "evidence omitted":
+            assert mark not in seen_digests, (label, seen_digests.get(mark))
+            seen_digests[mark] = label
+    # These edits keep every test id. Version 1 could not see any of them.
+    v1_original = _integrity.evidence_digest_v1(rows_seen)
+    for label in (
+        "loss 0 -> 100",
+        "latency null",
+        "latency key missing",
+        "connectivity flipped",
+        "error set",
+        "tcp flipped",
+        "rows reordered",
+    ):
+        assert _integrity.evidence_digest_v1(value_edits[label]) == v1_original, label
+
+    # Missing, null, unavailable and failed stay four different things.
+    four_states = [
+        [{"test_id": "T1_e2e_ping"}],
+        [{"test_id": "T1_e2e_ping", "latency_ms": None}],
+        [{"test_id": "T1_e2e_ping", "latency_ms": None, "error": "measurement_unavailable"}],
+        [{"test_id": "T1_e2e_ping", "latency_ms": None, "error": "TimeoutError: ping timed out"}],
+    ]
+    assert len({_integrity.evidence_digest_v2(rows) for rows in four_states}) == 4
+    # A tagged non-finite float never equals a look-alike mapping, list or string.
+    lookalikes = [float("nan"), {"float": "nan"}, ["float", "nan"], "nan", None, float("inf"), float("-inf")]
+    assert len({_integrity.evidence_digest_v2([{"test_id": "T", "v": item}]) for item in lookalikes}) == len(lookalikes)
+    assert _integrity.evidence_digest_v2([{"test_id": "T", "v": [1]}]) != _integrity.evidence_digest_v2(
+        [{"test_id": "T", "v": {"list": [1]}}]
+    )
+
+    # Values with no canonical form are refused at bind and at verify.
+    for junk in (
+        [{"test_id": "T", "v": {1, 2}}],
+        [{"test_id": "T", 5: "x"}],
+        [{"test_id": "T", "v": b"raw"}],
+        "T1_e2e_ping",
+        {"test_id": "T"},
+    ):
+        try:
+            _integrity.evidence_digest_v2(junk)
+        except _integrity.EvidenceNotCanonical:
+            pass
+        else:
+            raise AssertionError(f"non-canonical evidence accepted: {junk!r}")
+        junk_bound = bind_gate_decision(dict(integrity_allow), healthy, proposal, junk)
+        assert junk_bound["binding"]["evidence_digest"] is None
+        assert binding_errors(junk_bound, healthy, proposal, junk) == ["decision is missing evidence digest"]
+        assert binding_errors(with_rows, healthy, proposal, junk)[0].startswith("evidence cannot be canonicalized"), junk
+
+    # Version handling: only version 2 authorizes. A version 1 digest that is
+    # correct under version 1 is refused, and is never re-read as version 2.
+    legacy = bind_gate_decision(dict(integrity_allow), healthy, proposal, rows_seen)
+    del legacy["binding"]["evidence_digest_version"]
+    legacy["binding"]["evidence_digest"] = _integrity.evidence_digest_v1(rows_seen)
+    legacy_errors = binding_errors(legacy, healthy, proposal, rows_seen)
+    assert len(legacy_errors) == 1 and legacy_errors[0].startswith("decision has no evidence digest version"), legacy_errors
+    for bad_version in (1, 3, "2", True, 2.5):
+        versioned = bind_gate_decision(dict(integrity_allow), healthy, proposal, rows_seen)
+        versioned["binding"]["evidence_digest_version"] = bad_version
+        version_errors = binding_errors(versioned, healthy, proposal, rows_seen)
+        assert len(version_errors) == 1 and "is not accepted for execution" in version_errors[0], (bad_version, version_errors)
+    # A binding that claims version 2 but carries the version 1 digest of the
+    # same rows is refused: there is no fallback to the weaker definition.
+    downgraded = bind_gate_decision(dict(integrity_allow), healthy, proposal, rows_seen)
+    downgraded["binding"]["evidence_digest"] = _integrity.evidence_digest_v1(rows_seen)
+    assert binding_errors(downgraded, healthy, proposal, rows_seen) == changed
     calls.clear()
-    evidence_swap = apply_authorized_action(with_rows, proposal, execute, healthy, lambda: healthy, evidence=rows_seen[:1])
-    assert calls == [] and evidence_swap["execution_error"] == changed[0], evidence_swap
+    downgraded_run = apply_authorized_action(downgraded, proposal, execute, healthy, lambda: healthy, evidence=rows_seen)
+    assert calls == [] and downgraded_run["execution_error"] == changed[0], downgraded_run
+    unversioned_v2 = bind_gate_decision(dict(integrity_allow), healthy, proposal, rows_seen)
+    del unversioned_v2["binding"]["evidence_digest_version"]
+    assert binding_errors(unversioned_v2, healthy, proposal, rows_seen), "a version 2 digest without its version must not pass"
+    no_mark = bind_gate_decision(dict(integrity_allow), healthy, proposal, rows_seen)
+    no_mark["binding"]["evidence_digest"] = None
+    assert binding_errors(no_mark, healthy, proposal, rows_seen) == ["decision is missing evidence digest"]
+
+    # The boundary refuses a changed measurement and executes nothing.
+    for label in (
+        "loss 0 -> 100",
+        "latency key missing",
+        "error set",
+        "rows reordered",
+        "row duplicated",
+        "evidence omitted",
+    ):
+        fresh = bind_gate_decision(dict(integrity_allow), healthy, proposal, rows_seen)
+        calls.clear()
+        refused_run = apply_authorized_action(
+            fresh, proposal, execute, healthy, lambda: healthy, evidence=value_edits[label]
+        )
+        assert calls == [] and refused_run["execution_attempted"] is False, (label, refused_run)
+        assert refused_run["execution_error"] == changed[0], (label, refused_run)
+    calls.clear()
+    legacy_run = apply_authorized_action(legacy, proposal, execute, healthy, lambda: healthy, evidence=rows_seen)
+    assert calls == [] and legacy_run["execution_error"].startswith("decision has no evidence digest version"), legacy_run
+    calls.clear()
     evidence_ok = apply_authorized_action(
-        with_rows, proposal, execute, healthy, _reads(healthy, on_backup), evidence=rows_seen
+        with_rows, proposal, execute, healthy, _reads(healthy, on_backup), evidence=_copy.deepcopy(rows_seen)
     )
     assert calls == [proposal] and evidence_ok["remediation_succeeded"] is True, evidence_ok
+
+    # Stored version 1 digests still verify under version 1, unchanged.
+    stored_dir = Path(__file__).resolve().parent.parent / "results" / "pilot" / "v4_episodes"
+    stored_checked = 0
+    for stored_file in sorted(stored_dir.glob("*.json")):
+        stored = json.loads(stored_file.read_text(encoding="utf-8"))
+        stored_binding = (stored.get("gate_decision") or {}).get("binding")
+        if not isinstance(stored_binding, dict) or "evidence_digest" not in stored_binding:
+            continue
+        assert "evidence_digest_version" not in stored_binding, stored_file.name
+        stored_rows = (stored.get("oam") or {}).get("results") or []
+        assert _integrity.evidence_digest_v1(stored_rows) == stored_binding["evidence_digest"], stored_file.name
+        assert _integrity.evidence_digest_v2(stored_rows) != stored_binding["evidence_digest"], stored_file.name
+        stored_checked += 1
+    assert stored_checked or not stored_dir.is_dir(), "no stored version 1 digest was checked"
 
     # B10a: an interrupted write leaves the previous file whole and no temp file.
     import tempfile as _tempfile
