@@ -1,0 +1,40 @@
+{
+  "scenario": "3_insufficient_evidence_escalate",
+  "mode": "test_mode_simulation",
+  "live_network": false,
+  "fault_id": "F3",
+  "agent_proposal": {
+    "action": "REROUTE",
+    "target": "HostA_to_HostB",
+    "proposed_path": [
+      "r1",
+      "r3",
+      "r4"
+    ],
+    "reason": "loss on primary",
+    "causes": [
+      {
+        "cause_id": "F3",
+        "predicted_tests": [
+          {
+            "test_id": "T2_hop_ping",
+            "expected": "primary:r2-r4=loss"
+          }
+        ]
+      }
+    ],
+    "observed_at": "2026-11-13T10:37:12.057948+00:00"
+  },
+  "oam_evidence": [],
+  "gate_decision": {
+    "decision": "escalate",
+    "reason": "insufficient evidence: discriminating test(s) not observed: T2_hop_ping",
+    "tests_run": []
+  },
+  "execution": {
+    "execution_attempted": false,
+    "state_verified": false,
+    "remediation_succeeded": false,
+    "execution_error": null
+  }
+}

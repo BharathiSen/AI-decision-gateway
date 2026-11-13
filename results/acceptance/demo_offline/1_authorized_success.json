@@ -1,0 +1,162 @@
+{
+  "scenario": "1_authorized_success",
+  "mode": "test_mode_simulation",
+  "live_network": false,
+  "fault_id": "F3",
+  "workflow": [
+    "incident_detection",
+    "telemetry_collection",
+    "ai_diagnosis",
+    "remediation_proposal",
+    "independent_authorization",
+    "controlled_execution",
+    "post_action_verification",
+    "audit_record"
+  ],
+  "agent_proposal": {
+    "action": "REROUTE",
+    "target": "HostA_to_HostB",
+    "proposed_path": [
+      "r1",
+      "r3",
+      "r4"
+    ],
+    "reason": "loss on primary",
+    "causes": [
+      {
+        "cause_id": "F3",
+        "predicted_tests": [
+          {
+            "test_id": "T2_hop_ping",
+            "expected": "primary:r2-r4=loss"
+          }
+        ]
+      }
+    ],
+    "observed_at": "2026-11-13T10:37:11.510378+00:00"
+  },
+  "telemetry": {
+    "metrics": {
+      "active_path": "primary",
+      "packet_loss_percent": 20.0,
+      "connectivity": true
+    },
+    "active_path": "primary"
+  },
+  "oam_evidence": [
+    {
+      "test_id": "T2_hop_ping",
+      "error": null,
+      "path": "primary",
+      "hops_primary": [
+        {
+          "src": "hostA",
+          "dst_ip": "10.0.1.1",
+          "packet_loss_percent": 0.0,
+          "latency_ms": 10.0
+        },
+        {
+          "src": "r1",
+          "dst_ip": "10.0.12.2",
+          "packet_loss_percent": 0.0,
+          "latency_ms": 10.0
+        },
+        {
+          "src": "r2",
+          "dst_ip": "10.0.24.2",
+          "packet_loss_percent": 30.0,
+          "latency_ms": 10.0
+        },
+        {
+          "src": "r4",
+          "dst_ip": "10.0.4.2",
+          "packet_loss_percent": 0.0,
+          "latency_ms": 10.0
+        }
+      ],
+      "hops_backup": [
+        {
+          "src": "hostA",
+          "dst_ip": "10.0.1.1",
+          "packet_loss_percent": 0.0,
+          "latency_ms": 10.0
+        },
+        {
+          "src": "r1",
+          "dst_ip": "10.0.13.2",
+          "packet_loss_percent": 0.0,
+          "latency_ms": 10.0
+        },
+        {
+          "src": "r3",
+          "dst_ip": "10.0.34.2",
+          "packet_loss_percent": 0.0,
+          "latency_ms": 10.0
+        },
+        {
+          "src": "r4",
+          "dst_ip": "10.0.4.2",
+          "packet_loss_percent": 0.0,
+          "latency_ms": 10.0
+        }
+      ],
+      "hops": [
+        {
+          "src": "hostA",
+          "dst_ip": "10.0.1.1",
+          "packet_loss_percent": 0.0,
+          "latency_ms": 10.0
+        },
+        {
+          "src": "r1",
+          "dst_ip": "10.0.12.2",
+          "packet_loss_percent": 0.0,
+          "latency_ms": 10.0
+        },
+        {
+          "src": "r2",
+          "dst_ip": "10.0.24.2",
+          "packet_loss_percent": 30.0,
+          "latency_ms": 10.0
+        },
+        {
+          "src": "r4",
+          "dst_ip": "10.0.4.2",
+          "packet_loss_percent": 0.0,
+          "latency_ms": 10.0
+        }
+      ]
+    },
+    {
+      "test_id": "T1_e2e_ping",
+      "packet_loss_percent": 20.0,
+      "latency_ms": 40.0,
+      "connectivity": true,
+      "error": null
+    }
+  ],
+  "gate_decision": {
+    "decision": "allow",
+    "reason": "all checks passed",
+    "tests_run": [
+      "T2_hop_ping",
+      "T1_e2e_ping"
+    ],
+    "selected_tests": [
+      "T2_hop_ping"
+    ],
+    "eliminated": [
+      "F11"
+    ]
+  },
+  "execution": {
+    "execution_attempted": true,
+    "state_verified": true,
+    "remediation_succeeded": true,
+    "execution_error": null
+  },
+  "audit": {
+    "authorization_present": true,
+    "decision_id": "cf1a4df809bc4ef5835dda4275463d06"
+  }
+}

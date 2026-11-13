@@ -613,15 +613,299 @@ def live_accept():
     return 0
 
 
+DEMO_DIR = ACCEPT_DIR / "demo_offline"
+DEMO_MODE = "test_mode_simulation"
+
+
+def _fresh_timestamp():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _hop_rows(spec, lossy_hop=None):
+    return [
+        {
+            "src": src,
+            "dst_ip": ip,
+            "packet_loss_percent": 30.0 if src == lossy_hop else 0.0,
+            "latency_ms": 10.0,
+        }
+        for src, _node, ip in spec
+    ]
+
+
+@using_test_thresholds
+def demo_offline():
+    """Three product scenarios offline (simulation). Does not touch live networks.
+
+    1. Successful authorized remediation (allow + controlled execute).
+    2. Unsafe remediation blocked by the gate.
+    3. Insufficient evidence → escalate (no execute).
+    """
+    from copy import deepcopy
+
+    from agent.test_validate import good_proposal
+    from bench.tests import HOPS, HOPS_BACKUP
+
+    before = _snapshot_frozen()
+    DEMO_DIR.mkdir(parents=True, exist_ok=True)
+    now = _fresh_timestamp()
+    records = []
+    failures = []
+
+    # --- 1. Authorized success (F3 loss, discriminating T2 evidence) ---
+    lossy = _snapshot(r1_via="10.0.12.2", r4_via="10.0.24.1", active_path="primary")
+    lossy["timestamp"] = now
+    lossy.setdefault("metrics", {})
+    lossy["metrics"]["packet_loss_percent"] = 20.0
+    lossy["metrics"]["connectivity"] = True
+    after = _snapshot(r1_via="10.0.13.2", r4_via="10.0.34.1", active_path="backup")
+    after["timestamp"] = now
+    after["metrics"] = dict(lossy["metrics"])
+    hops = _hop_rows(HOPS, lossy_hop="r2")
+    t2 = {
+        "test_id": "T2_hop_ping",
+        "error": None,
+        "path": "primary",
+        "hops_primary": hops,
+        "hops_backup": _hop_rows(HOPS_BACKUP),
+        "hops": hops,
+    }
+    t1 = {
+        "test_id": "T1_e2e_ping",
+        "packet_loss_percent": 20.0,
+        "latency_ms": 40.0,
+        "connectivity": True,
+        "error": None,
+    }
+    prop_ok = good_proposal()
+    prop_ok["observed_at"] = now
+    prop_ok["causes"][0]["predicted_tests"] = [
+        {"test_id": "T2_hop_ping", "expected": "primary:r2-r4=loss"}
+    ]
+    oam_ok = [t2, t1]
+    gate_ok = decide(
+        None, prop_ok, lossy, oam_ok, mode="full", run_missing_tests=False, noise_id="N0"
+    )
+    reads = {"n": 0}
+
+    def read_after_allow():
+        reads["n"] += 1
+        return lossy if reads["n"] == 1 else after
+
+    exec_ok = apply_authorized_action(
+        gate_ok,
+        prop_ok,
+        lambda proposal: {"executed": True, "action": "REROUTE", "mode": DEMO_MODE},
+        lossy,
+        read_after_allow,
+        evidence=oam_ok,
+    )
+    if gate_ok.get("decision") != "allow" or not exec_ok.get("execution_attempted"):
+        failures.append(f"authorized success: {gate_ok.get('decision')} {exec_ok}")
+    if not exec_ok.get("state_verified") or not exec_ok.get("remediation_succeeded"):
+        failures.append(f"authorized exec incomplete: {exec_ok}")
+    records.append(
+        {
+            "scenario": "1_authorized_success",
+            "mode": DEMO_MODE,
+            "live_network": False,
+            "fault_id": "F3",
+            "workflow": [
+                "incident_detection",
+                "telemetry_collection",
+                "ai_diagnosis",
+                "remediation_proposal",
+                "independent_authorization",
+                "controlled_execution",
+                "post_action_verification",
+                "audit_record",
+            ],
+            "agent_proposal": prop_ok,
+            "telemetry": {"metrics": lossy.get("metrics"), "active_path": (lossy.get("metrics") or {}).get("active_path")},
+            "oam_evidence": oam_ok,
+            "gate_decision": {
+                "decision": gate_ok.get("decision"),
+                "reason": gate_ok.get("reason"),
+                "tests_run": gate_ok.get("tests_run"),
+                "selected_tests": (gate_ok.get("log") or {}).get("selected_tests"),
+                "eliminated": (gate_ok.get("log") or {}).get("eliminated"),
+            },
+            "execution": {
+                "execution_attempted": exec_ok.get("execution_attempted"),
+                "state_verified": exec_ok.get("state_verified"),
+                "remediation_succeeded": exec_ok.get("remediation_succeeded"),
+                "execution_error": exec_ok.get("execution_error"),
+            },
+            "audit": {
+                "authorization_present": bool(gate_ok.get("authorization")),
+                "decision_id": (gate_ok.get("authorization") or {}).get("decision_id"),
+            },
+        }
+    )
+
+    # --- 2. Unsafe remediation blocked (F12 / backup down trap) ---
+    now2 = _fresh_timestamp()
+    backup_down = _snapshot(backup_up=False, primary_up=True, active_path="primary")
+    backup_down["timestamp"] = now2
+    trap = trap_proposal(backup_down)
+    trap["observed_at"] = now2
+    healthy_oam = [
+        {
+            "test_id": "T1_e2e_ping",
+            "packet_loss_percent": 0.0,
+            "latency_ms": 10.0,
+            "connectivity": True,
+            "error": None,
+        },
+        {"test_id": "T7_route_check", "active_path": "primary", "error": None},
+    ]
+    gate_block = decide(
+        None, trap, backup_down, healthy_oam, mode="full", run_missing_tests=False, noise_id="N0"
+    )
+    calls_block = []
+    exec_block = apply_authorized_action(
+        gate_block,
+        trap,
+        lambda proposal: calls_block.append(proposal) or {"executed": True},
+        backup_down,
+        lambda: backup_down,
+        evidence=healthy_oam,
+    )
+    if gate_block.get("decision") == "allow" or exec_block.get("execution_attempted") or calls_block:
+        failures.append(f"unsafe block failed: {gate_block} {exec_block} calls={calls_block}")
+    records.append(
+        {
+            "scenario": "2_unsafe_blocked",
+            "mode": DEMO_MODE,
+            "live_network": False,
+            "fault_id": "F12",
+            "agent_proposal": trap,
+            "gate_decision": {
+                "decision": gate_block.get("decision"),
+                "reason": gate_block.get("reason"),
+                "tests_run": gate_block.get("tests_run"),
+            },
+            "execution": {
+                "execution_attempted": exec_block.get("execution_attempted"),
+                "state_verified": exec_block.get("state_verified"),
+                "remediation_succeeded": exec_block.get("remediation_succeeded"),
+                "execution_error": exec_block.get("execution_error"),
+            },
+        }
+    )
+
+    # --- 3. Insufficient evidence → escalate ---
+    now3 = _fresh_timestamp()
+    lossy3 = deepcopy(lossy)
+    lossy3["timestamp"] = now3
+    prop_esc = good_proposal()
+    prop_esc["observed_at"] = now3
+    prop_esc["causes"][0]["predicted_tests"] = [
+        {"test_id": "T2_hop_ping", "expected": "primary:r2-r4=loss"}
+    ]
+    gate_esc = decide(
+        None, prop_esc, lossy3, [], mode="full", run_missing_tests=False, noise_id="N0"
+    )
+    calls_esc = []
+    exec_esc = apply_authorized_action(
+        gate_esc,
+        prop_esc,
+        lambda proposal: calls_esc.append(proposal) or {"executed": True},
+        lossy3,
+        lambda: lossy3,
+        evidence=[],
+    )
+    if gate_esc.get("decision") != "escalate" or exec_esc.get("execution_attempted") or calls_esc:
+        failures.append(f"escalate failed: {gate_esc} {exec_esc} calls={calls_esc}")
+    if "insufficient evidence" not in (gate_esc.get("reason") or ""):
+        failures.append(f"escalate reason: {gate_esc.get('reason')}")
+    records.append(
+        {
+            "scenario": "3_insufficient_evidence_escalate",
+            "mode": DEMO_MODE,
+            "live_network": False,
+            "fault_id": "F3",
+            "agent_proposal": prop_esc,
+            "oam_evidence": [],
+            "gate_decision": {
+                "decision": gate_esc.get("decision"),
+                "reason": gate_esc.get("reason"),
+                "tests_run": gate_esc.get("tests_run"),
+            },
+            "execution": {
+                "execution_attempted": exec_esc.get("execution_attempted"),
+                "state_verified": exec_esc.get("state_verified"),
+                "remediation_succeeded": exec_esc.get("remediation_succeeded"),
+                "execution_error": exec_esc.get("execution_error"),
+            },
+        }
+    )
+
+    tag = experiment_config()
+    report = {
+        "build": LIVE_ACCEPT_BUILD,
+        "implementation_tag": tag["implementation_tag"],
+        "mode": DEMO_MODE,
+        "live_network": False,
+        "note": (
+            "Offline simulation using test-only thresholds. "
+            "Not Mininet proof. Live demos require: sudo python3 bench/accept.py --live-accept "
+            "on the VM after accepted thresholds exist (D2)."
+        ),
+        "scenarios": records,
+        "failures": failures,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    write_json(DEMO_DIR / "report.json", report)
+    for row in records:
+        write_json(DEMO_DIR / f"{row['scenario']}.json", row)
+    lines = [
+        "VeriFix offline demo (test_mode_simulation - not live network)",
+        f"tag: {tag['implementation_tag']}",
+        "",
+    ]
+    for row in records:
+        gd = row["gate_decision"]
+        ex = row["execution"]
+        lines.append(f"=== {row['scenario']} ===")
+        lines.append(f"decision={gd.get('decision')} reason={gd.get('reason')}")
+        lines.append(
+            f"execution_attempted={ex.get('execution_attempted')} "
+            f"state_verified={ex.get('state_verified')} "
+            f"remediation_succeeded={ex.get('remediation_succeeded')}"
+        )
+        lines.append("")
+    (DEMO_DIR / "traces.txt").write_text("\n".join(lines), encoding="utf-8")
+    _assert_frozen(before)
+
+    print("VeriFix offline demo (test_mode_simulation - not live network)")
+    for row in records:
+        gd = row["gate_decision"]
+        print(f"  {row['scenario']}: {gd.get('decision')} ({gd.get('reason')})")
+    if failures:
+        print("demo offline: FAIL " + "; ".join(str(item) for item in failures))
+        return 1
+    print(f"records: {DEMO_DIR}")
+    print("demo offline: PASS")
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--self-check", action="store_true")
     parser.add_argument("--live-accept", action="store_true")
+    parser.add_argument(
+        "--demo",
+        action="store_true",
+        help="Run three offline product scenarios (simulation; not Mininet)",
+    )
     args = parser.parse_args(argv)
     if args.self_check:
         return _self_check()
     if args.live_accept:
         return live_accept()
+    if args.demo:
+        return demo_offline()
     parser.print_help()
     return 2
 

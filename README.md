@@ -1,8 +1,8 @@
 # AI Decision Gateway
 
-Research prototype for **prediction-informed OAM gating** of LLM-proposed network fixes. An AI agent **proposes** remediation; an independent **gate** verifies proposals with operations/administration/maintenance (OAM) tests and structured predictions; **control** applies allowed changes only on an emulated network.
+Research prototype for **verification-gated** LLM-proposed network fixes. An AI agent **proposes** remediation; an independent **gate** verifies proposals with operations/administration/maintenance (OAM) tests and structured predictions; **control** applies allowed changes only on an emulated network.
 
-Paper track: *Prediction-Informed OAM Gates for LLM-Proposed Network Remediation*.
+Paper track: *Fix-Aware Evidence Selection for Authorizing AI-Proposed Network Remediation* (see private `docs/` research package).
 
 ## Architecture
 
@@ -54,7 +54,19 @@ Windows/macOS hosts can develop offline; live numbers require the VM.
 
 ## Quick start
 
-### 1. Interactive demo (Mininet VM)
+### 1. Offline product demo (no Mininet)
+
+Three scenarios (authorized allow, unsafe block, insufficient-evidence escalate).
+Uses test thresholds only — labeled `test_mode_simulation`, not live traffic proof:
+
+```bash
+python bench/accept.py --demo
+```
+
+Records: `results/acceptance/demo_offline/`. Live VM demos:
+`sudo python3 bench/accept.py --live-accept` (requires accepted research thresholds).
+
+### 2. Interactive demo (Mininet VM)
 
 ```bash
 sudo python3 main.py
@@ -62,7 +74,7 @@ sudo python3 main.py
 
 Useful CLI commands: `status`, `fail_primary`, `restore all`, `reroute backup`, `propose`.
 
-### 2. Populate results (one command)
+### 3. Populate results (one command)
 
 **Offline simulation** (no Mininet — dev/CI; uses stub agent + observability matrix):
 

@@ -1,0 +1,14 @@
+VeriFix offline demo (test_mode_simulation - not live network)
+tag: verifix-stage20-accept-v1-ed8b2df5eec3
+
+=== 1_authorized_success ===
+decision=allow reason=all checks passed
+execution_attempted=True state_verified=True remediation_succeeded=True
+
+=== 2_unsafe_blocked ===
+decision=block reason=safety failed
+execution_attempted=False state_verified=False remediation_succeeded=False
+
+=== 3_insufficient_evidence_escalate ===
+decision=escalate reason=insufficient evidence: discriminating test(s) not observed: T2_hop_ping
+execution_attempted=False state_verified=False remediation_succeeded=False
