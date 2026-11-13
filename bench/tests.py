@@ -616,10 +616,42 @@ _SUMMARY_LINE = re.compile(
 _RECEIVER_LINE = re.compile(
     r"(\d+\.\d+)-(\d+\.\d+)\s+sec\s+[\d.]+\s+[KMG]?Bytes\s+([\d.]+)\s*([KMG])bits/sec\s+receiver\b"
 )
-# How long after the requested duration the receiver summary may end while
-# queued data drains (episodes: median +0.16 s, max +0.55 s observed). Below
-# 1 s so a 2-second run is never read as a 1-second probe.
+# The sender summary ("... sender"; iperf 3.19 prints a Retr column before it).
+_SENDER_LINE = re.compile(
+    r"(\d+\.\d+)-(\d+\.\d+)\s+sec\s+[\d.]+\s+[KMG]?Bytes\s+[\d.]+\s*[KMG]?bits/sec\s+(?:\d+\s+)?sender\b"
+)
+# How long the receiver summary may run past the end of the SENDER's transfer
+# while queued data drains (episodes: median +0.16 s, max +0.55 s observed;
+# VM calibration 2026-11-13: +0.64 s after a 3.22 s sender). Below 1 s so a
+# 2-second run is never read as a 1-second probe.
 RECEIVER_DRAIN_SECONDS = 0.75
+
+
+def _receiver_window_problem(output, seconds):
+    """None when the last receiver summary covers this transfer, else the reason.
+
+    The drain is measured from the end of the sender's own summary, not from
+    the requested duration: on a slow VM the sender itself runs a little long
+    (3.22 s for -t 3), and that is not queue drain. The sender must still be
+    within the usual window of the request, so a truncated or overlong run
+    is refused. Without a sender line the drain is measured from the request.
+    """
+    receiver = list(_RECEIVER_LINE.finditer(output or ""))
+    if not receiver:
+        return None
+    r_start, r_end = (float(x) for x in receiver[-1].groups()[:2])
+    senders = list(_SENDER_LINE.finditer(output or ""))
+    if senders:
+        s_start, s_end = (float(x) for x in senders[-1].groups()[:2])
+        sender_span = s_end - s_start
+        if not -0.25 <= sender_span - float(seconds) <= 0.5:
+            return "iperf_sender_overrun"
+        drain = (r_end - r_start) - sender_span
+    else:
+        drain = (r_end - r_start) - float(seconds)
+    if not -0.25 <= drain <= RECEIVER_DRAIN_SECONDS:
+        return "iperf_drain_exceeded"
+    return None
 
 
 def _covers(start, end, seconds):
@@ -651,9 +683,8 @@ def _summary_mbit(output, seconds):
         # The receiver line is delivered throughput. The sender line counts
         # bytes still in queues, so it is never a substitute: a v3b F12 run
         # read 12.2 Mbit sender / 7.67 Mbit receiver and was graded slow.
-        start, end, value, unit = receiver[-1].groups()
-        span = float(end) - float(start)
-        if not -0.25 <= span - float(seconds) <= RECEIVER_DRAIN_SECONDS:
+        _start, _end, value, unit = receiver[-1].groups()
+        if _receiver_window_problem(output, seconds):
             return None
         chosen = float(value) * scale[unit]
     else:
@@ -724,11 +755,13 @@ def _parse_mbit_intervals(output):
     return found
 
 
-def _iperf_infra_error(out, mbit, run_meta=None):
+def _iperf_infra_error(out, mbit, run_meta=None, seconds=None):
     """Infra/tool failure for T10. A real slow transfer keeps error=None.
 
     Timeout or structured run error is always measurement failure, even when
-    a partial bitrate was parsed from incomplete output.
+    a partial bitrate was parsed from incomplete output. With seconds, a
+    receiver summary that exists but does not cover the transfer is named
+    (iperf_sender_overrun / iperf_drain_exceeded), not "unparseable".
     """
     if run_meta and run_meta.get("timed_out"):
         return "timeout"
@@ -745,6 +778,10 @@ def _iperf_infra_error(out, mbit, run_meta=None):
     if "interrupt -" in low and mbit is None:
         return "iperf_interrupted"
     if mbit is None:
+        if seconds is not None:
+            problem = _receiver_window_problem(text, seconds)
+            if problem:
+                return problem
         return "iperf_unparseable"
     return None
 
@@ -793,7 +830,7 @@ def T10_speed(net, duration=3, interval=None):
         "raw": out[-2000:] if len(out) > 2000 else out,
         "duration_seconds": time.monotonic() - t0,
         "probes": [{"kind": "iperf3", "bytes": _summary_bytes(out, 1 if interval else duration)}],
-        "error": _iperf_infra_error(out, mbit, run_meta),
+        "error": _iperf_infra_error(out, mbit, run_meta, seconds=1 if interval else duration),
     }
 
 
@@ -1455,6 +1492,46 @@ def _check_t10_receiver():
     assert _iperf_infra_error(v3b_f12, 7.67, {"timed_out": True}) == "timeout"
     assert _iperf_infra_error(v3b_f12, 7.67, {"error": "timeout", "timed_out": True}) == "timeout"
     assert _iperf_infra_error("no receiver summary\n", None) == "iperf_unparseable"
+
+    # VM calibration 2026-11-13, run 4 (iperf 3.19.1): the sender itself ran
+    # 3.22 s for -t 3 and the receiver drained 0.64 s after it. Valid reading.
+    vm_run4 = (
+        "[  5]   2.00-3.22   sec   768 KBytes  5.15 Mbits/sec    0    215 KBytes       \n"
+        "- - - - - - - - - - - - - - - - - - - - - - - - -\n"
+        "[ ID] Interval           Transfer     Bitrate         Retr\n"
+        "[  5]   0.00-3.22   sec  2.38 MBytes  6.18 Mbits/sec    0            sender\n"
+        "[  5]   0.00-3.86   sec  1.88 MBytes  4.08 Mbits/sec                  receiver\n"
+        "\niperf Done.\n"
+    )
+    assert _summary_mbit(vm_run4, 3) == 4.08, _summary_mbit(vm_run4, 3)
+    assert _iperf_infra_error(vm_run4, 4.08, seconds=3) is None
+    # Same receiver span, but the sender stopped on time: 0.86 s of drain is too long.
+    late_drain = vm_run4.replace("0.00-3.22   sec  2.38", "0.00-3.00   sec  2.38")
+    assert _summary_mbit(late_drain, 3) is None
+    assert _iperf_infra_error(late_drain, None, seconds=3) == "iperf_drain_exceeded"
+    # A sender far off the requested duration is refused, whatever the receiver says.
+    overrun = vm_run4.replace("0.00-3.22   sec  2.38", "0.00-3.90   sec  2.38").replace("0.00-3.86", "0.00-4.20")
+    assert _summary_mbit(overrun, 3) is None
+    assert _iperf_infra_error(overrun, None, seconds=3) == "iperf_sender_overrun"
+    short = vm_run4.replace("0.00-3.22   sec  2.38", "0.00-1.10   sec  2.38").replace("0.00-3.86", "0.00-1.60")
+    assert _summary_mbit(short, 3) is None
+    # Without a sender line the drain is still measured from the request.
+    receiver_only = "[  5]   0.00-3.86   sec  1.88 MBytes  4.08 Mbits/sec                  receiver\n"
+    assert _summary_mbit(receiver_only, 3) is None
+    assert _iperf_infra_error(receiver_only, None, seconds=3) == "iperf_drain_exceeded"
+    # VM run 5: the receiver got 0 bytes in 25.8 s (stall). Never a reading.
+    vm_run5 = (
+        "[  5]   3.00-25.77  sec  0.00 Bytes  0.00 bits/sec    0    345 KBytes       \n"
+        "- - - - - - - - - - - - - - - - - - - - - - - - -\n"
+        "[ ID] Interval           Transfer     Bitrate         Retr\n"
+        "[  5]   0.00-25.77  sec  3.00 MBytes   976 Kbits/sec    0            sender\n"
+        "[  5]   0.00-25.77  sec  0.00 Bytes  0.00 bits/sec                  receiver\n"
+    )
+    assert _summary_mbit(vm_run5, 3) is None
+    assert _iperf_infra_error(vm_run5, None, {"timed_out": True}, seconds=3) == "timeout"
+    assert _iperf_infra_error(vm_run5, None, seconds=3) is not None
+    # Earlier behaviour without seconds is unchanged.
+    assert _iperf_infra_error(late_drain, None) == "iperf_unparseable"
     print("T10 receiver parsing: PASS")
 
 
@@ -1705,6 +1782,24 @@ def _check_h2_measurement_errors():
         assert t10c["mbit_per_sec"] is None, t10c
     finally:
         globals()["run_in_node"] = saved
+
+    # T10 passes its duration to the error label: the VM run-4 shape is a
+    # reading; the same receiver after an on-time sender is a named drain failure.
+    for sender_end, want_mbit, want_err in (("3.22", 4.08, None), ("3.00", None, "iperf_drain_exceeded")):
+        drain_text = (
+            f"[  5]   0.00-{sender_end}   sec  2.38 MBytes  6.18 Mbits/sec    0            sender\n"
+            "[  5]   0.00-3.86   sec  1.88 MBytes  4.08 Mbits/sec                  receiver\n"
+        )
+
+        def fake_t10_drain(node, command, timeout=60.0, structured=False, _text=drain_text):
+            return {"output": _text, "exit_code": 0, "timed_out": False, "error": None}
+
+        globals()["run_in_node"] = fake_t10_drain
+        try:
+            t10d = T10_speed(_Net(), duration=3)
+            assert t10d["mbit_per_sec"] == want_mbit and t10d["error"] == want_err, t10d
+        finally:
+            globals()["run_in_node"] = saved
 
     # D1: T2 parent error from any hop structured measurement failure.
     t2_nodes = {
