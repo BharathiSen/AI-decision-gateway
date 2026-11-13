@@ -304,6 +304,10 @@ def run_with_timeout(fn, seconds):
         return fn()
 
     def _handler(_signum, _frame):
+        from control.gated import alarm_should_defer
+
+        if alarm_should_defer():
+            return  # delivered again when the gated execution section ends
         raise TimeoutError("episode timed out")
 
     previous = signal.signal(signal.SIGALRM, _handler)
@@ -346,6 +350,7 @@ def _stub_and_gate(scenario, net=None):
             oam_results,
             mode="pilot_v0" if scenario.get("strategy") == "gate_v0" else "full",
             run_missing_tests=False,
+            path_qdiscs=(episode.get("execution_baseline") or {}).get("qdiscs"),
             noise_id=noise_id,
         )
 

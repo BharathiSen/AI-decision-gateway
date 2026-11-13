@@ -137,6 +137,59 @@ def decide(
     noise_id=None,
     learned_grader=None,
     budget_seconds=None,
+    authorization_ttl=None,
+    path_qdiscs=None,
+):
+    """Gate decision plus its gate-issued authorization (gate/authority.py).
+
+    Every verdict carries an Ed25519-sealed authorization over the proposal,
+    snapshot and evidence as they were when decide() was entered, so the
+    verdict cannot be changed afterwards without breaking the seal. Only an
+    allow authorization can execute. See _decide for the decision itself.
+    """
+    import time as _time
+
+    from gate import authority
+
+    copy_started = _time.perf_counter()
+    sealed_proposal, sealed_snapshot, sealed_evidence = authority.entry_copies(
+        proposal, network_snapshot, test_results
+    )
+    copy_seconds = _time.perf_counter() - copy_started
+    record = _decide(
+        net,
+        proposal,
+        network_snapshot,
+        test_results=test_results,
+        already_ran=already_ran,
+        mode=mode,
+        run_missing_tests=run_missing_tests,
+        noise_id=noise_id,
+        learned_grader=learned_grader,
+        budget_seconds=budget_seconds,
+    )
+    record = authority.issue_into(
+        record, sealed_proposal, sealed_snapshot, sealed_evidence, mode, ttl=authorization_ttl, path_qdiscs=path_qdiscs
+    )
+    if isinstance(record, dict):
+        # Unsigned and reported apart: entry copies + digest + signature. Gate
+        # latency measured around decide() includes it; subtract to compare
+        # with records made before gate-issued authorizations.
+        record["authorization"]["issue_seconds"] += copy_seconds
+    return record
+
+
+def _decide(
+    net,
+    proposal,
+    network_snapshot,
+    test_results=None,
+    already_ran=None,
+    mode="full",
+    run_missing_tests=True,
+    noise_id=None,
+    learned_grader=None,
+    budget_seconds=None,
 ):
     """
     mode: 'full' | 'pilot_v0' (consistency + safety only)

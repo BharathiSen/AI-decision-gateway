@@ -174,6 +174,7 @@ def make_gate_fn(net, mode="full"):
             oam_results,
             mode=_mode,
             run_missing_tests=False,
+            path_qdiscs=(episode.get("execution_baseline") or {}).get("qdiscs"),
             noise_id=noise_id,
         )
 

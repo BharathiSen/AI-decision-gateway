@@ -39,8 +39,53 @@ def normalize_action(name):
     return Action(name)
 
 
-def execute(net, action, proposal=None):
-    """Apply an allowed action to the live network."""
+# Modules that may run actions without a gate authorization (baselines and
+# ground-truth tooling). Enforced by `python -m control`; it is a guard against
+# accidental use, not a security boundary.
+UNGATED_CALLERS = frozenset({
+    "baselines/b0_ungated.py",
+    "baselines/b1_fixed_rules.py",
+    "bench/verify_fault_observability.py",
+    "bench/run_episode.py",  # _self_check only: ungated path resolution matches the gate's
+})
+
+
+def execute_gated(net, capability):
+    """Run one gate-authorized action. Requires a capability minted after verification.
+
+    Route changes go through checked per-router commands (control.routes):
+    a non-zero exit raises at that router, so r1-done-r4-failed is visible.
+    Compensation is not done here; control.gated.run_lifecycle does it.
+    """
+    from control import gated, routes
+
+    errors = gated.capability_errors(capability)
+    if errors:
+        raise PermissionError(errors[0])
+    action = normalize_action(capability.action)
+    if action == Action.DO_NOTHING:
+        return {"executed": False, "action": action.value}
+    if action == Action.ESCALATE:
+        return {"executed": False, "action": action.value, "escalated": True}
+    if action == Action.REROUTE:
+        from gate.checks import reroute_choice
+
+        path = reroute_choice(capability.proposal)
+        if path is None or path != capability.reroute_path:
+            raise PermissionError(f"reroute path {path!r} is not the authorized path {capability.reroute_path!r}")
+        routes.apply_path_checked(net, path)
+        return {"executed": True, "action": action.value, "path": path}
+    raise PermissionError(f"{action.value} is not executable through the gate")
+
+
+def execute_ungated(net, action, proposal=None, *, reason):
+    """Apply an action with NO gate authorization. Baselines and tooling only.
+
+    Behaviour is unchanged from the former execute(): set_active_path issues
+    unchecked commands. reason names the caller (e.g. "B0 ungated baseline").
+    """
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError("execute_ungated requires a reason naming the ungated caller")
     action = normalize_action(action if isinstance(action, str) else action.value)
     proposal = proposal or {}
 

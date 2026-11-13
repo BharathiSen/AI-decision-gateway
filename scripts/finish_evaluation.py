@@ -23,7 +23,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from bench.contracts import refuse_protected_path  # noqa: E402
+from bench.contracts import atomic_write_text, refuse_protected_path  # noqa: E402
 
 OFFLINE_SUMMARY = ROOT / "results" / "offline_experiment_summary.json"
 
@@ -107,7 +107,7 @@ def main():
         summary = aggregate(OFFLINE_EPISODES)
         summary["environment"] = "offline_simulation"
         summary["episode_count"] = args.episodes
-        OFFLINE_SUMMARY.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        atomic_write_text(OFFLINE_SUMMARY, json.dumps(summary, indent=2))
         done = str(OFFLINE_SUMMARY)
 
     if not args.skip_figures:

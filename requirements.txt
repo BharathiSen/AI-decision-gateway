@@ -24,5 +24,6 @@
 openai==2.45.0
 pyyaml==6.0.3
 
-# Future components (crypto signing, etc.) will add their own
-# dependencies here.
+# Ed25519 gate authorizations (gate/authority.py). Host version the offline
+# suite ran against (2026-11-13); confirm on the VM before installing there.
+cryptography==47.0.0

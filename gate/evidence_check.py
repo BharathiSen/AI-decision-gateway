@@ -14,6 +14,11 @@ loss or no connectivity. A no-op is not justified on contradictory evidence.
 """
 
 import copy
+import sys
+from pathlib import Path
+
+# Also runnable as `python gate/evidence_check.py`.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 def _snapshot(loss=0.0, connectivity=True):

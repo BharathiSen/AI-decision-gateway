@@ -74,15 +74,23 @@ def pick_cheapest_separating_test(fault_a, fault_b, already_ran=None, matrix=Non
     if not candidates:
         return None
 
-    def cost(tid):
-        key = tid if tid in costs else tid.replace("_", "_", 1)
-        for k, v in costs.items():
-            if k.startswith(tid.split("_")[0]):
-                return v.get("time_seconds", 999)
-        return 999
-
-    candidates.sort(key=cost)
+    candidates.sort(key=lambda tid: test_cost(tid, costs))
     return candidates[0]
+
+
+def test_cost(tid, costs):
+    """time_seconds for a test id: exact key, else the key with the same T<n> number, else 999.
+
+    The number is compared whole, so T1 never takes T10's cost (the earlier
+    prefix match depended on T1 being listed before T10 in costs.yaml).
+    """
+    entry = costs.get(tid)
+    if entry is None:
+        number = tid.split("_")[0]
+        entry = next((v for k, v in costs.items() if k.split("_")[0] == number), None)
+    if entry is None:
+        return 999
+    return entry.get("time_seconds", 999)
 
 
 def covering_separating_tests(candidates, fixes=None, matrix=None):

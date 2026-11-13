@@ -47,7 +47,7 @@ Install [Mininet](http://mininet.org/) on Ubuntu (system Python). Run benchmark 
 
 ```bash
 sudo python3 main.py                    # interactive CLI
-sudo python3 bench/run_pilot.py --save-episodes --episodes 500
+sudo python3 bench/run_pilot.py --save-episodes --episodes 500 --out results/pilot/<run-name>.json
 ```
 
 Windows/macOS hosts can develop offline; live numbers require the VM.
@@ -73,25 +73,54 @@ python scripts/finish_evaluation.py --mode offline --episodes 500
 **Live pilot** (paper-grade; Mininet + root):
 
 ```bash
-sudo --preserve-env=GROQ_API_KEY python3 scripts/finish_evaluation.py --mode live --episodes 500
+sudo --preserve-env=GROQ_API_KEY python3 scripts/finish_evaluation.py --mode live --run-name v5 --episodes 500
 ```
 
-Outputs:
+Live mode requires root and `--run-name`. Outputs go to new, run-specific paths; preserved evidence
+(`results/pilot/summary.json`, `results/experiment_summary.json`, `results/episodes/`, calibration, matrix,
+ground truth) is never overwritten (`bench.contracts.refuse_protected_path`):
 
-- `results/pilot/summary.json` — wrong-fix rate, gate v0 vs B5 unsafe allow, test cost, go/no-go hint
-- `results/episodes/*.json` — saved episodes for replay
-- `results/experiment_summary.json` — aggregated false-allow rates by method
-- `paper/figures/` — regenerated from results
+- live: `results/pilot/<run-name>.json`, `results/pilot/<run-name>_episodes/`, `results/experiment_summary_<run-name>.json`
+- offline: `results/offline_episodes/`, `results/offline_experiment_summary.json` (simulation, not live evidence)
+- `paper/figures/` — regenerated from results (skip with `--skip-figures`)
 
 Pilot success criteria are frozen in [`results/pilot_criteria.md`](results/pilot_criteria.md).
 
 ### 3. Tests without Mininet
 
+Offline self-checks (no root, no network, no model calls). Each exits non-zero on failure. They do not
+write preserved results. Passing them is not live validation: route, OAM and rollback behaviour on real
+kernels is only checked on the Mininet VM.
+
 ```bash
 python agent/test_validate.py
+python bench/tests.py
+python bench/run_episode.py
+python bench/calibrate_healthy.py
 python bench/test_inject.py
-python bench/run_experiments.py --episodes-dir results/episodes
+python -m gate
+python -m baselines
+python config/validate.py
+python bench/test_outcomes.py
+python bench/labels.py
+python bench/label_audit.py
+python bench/cleanup_check.py
+python gate/evidence_check.py
+python -m control
+python telemetry/collector.py
+python bench/scenarios.py --self-check
+python bench/metrics.py --self-check
+python bench/run_batch.py --self-check
+python bench/analyze.py --self-check
+python bench/validate_live.py --self-check
+python bench/run_experiments.py --self-check
+python bench/verify_fault_observability.py --self-check
+python bench/run_pilot.py --self-check
+python bench/accept.py --self-check
 ```
+
+`bench/run_experiments.py` without `--self-check` refuses to overwrite `results/experiment_summary.json`;
+pass `--out` with a new path to aggregate saved episodes.
 
 ## Key scripts
 
@@ -118,6 +147,10 @@ The model prompt is `SYSTEM_PROMPT` in `agent/decision_agent.py`. It returns one
 | `LLM_PROVIDER` | `groq` (default), `grok`, `openrouter`, or `gemini` |
 | `LLM_MODEL` / `LLM_REASONING_EFFORT` | Override model (Groq default `openai/gpt-oss-120b`) / effort (default `low`) |
 | `GROQ_LOG=info` | Log each HTTP request, retry and call latency |
+| `VERIFIX_GATE_SIGNING_KEY` | Gate service only: Ed25519 private key (PKCS#8 PEM, mode 0600). Unset in one process: an ephemeral per-process key (integrity only, not a security boundary) |
+| `VERIFIX_GATE_PUBLIC_KEY` | Verifier side: the gate's Ed25519 public key. The executor service takes it as `--public-key` |
+| `VERIFIX_LEDGER_PATH` | In-process boundary: durable replay ledger (JSON lines). Unset: per-process ledger |
+| `VERIFIX_LABELS` | Label file for metrics (default `results/ground_truth.json`); see `bench/labels.py` |
 
 ## License / release
 

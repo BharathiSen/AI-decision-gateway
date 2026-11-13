@@ -11,7 +11,6 @@ if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import json
-import re
 import signal
 import time
 import uuid
@@ -26,29 +25,14 @@ from telemetry.collector import collect_current_state
 EPISODE_DIR = Path(__file__).resolve().parent.parent / "results" / "episodes"
 
 GATE_DECISIONS = {"allow", "block", "escalate"}
-CONTROL_ROUTES = (("r1", "10.0.4.0/24"), ("r4", "10.0.1.0/24"))
-PATH_LINKS = ("r1-r2", "r2-r4", "r1-r3", "r3-r4")
-PATH_INTERFACES = (
-    ("r1", "r1-eth1"),
-    ("r2", "r2-eth0"),
-    ("r2", "r2-eth1"),
-    ("r4", "r4-eth0"),
-    ("r1", "r1-eth2"),
-    ("r3", "r3-eth0"),
-    ("r3", "r3-eth1"),
-    ("r4", "r4-eth1"),
+from control.recheck import (  # noqa: E402  (moved; re-exported for callers and tests)
+    CONTROL_ROUTES,
+    PATH_INTERFACES,
+    PATH_LINKS,
+    assess_recheck,
+    execution_fingerprint,
+    qdisc_config,
 )
-_QDISC_COUNTERS = re.compile(r"\b(direct_packets_stat|refcnt|seed)\s+\d+")
-
-
-def qdisc_config(text):
-    """The configured qdisc lines of `tc qdisc show`, without counters."""
-    lines = []
-    for line in (text or "").splitlines():
-        line = line.strip()
-        if line.startswith("qdisc "):
-            lines.append(" ".join(_QDISC_COUNTERS.sub("", line).split()))
-    return "|".join(lines)
 
 
 def normalize_gate_decision(gate_decision):
@@ -62,59 +46,6 @@ def normalize_gate_decision(gate_decision):
     if decision not in GATE_DECISIONS:
         return None
     return decision
-
-
-def _route_text(route):
-    return " ".join((route or "").split())
-
-
-def execution_fingerprint(snapshot):
-    """Routes and path-link state that an allow decision is bound to."""
-    wanted = set(CONTROL_ROUTES)
-    routes = {}
-    for item in (snapshot or {}).get("routes") or []:
-        key = (item.get("node"), item.get("prefix"))
-        if key in wanted:
-            routes[f"{key[0]} {key[1]}"] = _route_text(item.get("route"))
-    links = {}
-    for link in (snapshot or {}).get("links") or []:
-        name = link.get("name")
-        if name in PATH_LINKS:
-            links[name] = bool(link.get("up"))
-    qdiscs = (snapshot or {}).get("qdiscs")
-    return {"routes": routes, "links": links, "qdiscs": qdiscs if isinstance(qdiscs, dict) else None}
-
-
-def assess_recheck(approved_snapshot, current_snapshot, proposal):
-    """Compare the gate snapshot with a fresh read. Does not trust a caller flag."""
-    approved = execution_fingerprint(approved_snapshot)
-    current = execution_fingerprint(current_snapshot)
-    expected = {f"{node} {prefix}" for node, prefix in CONTROL_ROUTES}
-    if set(approved["routes"]) != expected or any(not approved["routes"][key] for key in expected):
-        return {"state_verified": False, "reason": "gate snapshot has no route fingerprint to recheck"}
-    if set(current["routes"]) != expected or any(not current["routes"][key] for key in expected):
-        return {"state_verified": False, "reason": "execution recheck could not read routes"}
-    if approved["routes"] != current["routes"]:
-        return {"state_verified": False, "reason": "route changed since the gate decision"}
-    if approved["links"] != current["links"]:
-        return {"state_verified": False, "reason": "path state changed since the gate decision"}
-    if current["qdiscs"] is not None and approved["qdiscs"] is None:
-        return {"state_verified": False, "reason": "gate snapshot has no path qdisc fingerprint"}
-    if approved["qdiscs"] is not None and current["qdiscs"] is None:
-        return {"state_verified": False, "reason": "execution recheck could not read path qdiscs"}
-    if approved["qdiscs"] != current["qdiscs"]:
-        return {"state_verified": False, "reason": "path qdisc changed since the gate decision"}
-    from gate.checks import path_links_up, reroute_choice
-
-    choice = reroute_choice(proposal)
-    action = (proposal or {}).get("action")
-    if choice is None and action in ("REROUTE", "REBALANCE", "reroute_traffic", "rebalance"):
-        return {"state_verified": False, "reason": "path not in policy-approved routes"}
-    if choice is not None:
-        up, _down = path_links_up(current_snapshot, choice)
-        if not up:
-            return {"state_verified": False, "reason": f"{choice} path is down"}
-    return {"state_verified": True, "reason": None}
 
 
 def _call_timed(fn):
@@ -528,16 +459,58 @@ def attach_post_action_recovery(
     return record
 
 
-def apply_authorized_action(gate_decision, proposal, execute_fn, approved_snapshot, read_state, evidence=None):
-    """Single boundary between a gate decision and remediation.
+def _execute_with_capability(execute_fn, proposal, capability):
+    """Call execute_fn with the capability when it declares one (the gated executor)."""
+    import inspect
 
-    On allow, the proposal is revalidated, a bound decision is matched to
-    approved_snapshot, to the proposal and its reroute path, and to evidence
-    (the OAM rows the decision was bound with; None means it was bound with
-    none). read_state() is compared with that snapshot, and execute_fn runs
-    only when those checks succeed. state_verified is recorded from the
-    comparison. Callers cannot pass it in.
+    try:
+        params = inspect.signature(execute_fn).parameters
+    except (TypeError, ValueError):
+        params = {}
+    if "capability" in params:
+        return execute_fn(proposal, capability=capability)
+    return execute_fn(proposal)
+
+
+def apply_authorized_action(
+    gate_decision,
+    proposal,
+    execute_fn,
+    approved_snapshot,
+    read_state,
+    evidence=None,
+    *,
+    gate_snapshot=None,
+    route_control=None,
+    measure_partial=None,
+    ledger=None,
+    public_key=None,
+):
+    """Single in-process boundary between a gate decision and remediation.
+
+    Stage 1 integrity boundary, NOT a security boundary: code in this process
+    can reach the gate key. The process boundary is control/executor_service.
+
+    On allow: the proposal is revalidated; the gate-issued authorization
+    (gate/authority.py) must be sealed by the gate key, unexpired, and match
+    the verdict, action, target, reroute path, proposal, the snapshot the gate
+    evaluated (gate_snapshot, default approved_snapshot), the evidence rows
+    (None means none) and the current gate config. The decision id is then
+    consumed in the replay ledger. read_state() is compared with
+    approved_snapshot; that fresh read is also the exact route capture used
+    for compensation. The action runs through control.gated.run_lifecycle:
+    routes are always read afterwards; a partial action is measured
+    (measure_partial) and then compensated through route_control, verified
+    twice; an unverified compensation raises TopologyContaminated with this
+    outcome attached. Only one authorized execution runs at a time.
     """
+    import time as _time
+
+    from control import gated
+    from control.ledger import LedgerError, default_ledger
+    from control.routes import RouteReadError, specs_from_snapshot
+    from gate.authority import AuthorizationKeyError, authorization_errors
+
     outcome = {
         "execution_attempted": False,
         "execution_result": None,
@@ -545,67 +518,121 @@ def apply_authorized_action(gate_decision, proposal, execute_fn, approved_snapsh
         "remediation_succeeded": False,
         "safeguard_missing": None,
         "state_verified": False,
+        "authorization_verify_seconds": None,
+        "routes_before": None,
+        "routes_after": None,
+        "partial_application": None,
+        "compensation": None,
     }
     decision = normalize_gate_decision(gate_decision)
     if decision != "allow":
         if decision is None:
             outcome["execution_error"] = "missing or invalid gate decision"
         return outcome
-    from gate.integrity import binding_errors, consume_decision
 
     snap_for_freshness = approved_snapshot if (approved_snapshot or {}).get("timestamp") else None
     rejection = screen_proposal(proposal, snap_for_freshness)
     if rejection:
         outcome["execution_error"] = rejection["execution_error"]
         return outcome
-    bind_errs = binding_errors(gate_decision, approved_snapshot, proposal, evidence)
-    if bind_errs:
-        outcome["execution_error"] = bind_errs[0]
-        return outcome
-    used = consume_decision(gate_decision)
-    if used:
-        outcome["execution_error"] = used
-        return outcome
+    started = _time.perf_counter()
     try:
-        current_snapshot = read_state()
-    except Exception as exc:
-        outcome["execution_error"] = f"state recheck failed: {type(exc).__name__}: {exc}"
+        auth_errs = authorization_errors(
+            gate_decision,
+            approved_snapshot if gate_snapshot is None else gate_snapshot,
+            proposal,
+            evidence,
+            public_key=public_key,
+            path_qdiscs=(approved_snapshot or {}).get("qdiscs"),
+        )
+    except AuthorizationKeyError as exc:
+        auth_errs = [str(exc)]
+    outcome["authorization_verify_seconds"] = _time.perf_counter() - started
+    if auth_errs:
+        outcome["execution_error"] = auth_errs[0]
         return outcome
-    assessment = assess_recheck(approved_snapshot, current_snapshot, proposal)
-    outcome["state_verified"] = assessment["state_verified"]
-    if not assessment["state_verified"]:
-        outcome["execution_error"] = assessment["reason"]
-        return outcome
-    outcome["execution_attempted"] = True
+    authorization = gate_decision["authorization"]
     try:
-        result = execute_fn(proposal)
-    except Exception as exc:
-        outcome["execution_error"] = f"{type(exc).__name__}: {exc}"
-        outcome["remediation_succeeded"] = False
-        return outcome
-    outcome["execution_result"] = result
-    succeeded = isinstance(result, dict) and result.get("executed") is True
-    outcome["remediation_succeeded"] = succeeded
-    if succeeded:
-        from gate.checks import reroute_choice
-
-        requested = reroute_choice(proposal)
-        if requested is not None:
+        with gated.single_flight():
+            ledger = default_ledger() if ledger is None else ledger
             try:
-                after = read_state()
-            except Exception as exc:
-                outcome["remediation_succeeded"] = False
-                outcome["execution_error"] = f"partial remediation: {type(exc).__name__}: {exc}"
+                used = ledger.consume(authorization["decision_id"], authorization["expires_at"])
+            except LedgerError as exc:
+                used = f"replay ledger unavailable: {exc}"
+            if used:
+                outcome["execution_error"] = used
                 return outcome
-            if not _routes_on_path(after, requested):
+            try:
+                current_snapshot = read_state()
+            except Exception as exc:
+                outcome["execution_error"] = f"state recheck failed: {type(exc).__name__}: {exc}"
+                return outcome
+            assessment = assess_recheck(approved_snapshot, current_snapshot, proposal)
+            outcome["state_verified"] = assessment["state_verified"]
+            if not assessment["state_verified"]:
+                outcome["execution_error"] = assessment["reason"]
+                return outcome
+            try:
+                routes_before = specs_from_snapshot(current_snapshot)
+            except RouteReadError as exc:
+                outcome["execution_error"] = f"route capture failed: {exc}"
+                return outcome
+            capability = gated.mint(authorization, proposal)
+            outcome["execution_attempted"] = True
+
+            def _restore(router, spec):
+                if route_control is None:
+                    raise RuntimeError("no route control: compensation cannot run")
+                route_control.restore(router, spec)
+
+            try:
+                life = gated.run_lifecycle(
+                    capability,
+                    routes_before,
+                    execute=lambda cap: _execute_with_capability(execute_fn, proposal, cap),
+                    read_routes=lambda: specs_from_snapshot(read_state()),
+                    restore_route=_restore,
+                    measure_partial=measure_partial,
+                )
+            except gated.CompensationFailed as exc:
+                outcome.update(_lifecycle_view(exc.outcome))
                 outcome["remediation_succeeded"] = False
-                outcome["execution_error"] = "partial remediation"
+                if not outcome["execution_error"]:
+                    outcome["execution_error"] = "partial remediation"
+                raise TopologyContaminated(
+                    f"gated execution: {exc}", None, record=dict(outcome)
+                ) from exc
+    except gated.ExecutionBusy as exc:
+        outcome["execution_error"] = str(exc)
+        return outcome
+    outcome.update(_lifecycle_view(life))
+    result = life["execution_result"]
+    succeeded = isinstance(result, dict) and result.get("executed") is True and not life["execution_error"]
+    if succeeded and capability.action in gated.ROUTE_CHANGING:
+        if life["routes_after"] is None:
+            succeeded = False
+            outcome["execution_error"] = f"partial remediation: {life['route_read_error']}"
+        elif not life["fully_applied"]:
+            succeeded = False
+            outcome["execution_error"] = "partial remediation"
+    outcome["remediation_succeeded"] = succeeded
     return outcome
+
+
+def _lifecycle_view(life):
+    return {
+        "execution_result": life.get("execution_result"),
+        "execution_error": life.get("execution_error"),
+        "routes_before": life.get("routes_before"),
+        "routes_after": life.get("routes_after"),
+        "partial_application": life.get("partial_application"),
+        "compensation": life.get("compensation"),
+    }
 
 
 def default_components():
     """The pieces one episode is allowed to call."""
-    from control.actions import execute
+    from control.actions import execute_gated
     from gate.decide import decide
 
     return {
@@ -618,7 +645,7 @@ def default_components():
         "tests": oam.run_all,
         "read_state": read_execution_state,
         "gate": decide,
-        "execute": execute,
+        "execute": execute_gated,
         "log": save_episode,
     }
 
@@ -788,9 +815,17 @@ def run_episode(
                 record["completed_at"] = datetime.now(timezone.utc).isoformat()
                 return record
 
+        # gate.decide copies the evidence when it is entered and seals that
+        # copy, so a row changed during or after the gate call no longer
+        # matches at the execution boundary.
         if gate_fn:
             decision, elapsed, gate_exc = _call_timed(lambda: gate_fn(record))
-            record["gate_cost"] = {"latency_seconds": elapsed}
+            record["gate_cost"] = {
+                "latency_seconds": elapsed,
+                # Included in latency_seconds; reported apart (gate-issued authorization).
+                "authorization_seconds": ((decision or {}).get("authorization") or {}).get("issue_seconds")
+                if isinstance(decision, dict) else None,
+            }
             if gate_exc is not None:
                 record["gate_error"] = f"{type(gate_exc).__name__}: {gate_exc}"
                 record["execution_error"] = f"gate error: {record['gate_error']}"
@@ -808,46 +843,76 @@ def run_episode(
         if execute_fn is None:
             controller = parts["execute"]
 
-            def execute_fn(proposal, _net=net, _execute=controller):
-                from control.actions import proposal_to_action
-
-                action, payload = proposal_to_action(proposal or {})
-                return _execute(_net, action, payload)
+            def execute_fn(proposal, capability=None, _net=net, _execute=controller):
+                # The gated executor: refuses without a verified capability.
+                return _execute(_net, capability)
 
         approved = dict(record.get("network_snapshot") or {})
         approved["qdiscs"] = record["execution_baseline"]["qdiscs"]
         oam_results = (record.get("oam") or {}).get("results") or []
-        if isinstance(record.get("gate_decision"), dict):
-            from gate.integrity import bind_gate_decision
+        # No binding is created here: the authorization was issued by the gate
+        # inside gate_fn (gate.decide) and is verified at the boundary.
+        measured_partial = []
 
-            record["gate_decision"] = bind_gate_decision(
-                record["gate_decision"],
-                approved,
-                record.get("agent_proposal") or {},
-                oam_results,
+        def _measure_partial(view):
+            # Research semantics: a partial action is measured as it was left,
+            # before compensation restores the routes.
+            record.update(_execution_view(dict(record, **view, execution_attempted=True)))
+            attach_post_action_recovery(
+                record,
+                net,
+                read_state=parts["read_state"],
+                links=links,
+                noise_id=record.get("noise_id") or noise_id,
             )
+            measured_partial.append(True)
+
+        route_control = None
+        if net is not None and callable(getattr(net, "get", None)):
+            from control.routes import RouteControl
+
+            route_control = RouteControl(net)
         record["remediation_started_at"] = datetime.now(timezone.utc).isoformat()
-        record.update(apply_authorized_action(
-            record.get("gate_decision"),
-            record.get("agent_proposal") or {},
-            execute_fn,
-            approved,
-            lambda: parts["read_state"](net, links),
-            evidence=oam_results,
-        ))
+        try:
+            record.update(apply_authorized_action(
+                record.get("gate_decision"),
+                record.get("agent_proposal") or {},
+                execute_fn,
+                approved,
+                lambda: parts["read_state"](net, links),
+                evidence=oam_results,
+                gate_snapshot=record.get("network_snapshot") or {},
+                route_control=route_control,
+                measure_partial=_measure_partial,
+            ))
+        except TopologyContaminated as exc:
+            record.update(exc.record or {})
+            record["remediation_completed_at"] = datetime.now(timezone.utc).isoformat()
+            exc.record = record
+            raise
+        except BaseException as exc:
+            # A timeout delivered when the gated section ends: keep what happened.
+            view = getattr(exc, "gated_outcome", None)
+            if isinstance(view, dict):
+                record.update(_lifecycle_view(view))
+                record["execution_attempted"] = True
+                record["remediation_completed_at"] = datetime.now(timezone.utc).isoformat()
+            raise
         record["remediation_completed_at"] = datetime.now(timezone.utc).isoformat()
         result_ok, result_errors = validate_record("execution_result", _execution_view(record))
         if not result_ok:
             record["remediation_succeeded"] = False
             record["execution_error"] = "invalid execution result: " + "; ".join(result_errors)
         # Independent post-action OAM: executed=True is never traffic recovery.
-        attach_post_action_recovery(
-            record,
-            net,
-            read_state=parts["read_state"],
-            links=links,
-            noise_id=record.get("noise_id") or noise_id,
-        )
+        # A compensated partial action was already measured before compensation.
+        if not measured_partial:
+            attach_post_action_recovery(
+                record,
+                net,
+                read_state=parts["read_state"],
+                links=links,
+                noise_id=record.get("noise_id") or noise_id,
+            )
         record["completed_at"] = datetime.now(timezone.utc).isoformat()
         return record
     finally:
@@ -1101,6 +1166,21 @@ def _snapshot(r1_via="10.0.12.2", backup_up=True, primary_up=True, active_path="
     return snap
 
 
+def _gate_stand_in(decision, snapshot, proposal, evidence=None, mode="full", now=None, ttl=None, private_key=None, path_qdiscs=None):
+    """Self-checks and live smokes ONLY: play gate.decide's issuing step for a chosen verdict.
+
+    Production code gets authorizations from gate.decide. This exists so the
+    boundary can be tested with verdicts the gate would not produce here.
+    """
+    from gate.authority import entry_copies, issue_into
+
+    sealed_proposal, sealed_snapshot, sealed_evidence = entry_copies(proposal, snapshot, evidence)
+    return issue_into(
+        dict(decision), sealed_proposal, sealed_snapshot, sealed_evidence, mode,
+        now=now, ttl=ttl, private_key=private_key, path_qdiscs=path_qdiscs,
+    )
+
+
 def _reads(*snapshots):
     """read_state stand-in: each call returns the next snapshot, then the last one."""
     queue = list(snapshots)
@@ -1136,9 +1216,8 @@ def _self_check():
         current = approved if current is None else current
         gate_decision = {"decision": decision} if decision is not None else None
         if decision == "allow":
-            from gate.integrity import bind_gate_decision
 
-            gate_decision = bind_gate_decision(gate_decision, approved, proposal, [])
+            gate_decision = _gate_stand_in(gate_decision, approved, proposal, [], path_qdiscs=approved.get("qdiscs"))
         return apply_authorized_action(
             gate_decision,
             proposal,
@@ -1317,9 +1396,288 @@ def _self_check():
     finally:
         oam.run_all = saved_run_all
 
-    one_sided = once("allow", healthy, after=_snapshot(r1_via="10.0.13.2"))
-    assert one_sided["execution_attempted"] is True and one_sided["remediation_succeeded"] is False
-    assert one_sided["execution_error"] == "partial remediation"
+    # ---- Gated partial-reroute compensation (control/gated.run_lifecycle) ----
+    from control import gated as _gated_mod
+
+    _PRIMARY = {"r1": "10.0.4.0/24 via 10.0.12.2 dev r1-eth1", "r4": "10.0.1.0/24 via 10.0.24.1 dev r4-eth0"}
+    _BACKUP = {"r1": "10.0.4.0/24 via 10.0.13.2 dev r1-eth2", "r4": "10.0.1.0/24 via 10.0.34.1 dev r4-eth1"}
+
+    class _GatedWorld:
+        """Fake r1/r4: route reads, a per-router action plan and restore plan."""
+
+        def __init__(self, plan=(), restore_plan=(), read_fail=(), stale=(), texts=None):
+            self.routes = dict(_PRIMARY, **(texts or {}))
+            self.plan, self.restore_plan = list(plan), list(restore_plan)
+            self.read_fail, self.stale = set(read_fail), set(stale)
+            self.reads, self.previous, self.events = 0, None, []
+
+        def snapshot(self):
+            self.reads += 1
+            if self.reads in self.read_fail:
+                raise OSError("route read failed")
+            shown = self.previous if (self.reads in self.stale and self.previous) else dict(self.routes)
+            self.previous = dict(self.routes)
+            snap = _snapshot()
+            for item in snap["routes"]:
+                item["route"] = shown[item["node"]]
+            return snap
+
+        def execute(self, item, capability=None):
+            self.events.append("execute")
+            assert capability is not None and capability.decision_id
+            for router in ("r1", "r4"):
+                step = self.plan.pop(0) if self.plan else "ok"
+                if step == "raise":
+                    raise RuntimeError(f"{router}: RTNETLINK answers: Network is unreachable")
+                if step == "ok":
+                    self.routes[router] = _BACKUP[router]
+            if self.plan and self.plan[0] == "raise_after":
+                raise RuntimeError("controller lost after both commands")
+            return {"executed": True, "action": "REROUTE", "path": "backup"}
+
+        def restore(self, router, spec):
+            self.events.append(("restore", router))
+            step = self.restore_plan.pop(0) if self.restore_plan else "ok"
+            if step == "raise":
+                raise RuntimeError(f"{router}: restore exited 2")
+            if step == "wrong":
+                return
+            if step == "strip":
+                spec = " ".join(spec.split()[:5])  # same next hop, extra text lost
+            self.routes[router] = spec
+
+    def _gated(world, measured=None, control=True, start=None):
+        token = _gate_stand_in({"decision": "allow"}, healthy, proposal, [])
+        return apply_authorized_action(
+            token,
+            proposal,
+            world.execute,
+            healthy if start is None else start,
+            world.snapshot,
+            gate_snapshot=healthy,
+            route_control=world if control else None,
+            measure_partial=(lambda view: (world.events.append("measure"), measured.append(view))) if measured is not None else None,
+        )
+
+    def _contaminated(world, **kw):
+        try:
+            _gated(world, **kw)
+        except TopologyContaminated as exc:
+            return exc.record
+        raise AssertionError("unverified compensation did not stop the run")
+
+    # Fully applied: no compensation.
+    ok_world = _GatedWorld()
+    ok_run = _gated(ok_world, measured=[])
+    assert ok_run["remediation_succeeded"] is True and ok_run["compensation"] is None, ok_run
+    assert ok_run["partial_application"] is False and ok_run["routes_after"] == _BACKUP, ok_run
+    assert ok_run["routes_before"] == _PRIMARY and "measure" not in ok_world.events
+    # First-router failure: nothing changed; error preserved; no compensation.
+    first_world = _GatedWorld(plan=["raise"])
+    first_run = _gated(first_world, measured=[])
+    assert first_run["execution_error"].startswith("RuntimeError: r1: RTNETLINK"), first_run
+    assert first_run["partial_application"] is False and first_run["compensation"] is None
+    assert first_run["remediation_succeeded"] is False and first_world.routes == _PRIMARY
+    assert first_world.reads == 3, "after-read confirmed by a second read"
+    # Second-router failure (executor raises after r1 changed): measured, then r1 restored.
+    second_measured = []
+    second_world = _GatedWorld(plan=["ok", "raise"])
+    second_run = _gated(second_world, measured=second_measured)
+    assert second_run["execution_error"].startswith("RuntimeError: r4: RTNETLINK"), "original error preserved"
+    assert second_run["partial_application"] is True and second_run["routes_after"]["r1"] == _BACKUP["r1"]
+    comp = second_run["compensation"]
+    assert comp["verified"] is True and comp["routers"] == ["r1"] and comp["routes_restored"] == _PRIMARY, comp
+    token_id = comp["decision_id"]
+    assert token_id and second_measured and second_measured[0]["decision_id"] == token_id
+    assert second_world.events == ["execute", "measure", ("restore", "r1")], second_world.events
+    assert second_world.routes == _PRIMARY and second_run["remediation_succeeded"] is False
+    # Silent r4 failure: executed=True, r4 unchanged: partial, r1 restored.
+    silent_run = _gated(_GatedWorld(plan=["ok", "silent"]))
+    assert silent_run["execution_error"] == "partial remediation" and silent_run["partial_application"] is True
+    assert silent_run["compensation"]["routers"] == ["r1"] and silent_run["compensation"]["verified"] is True
+    # Raise after both changed: both restored.
+    both_world = _GatedWorld(plan=["ok", "ok", "raise_after"])
+    both_run = _gated(both_world)
+    assert both_run["compensation"]["routers"] == ["r1", "r4"] and both_world.routes == _PRIMARY, both_run
+    # Post-action read fails once: retried. Fails twice: state unknown, all routers restored and verified.
+    retry_run = _gated(_GatedWorld(read_fail={2}))
+    assert retry_run["remediation_succeeded"] is True and retry_run["compensation"] is None, retry_run
+    blind_world = _GatedWorld(read_fail={2, 3})
+    blind_run = _gated(blind_world)
+    assert blind_run["routes_after"] is None and blind_run["partial_application"] is None, blind_run
+    assert blind_run["compensation"]["routers"] == ["r1", "r4"] and blind_run["compensation"]["verified"] is True
+    assert blind_run["execution_error"].startswith("partial remediation: OSError") and blind_world.routes == _PRIMARY
+    # Stale after-read: the confirming read sees the change.
+    stale_ok = _gated(_GatedWorld(stale={2}))
+    assert stale_ok["remediation_succeeded"] is True and stale_ok["compensation"] is None, stale_ok
+    stale_partial_world = _GatedWorld(plan=["ok", "silent"], stale={2})
+    stale_partial = _gated(stale_partial_world)
+    assert stale_partial["compensation"]["routers"] == ["r1"] and stale_partial_world.routes == _PRIMARY
+    # Exact routes: a captured metric survives the restore; a restore that drops it is not verified.
+    metric = {"r1": _PRIMARY["r1"] + " proto static metric 100"}
+    metric_start = _snapshot()
+    metric_start["routes"][0]["route"] = metric["r1"]
+    exact_world = _GatedWorld(plan=["ok", "raise"], texts=metric)
+    exact_run = _gated(exact_world, start=metric_start)
+    assert exact_run["routes_before"]["r1"] == metric["r1"] and exact_world.routes["r1"] == metric["r1"]
+    assert exact_run["compensation"]["verified"] is True
+    stripped = _contaminated(_GatedWorld(plan=["ok", "raise"], restore_plan=["strip"], texts=metric), start=metric_start)
+    assert stripped["compensation"]["verified"] is False and stripped["partial_application"] is True, stripped
+    # Incorrect restoration, failed restoration, failed verification read, no route control.
+    wrong = _contaminated(_GatedWorld(plan=["ok", "raise"], restore_plan=["wrong"]))
+    assert wrong["compensation"]["routes_restored"]["r1"] == _BACKUP["r1"] and wrong["remediation_succeeded"] is False
+    raised = _contaminated(_GatedWorld(plan=["ok", "raise"], restore_plan=["raise"]))
+    assert raised["compensation"]["errors"] and raised["execution_error"].startswith("RuntimeError: r4"), raised
+    unread_verify = _contaminated(_GatedWorld(plan=["ok", "raise"], read_fail={4, 5}))
+    assert unread_verify["compensation"]["verified"] is False
+    no_control = _contaminated(_GatedWorld(plan=["ok", "raise"]), control=False)
+    assert "no route control" in no_control["compensation"]["errors"][0], no_control
+    # Exactly one restore pass: a failed restore is not retried.
+    once_world = _GatedWorld(plan=["ok", "raise"], restore_plan=["raise", "ok"])
+    _contaminated(once_world)
+    assert once_world.events.count(("restore", "r1")) == 1, once_world.events
+    # SIGALRM: blocked from execute to verified compensation, delivered after.
+    class _FakeSignal:
+        SIGALRM, SIG_BLOCK, SIG_SETMASK = 14, 0, 2
+
+        def __init__(self, pending=False):
+            self.log, self.pending = [], pending
+
+        def pthread_sigmask(self, how, signals):
+            self.log.append(("mask", how))
+            return set()
+
+        def sigpending(self):
+            return {self.SIGALRM} if self.pending else set()
+
+        def sigtimedwait(self, signals, timeout):
+            self.log.append("discard")
+            self.pending = False
+
+    fake_sig = _FakeSignal()
+    alarm_world = _GatedWorld(plan=["ok", "raise"])
+    alarm_world_execute = alarm_world.execute
+
+    def _alarm_execute(item, capability=None):
+        fake_sig.log.append("execute")
+        return alarm_world_execute(item, capability=capability)
+
+    alarm_world.execute = _alarm_execute
+    alarm_restore = alarm_world.restore
+
+    def _alarm_restore(router, spec):
+        fake_sig.log.append("restore")
+        return alarm_restore(router, spec)
+
+    alarm_world.restore = _alarm_restore
+    _cap = _gated_mod.mint(_gate_stand_in({"decision": "allow"}, healthy, proposal, [])["authorization"], proposal)
+    _gated_mod.run_lifecycle(
+        _cap,
+        dict(_PRIMARY),
+        execute=lambda cap: alarm_world.execute(proposal, capability=cap),
+        read_routes=lambda: __import__("control.routes", fromlist=["x"]).specs_from_snapshot(alarm_world.snapshot()),
+        restore_route=alarm_world.restore,
+        mask=lambda: _gated_mod.deferred_alarm(fake_sig),
+    )
+    assert fake_sig.log == [("mask", 0), "execute", "restore", ("mask", 2)], fake_sig.log
+    pending_sig = _FakeSignal(pending=True)
+    try:
+        _gated_mod.run_lifecycle(
+            _cap,
+            dict(_PRIMARY),
+            execute=lambda cap: {"executed": True},
+            read_routes=lambda: dict(_PRIMARY, r1=_BACKUP["r1"]),
+            restore_route=lambda router, spec: None,
+            mask=lambda: _gated_mod.deferred_alarm(pending_sig),
+        )
+    except _gated_mod.CompensationFailed:
+        pass
+    else:
+        raise AssertionError("unrestorable state was not reported")
+    assert pending_sig.log == [("mask", 0), "discard", ("mask", 2)], "a pending timeout cannot replace the stop"
+    # Handler-level deferral: wherever the kernel delivers SIGALRM (e.g. to a
+    # flap thread), the Python handler runs in the main thread and defers.
+    from bench.flap import block_alarm_in_this_thread
+
+    class _RaisingSignal(_FakeSignal):
+        def __init__(self):
+            super().__init__()
+            self.handler = None
+
+        def raise_signal(self, signum):
+            self.log.append("redeliver")
+            self.handler(signum, None)
+
+    def _batch_like_handler(_signum, _frame):
+        if _gated_mod.alarm_should_defer():
+            return
+        raise TimeoutError("episode timed out")
+
+    for compensated in (True, False):
+        raising = _RaisingSignal()
+        raising.handler = _batch_like_handler
+        hl_world = _GatedWorld(plan=["ok", "raise"], restore_plan=[] if compensated else ["wrong"])
+        hl_cap = _gated_mod.mint(_gate_stand_in({"decision": "allow"}, healthy, proposal, [])["authorization"], proposal)
+
+        def _execute_then_alarm(cap, _world=hl_world):
+            try:
+                return _world.execute(proposal, capability=cap)
+            finally:
+                _batch_like_handler(14, None)  # the alarm arrives mid-action
+
+        try:
+            _gated_mod.run_lifecycle(
+                hl_cap,
+                dict(_PRIMARY),
+                execute=_execute_then_alarm,
+                read_routes=lambda _world=hl_world: __import__("control.routes", fromlist=["x"]).specs_from_snapshot(_world.snapshot()),
+                restore_route=hl_world.restore,
+                mask=lambda _sig=raising: _gated_mod.deferred_alarm(_sig),
+            )
+        except TimeoutError as exc:
+            assert compensated, "timeout replaced the contamination stop"
+            assert hl_world.routes == _PRIMARY and exc.gated_outcome["compensation"]["verified"] is True
+            assert raising.log[-1] == "redeliver"
+        except _gated_mod.CompensationFailed:
+            assert not compensated and "redeliver" not in raising.log, raising.log
+        else:
+            raise AssertionError("deferred alarm was lost")
+    assert _gated_mod.alarm_should_defer() is False, "deferral state leaked out of the section"
+    flap_sig = _FakeSignal()
+    assert block_alarm_in_this_thread(flap_sig) is True and flap_sig.log == [("mask", 0)]
+
+    if hasattr(signal, "SIGALRM") and hasattr(signal, "pthread_sigmask"):
+        # Real signal (Linux/VM only): the alarm fires inside the section and is delivered after it.
+        def _late(*_args):
+            raise TimeoutError("episode timed out")
+
+        _prev_handler = signal.signal(signal.SIGALRM, _late)
+        real_world = _GatedWorld(plan=["ok", "raise"])
+        real_execute = real_world.execute
+
+        def _slow_execute(item, capability=None):
+            signal.setitimer(signal.ITIMER_REAL, 0.05)
+            time.sleep(0.2)
+            return real_execute(item, capability=capability)
+
+        real_world.execute = _slow_execute
+        import threading as _threading
+
+        # A second, unmasked thread (as a flap thread would be) while the alarm fires.
+        _bystander = _threading.Thread(target=time.sleep, args=(0.5,), daemon=True)
+        _bystander.start()
+        try:
+            _gated(real_world)
+        except TimeoutError:
+            assert real_world.routes == _PRIMARY and ("restore", "r1") in real_world.events
+        else:
+            raise AssertionError("masked alarm was never delivered")
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, _prev_handler)
+        print("gated SIGALRM (real signal): PASS")
+    else:
+        print("gated SIGALRM (real signal): NOT RUN (no SIGALRM on this platform; fake-signal checks passed)")
 
     shaped = {"r1/r1-eth2": "qdisc netem 10: parent 5:1 limit 1000 delay 5ms"}
     lossy = {"r1/r1-eth2": "qdisc netem 10: parent 5:1 limit 1000 delay 5ms loss 20%"}
@@ -1358,10 +1716,9 @@ def _self_check():
         raise RuntimeError("link update failed")
 
     calls.clear()
-    from gate.integrity import bind_gate_decision
 
     failed = apply_authorized_action(
-        bind_gate_decision({"decision": "allow"}, healthy, proposal, []),
+        _gate_stand_in({"decision": "allow"}, healthy, proposal, []),
         proposal,
         boom,
         healthy,
@@ -1415,7 +1772,7 @@ def _self_check():
     primary_down = _snapshot(primary_up=False, active_path="primary")
     calls.clear()
     blocked_primary = apply_authorized_action(
-        bind_gate_decision({"decision": "allow"}, primary_down, primary, []),
+        _gate_stand_in({"decision": "allow"}, primary_down, primary, []),
         primary,
         execute,
         primary_down,
@@ -1426,7 +1783,7 @@ def _self_check():
 
     calls.clear()
     stayed = apply_authorized_action(
-        bind_gate_decision({"decision": "allow"}, healthy, backup, []),
+        _gate_stand_in({"decision": "allow"}, healthy, backup, []),
         backup,
         execute,
         healthy,
@@ -1505,7 +1862,7 @@ def _self_check():
     except TypeError:
         pass
 
-    from control.actions import execute as controller_execute
+    from control.actions import execute_gated as controller_execute
     from gate.decide import decide as gate_decide
 
     wired = default_components()
@@ -1612,6 +1969,7 @@ def _self_check():
             mode="pilot_v0",
             run_missing_tests=False,
             noise_id=record["noise_id"],
+            path_qdiscs=record["execution_baseline"]["qdiscs"],
         )
 
     def local_execute(proposal):
@@ -1630,9 +1988,63 @@ def _self_check():
     )
     assert connected["gate_decision"]["decision"] == "allow", connected
     assert connected["gate_decision"].get("snapshot_fingerprint")
-    assert connected["gate_decision"].get("binding", {}).get("decision_id")
-    assert connected["gate_decision"]["binding"]["signed"] is False
+    assert connected["gate_decision"].get("authorization", {}).get("decision_id")
+    # Issued by gate.decide itself (no orchestrator binding), sealed and signed.
+    _conn_auth = connected["gate_decision"]["authorization"]
+    assert _conn_auth["issuer"] == "verifix-gate" and len(_conn_auth["signature"]) == 128, _conn_auth
+    assert _conn_auth["decision"] == "allow" and _conn_auth["gate_mode"] == "pilot_v0"
+    assert isinstance(_conn_auth.get("issue_seconds"), float)
+    assert connected["gate_cost"]["authorization_seconds"] == _conn_auth["issue_seconds"]
+    assert connected["gate_cost"]["authorization_seconds"] <= connected["gate_cost"]["latency_seconds"]
+    assert isinstance(connected.get("authorization_verify_seconds"), float)
     assert connected["execution_attempted"] is True and connected["state_verified"] is True
+    # The saved decision is bound to the saved OAM rows, under version 2.
+    from gate.integrity import evidence_digest_v2 as _digest_v2
+
+    connected_rows = connected["oam"]["results"]
+    assert connected_rows, "the connected episode must carry OAM rows"
+    assert connected["gate_decision"]["authorization"]["evidence_digest_version"] == 2
+    assert connected["gate_decision"]["authorization"]["evidence_digest"] == _digest_v2(connected_rows)
+    assert connected["gate_decision"]["authorization"]["evidence_digest"] != _digest_v2([])
+
+    # Rows changed during the gate call do not authorize: the decision is
+    # bound to the evidence as it was handed to the gate.
+    def _tamper_value(record):
+        record["oam"]["results"][0]["tampered_measurement"] = 0.0
+
+    def _tamper_drop(record):
+        record["oam"]["results"].pop()
+
+    def _tamper_replace(record):
+        record["oam"]["results"] = list(reversed(record["oam"]["results"]))
+
+    def _tamper_clear(record):
+        record["oam"] = {"results": []}
+
+    events_before_tamper = list(events)
+    for tamper in (_tamper_value, _tamper_drop, _tamper_replace, _tamper_clear):
+        def tampering_gate(record, _tamper=tamper):
+            out = local_gate(record)
+            _tamper(record)
+            return out
+
+        executed_before = events.count("execute")
+        tampered = run_episode(
+            object(),
+            {},
+            noise_id="N0", fault_id="F1",
+            run_oam=True,
+            agent_fn=local_agent,
+            gate_fn=tampering_gate,
+            execute_fn=local_execute,
+            _components=fakes,
+        )
+        assert tampered["gate_decision"]["decision"] == "allow", tamper.__name__
+        assert tampered["execution_attempted"] is False, (tamper.__name__, tampered["execution_error"])
+        assert tampered["execution_error"] == "evidence changed since the gate decision", (tamper.__name__, tampered["execution_error"])
+        assert events.count("execute") == executed_before, tamper.__name__
+    # Leave the event log as the connected episode wrote it.
+    events[:] = events_before_tamper
     assert connected.get("prompt_version") and connected.get("prompt_sha256")
     assert validate_record("proposal", connected["agent_proposal"])[0]
     assert validate_record("gate_decision", connected["gate_decision"])[0]
@@ -1739,7 +2151,14 @@ def _self_check():
         }
 
     def allow_gate(record):
-        return {"decision": "allow", "reason": "test", "proposal_action": "REROUTE", "tests_run": [], "checks": {}}
+        # Stands in for gate.decide returning an allow, with its issued authorization.
+        return _gate_stand_in(
+            {"decision": "allow", "reason": "test", "proposal_action": "REROUTE", "tests_run": [], "checks": {}},
+            record["network_snapshot"],
+            record["agent_proposal"],
+            (record.get("oam") or {}).get("results") or [],
+            path_qdiscs=record["execution_baseline"]["qdiscs"],
+        )
 
     def stateful(*snapshots):
         read = _reads(*snapshots)
@@ -2005,7 +2424,7 @@ def _self_check():
         item.unlink()
     rollup_dir.rmdir()
 
-    from gate.integrity import bind_gate_decision, binding_errors
+    from gate.authority import authorization_errors
 
     integrity_allow = {
         "decision": "allow",
@@ -2014,10 +2433,10 @@ def _self_check():
         "tests_run": [],
         "checks": {},
     }
-    bound_allow = bind_gate_decision(integrity_allow, healthy, proposal, [])
-    assert bound_allow["binding"]["signed"] is False
-    assert bound_allow["binding"]["decision_id"]
-    assert not binding_errors(bound_allow, healthy, proposal)
+    bound_allow = _gate_stand_in(integrity_allow, healthy, proposal, [])
+    assert len(bound_allow["authorization"]["signature"]) == 128
+    assert bound_allow["authorization"]["decision_id"]
+    assert not authorization_errors(bound_allow, healthy, proposal)
 
     calls.clear()
     first_bound = apply_authorized_action(bound_allow, proposal, execute, healthy, _reads(healthy, on_backup))
@@ -2027,7 +2446,7 @@ def _self_check():
     replayed = apply_authorized_action(bound_allow, proposal, execute, healthy, _reads(healthy, on_backup))
     assert calls == [] and replayed["execution_error"] == "decision already used", replayed
 
-    stale_bound = bind_gate_decision(dict(integrity_allow), healthy, proposal, [])
+    stale_bound = _gate_stand_in(dict(integrity_allow), healthy, proposal, [])
     calls.clear()
     other_state = _snapshot(r1_via="10.0.13.2", r4_via="10.0.34.1")
     mismatched = apply_authorized_action(stale_bound, proposal, execute, other_state, lambda: other_state)
@@ -2041,7 +2460,11 @@ def _self_check():
         healthy,
         lambda: healthy,
     )
-    assert calls == [] and changed_proposal["execution_error"] == "proposal changed since the gate decision", changed_proposal
+    # A changed action is reported as such; the proposal digest also differs.
+    assert calls == [] and changed_proposal["execution_error"] == "action differs from the authorized action", changed_proposal
+    assert "proposal changed since the gate decision" in authorization_errors(
+        stale_bound, healthy, dict(proposal, action="DO_NOTHING"), []
+    )
 
     calls.clear()
     still_valid = apply_authorized_action(stale_bound, proposal, execute, healthy, _reads(healthy, on_backup))
@@ -2049,7 +2472,7 @@ def _self_check():
 
     calls.clear()
     malformed = apply_authorized_action(
-        bind_gate_decision(dict(integrity_allow), healthy, proposal, []),
+        _gate_stand_in(dict(integrity_allow), healthy, proposal, []),
         {"action": "reboot", "target": "HostA_to_HostB", "reason": "no"},
         execute,
         healthy,
@@ -2057,98 +2480,293 @@ def _self_check():
     )
     assert calls == [] and malformed["execution_error"] == "invalid proposal", malformed
 
+    # ---- S3 regression: gate-issued, Ed25519-sealed authorizations ----
+    # Stage 1 is an in-process INTEGRITY control: the gate key lives in this
+    # process. These cases pin what it does stop; the process boundary is
+    # control/executor_service (checked by `python -m control`).
+    import copy as _copy
     import os as _os
+    import tempfile as _tempfile
 
-    previous_hmac = _os.environ.get("VERIFIX_GATE_HMAC")
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey as _Ed
+
+    from control import actions as _actions
+    from control import gated as _gated
+    from control.ledger import FileLedger as _FileLedger
+    from gate import authority as _authority
+    from gate.checks import reroute_choice as _choice
+
+    def _issued(verdict="allow", rows=None, **kw):
+        return _gate_stand_in(dict(integrity_allow, decision=verdict), healthy, proposal, rows or [], **kw)
+
+    def _try(decision, prop=None, ev=None, **kw):
+        calls.clear()
+        return apply_authorized_action(
+            decision, prop or proposal, execute, healthy, _reads(healthy, on_backup), evidence=ev, **kw
+        )
+
+    # A1: a hand-written allow, never seen by the gate.
+    a1 = _try(dict(integrity_allow))
+    assert calls == [] and a1["execution_error"] == "decision has no gate-issued authorization", a1
+    # A1b: a complete authorization signed with a key that is not the gate's.
+    foreign = _gate_stand_in(dict(integrity_allow), healthy, proposal, [], private_key=_Ed.generate())
+    a1b = _try(foreign)
+    assert calls == [] and a1b["execution_error"] == "authorization was signed by an unknown key", a1b
+    # A2: the gate said BLOCK; the decision dict is flipped to allow.
+    blocked = _issued("block")
+    flipped = _copy.deepcopy(blocked)
+    flipped["decision"] = "allow"
+    a2 = _try(flipped)
+    assert calls == [] and a2["execution_error"] == "verdict differs from the gate-issued authorization", a2
+    # A3: both verdicts flipped: the signature covers the sealed verdict.
+    both = _copy.deepcopy(blocked)
+    both["decision"] = "allow"
+    both["authorization"]["decision"] = "allow"
+    a3 = _try(both)
+    assert calls == [] and a3["execution_error"] == "authorization signature is invalid", a3
+    # Every signed field: an edit is refused by the signature.
+    genuine = _issued()
+    assert not authorization_errors(genuine, healthy, proposal, []), authorization_errors(genuine, healthy, proposal, [])
+    for name, value in (
+        ("action", "DO_NOTHING"), ("target", "elsewhere"), ("reroute_path", "primary"),
+        ("proposal_digest", "0" * 64), ("snapshot_fingerprint", "0" * 64), ("evidence_digest", "0" * 64),
+        ("gate_mode", "pilot_v0"), ("decision_id", "f" * 32),
+        ("issued_at", genuine["authorization"]["issued_at"] - 1),
+        ("expires_at", genuine["authorization"]["expires_at"] + 1),
+        ("key_id", "0" * 16), ("version", 2), ("issuer", "someone"), ("gate_config_sha256", "0" * 64),
+        ("path_qdiscs", {"r1/r1-eth2": "qdisc netem 10: root loss 20%"}),
+    ):
+        edited = _copy.deepcopy(genuine)
+        edited["authorization"][name] = value
+        errs = authorization_errors(edited, healthy, proposal, [])
+        assert errs and errs[-1] in (
+            "authorization signature is invalid",
+            "authorization was signed by an unknown key",
+        ), (name, errs)
+    # The orchestrator's qdisc baseline must be the one the gate sealed: a
+    # substituted baseline that matches the (already changed) network is refused.
+    _sealed_q = {"r1/r1-eth2": "qdisc netem 10: parent 5:1 limit 1000 delay 5ms"}
+    _swapped_q = {"r1/r1-eth2": "qdisc netem 10: parent 5:1 loss 20%"}
+    _q_token = _gate_stand_in(dict(integrity_allow), healthy, proposal, [], path_qdiscs=_sealed_q)
+    calls.clear()
+    _q_run = apply_authorized_action(
+        _q_token, proposal, execute, dict(healthy, qdiscs=_swapped_q), lambda: dict(healthy, qdiscs=_swapped_q),
+        gate_snapshot=healthy,
+    )
+    assert calls == [] and _q_run["execution_error"] == "path qdisc baseline differs from the authorized one", _q_run
+    # The target is compared with the proposal itself (not only signed).
+    assert "target differs from the authorized target" in authorization_errors(
+        genuine, healthy, dict(proposal, target="HostB_to_HostA"), []
+    )
+    # Evidence edited DURING the gate call: the seal covers the rows as they
+    # were when decide() was entered, so the edited rows no longer match.
+    _decide_mod = sys.modules["gate.decide"]
+
+    _real_inner = _decide_mod._decide
+
+    def _editing_gate(net, prop, snap, test_results=None, **kw):
+        out = _real_inner(net, prop, snap, test_results=test_results, **kw)
+        if test_results:
+            test_results[0]["packet_loss_percent"] = 0.0
+        return out
+
+    entry_rows = [{"test_id": "T1_e2e_ping", "packet_loss_percent": 100.0, "error": None}]
+    _decide_mod._decide = _editing_gate
     try:
-        _os.environ["VERIFIX_GATE_HMAC"] = "stage11-test-secret"
-        signed = bind_gate_decision(dict(integrity_allow), healthy, proposal, [])
-        assert signed["binding"]["signed"] is True and signed["binding"]["signature"]
-        assert not binding_errors(signed, healthy, proposal)
-        genuine_signature = signed["binding"]["signature"]
-        signed["binding"]["signature"] = "dead"
-        assert binding_errors(signed, healthy, proposal) == ["decision signature is invalid"]
-        # A token claiming a signature must not pass when the verifier has no
-        # key: neither a genuine one nor a forged signed=True.
-        signed["binding"]["signature"] = genuine_signature
-        _os.environ.pop("VERIFIX_GATE_HMAC", None)
-        no_key = ["decision signature cannot be verified: VERIFIX_GATE_HMAC is not set"]
-        assert binding_errors(signed, healthy, proposal) == no_key
-        forged_signed = bind_gate_decision(dict(integrity_allow), healthy, proposal, [])
-        forged_signed["binding"].update(signed=True, signature="f" * 64)
-        assert binding_errors(forged_signed, healthy, proposal) == no_key
-        refused = apply_authorized_action(forged_signed, proposal, execute, healthy, lambda: healthy)
-        assert refused["execution_attempted"] is False and refused["execution_error"] == no_key[0], refused
-
-        # The controller resolves a reroute path exactly as the gate does.
-        from control import actions as _actions
-        from gate.checks import reroute_choice as _choice
-
-        _moved = []
-        _real_set = _actions.ctl.set_active_path
-        _actions.ctl.set_active_path = lambda _net, path: _moved.append(path)
-        try:
-            for bad in (
-                {"proposed_path": ["r1", "r3", "r2", "r4"]},
-                {"proposed_path": "r3"},
-                {"path": "backup", "proposed_path": ["r1", "r2", "r4"]},
-                {"path": "sideways"},
-                {},
-            ):
-                assert _choice(bad) is None
-                try:
-                    _actions.execute(None, "REROUTE", bad)
-                except ValueError:
-                    pass
-                else:
-                    raise AssertionError(f"controller acted on a path the gate rejects: {bad!r}")
-            assert _moved == [], _moved
-            for good, want in (
-                ({"path": "backup"}, "backup"),
-                ({"proposed_path": ["r1", "r3", "r4"]}, "backup"),
-                ({"proposed_path": ["r1", "r2", "r4"]}, "primary"),
-                ({"path": "primary", "proposed_path": ["r1", "r2", "r4"]}, "primary"),
-            ):
-                assert _actions.execute(None, "REROUTE", good)["path"] == want == _choice(good)
-            assert _moved == ["backup", "backup", "primary", "primary"], _moved
-        finally:
-            _actions.ctl.set_active_path = _real_set
+        sealed_at_entry = _decide_mod.decide(None, proposal, healthy, entry_rows, run_missing_tests=False, noise_id="N0")
     finally:
-        if previous_hmac is None:
-            _os.environ.pop("VERIFIX_GATE_HMAC", None)
+        _decide_mod._decide = _real_inner
+    from gate.integrity import evidence_digest_v2 as _v2
+
+    assert entry_rows[0]["packet_loss_percent"] == 0.0
+    assert sealed_at_entry["authorization"]["evidence_digest"] == _v2([dict(entry_rows[0], packet_loss_percent=100.0)])
+    assert sealed_at_entry["authorization"]["evidence_digest"] != _v2(entry_rows)
+    # Invalid signatures, including non-ASCII text of the right length: refused, never raised.
+    for bad in ("", "dead", "é" * 128, "zz" * 64, None, 7, "0" * 128, "０" * 128):
+        edited = _copy.deepcopy(genuine)
+        edited["authorization"]["signature"] = bad
+        assert authorization_errors(edited, healthy, proposal, []) == ["authorization signature is invalid"], bad
+        assert _try(edited)["execution_error"] == "authorization signature is invalid" and calls == []
+    # Validity window: expired, issued in the future, too long.
+    stale_auth = _issued(now=time.time() - 3 * _authority.AUTHORIZATION_TTL_SECONDS)
+    expired = _try(stale_auth)
+    assert calls == [] and expired["execution_error"] == "authorization has expired", expired
+    assert "authorization is issued in the future" in authorization_errors(
+        _issued(now=time.time() + 600), healthy, proposal, []
+    )
+    assert "authorization validity is longer than allowed" in authorization_errors(
+        _issued(ttl=3600), healthy, proposal, []
+    )
+    # Gate configuration changed after the decision.
+    _before_change = _issued()
+    _real_cfg_hash = _authority.gate_config_sha256
+    _authority.gate_config_sha256 = lambda: "0" * 64
+    try:
+        assert _try(_before_change)["execution_error"] == "gate configuration changed since the decision" and calls == []
+    finally:
+        _authority.gate_config_sha256 = _real_cfg_hash
+    # Replay: the same token twice in one process.
+    once_token = _issued()
+    assert _try(once_token)["remediation_succeeded"] is True and calls == [proposal]
+    assert _try(once_token)["execution_error"] == "decision already used" and calls == []
+    # Replay across an executor restart: a durable ledger reloaded from disk.
+    ledger_dir = Path(_tempfile.mkdtemp())
+    ledger_path = ledger_dir / "ledger.jsonl"
+    durable = _issued()
+    assert _try(durable, ledger=_FileLedger(ledger_path))["remediation_succeeded"] is True
+    assert _try(durable, ledger=_FileLedger(ledger_path))["execution_error"] == "decision already used" and calls == []
+    # A torn last line (crash mid-write) is tolerated; damage elsewhere refuses to load.
+    with open(ledger_path, "a", encoding="utf-8") as handle:
+        handle.write('{"decision_id": "torn')
+    assert _try(durable, ledger=_FileLedger(ledger_path))["execution_error"] == "decision already used"
+    ledger_path.write_text("garbage\n" + ledger_path.read_text(encoding="utf-8"), encoding="utf-8")
+    try:
+        _FileLedger(ledger_path)
+    except Exception as exc:
+        assert type(exc).__name__ == "LedgerError", exc
+    else:
+        raise AssertionError("damaged ledger was accepted")
+
+    class _BrokenLedger:
+        def consume(self, *_args, **_kwargs):
+            from control.ledger import LedgerError
+
+            raise LedgerError("disk full")
+
+    broken = _try(_issued(), ledger=_BrokenLedger())
+    assert calls == [] and broken["execution_error"].startswith("replay ledger unavailable"), broken
+    for item in ledger_dir.iterdir():
+        item.unlink()
+    ledger_dir.rmdir()
+    # A5: evidence swapped after the decision.
+    sealed_rows = [{"test_id": "T1_e2e_ping", "packet_loss_percent": 100.0}]
+    a5 = _try(_issued(rows=sealed_rows), ev=[{"test_id": "T1_e2e_ping", "packet_loss_percent": 0.0}])
+    assert calls == [] and a5["execution_error"] == "evidence changed since the gate decision", a5
+    # BLOCK and ESCALATE never execute and never compensate, sealed or not.
+    for verdict in ("block", "escalate"):
+        held = _try(_issued(verdict))
+        assert calls == [] and held["execution_attempted"] is False and held["compensation"] is None, held
+    # A configured verification key that is not the gate's refuses everything.
+    _key_dir = Path(_tempfile.mkdtemp())
+    _other_private, _other_public = _authority.generate_keypair_pem()
+    (_key_dir / "pub.pem").write_bytes(_other_public)
+    _previous_pub = _os.environ.get(_authority.PUBLIC_KEY_ENV)
+    _os.environ[_authority.PUBLIC_KEY_ENV] = str(_key_dir / "pub.pem")
+    try:
+        assert _try(_issued())["execution_error"] == "authorization was signed by an unknown key" and calls == []
+        _os.environ[_authority.PUBLIC_KEY_ENV] = str(_key_dir / "missing.pem")
+        assert _try(_issued())["execution_error"].startswith("verification key") and calls == []
+    finally:
+        if _previous_pub is None:
+            _os.environ.pop(_authority.PUBLIC_KEY_ENV, None)
         else:
-            _os.environ["VERIFIX_GATE_HMAC"] = previous_hmac
-    unsigned = bind_gate_decision(dict(integrity_allow), healthy, proposal, [])
-    assert unsigned["binding"]["signed"] is False
-    assert not binding_errors(unsigned, healthy, proposal)
+            _os.environ[_authority.PUBLIC_KEY_ENV] = _previous_pub
+        for item in _key_dir.iterdir():
+            item.unlink()
+        _key_dir.rmdir()
+    # A6: the gated executor refuses without a minted, unexpired capability.
+    for not_a_capability in (None, {"decision_id": "x"}, proposal):
+        try:
+            _actions.execute_gated(None, not_a_capability)
+        except PermissionError:
+            pass
+        else:
+            raise AssertionError("gated executor ran without a capability")
+    try:
+        _gated.Capability("x", "REROUTE", "backup", None, time.time() + 60, dict(proposal))
+    except PermissionError:
+        pass
+    else:
+        raise AssertionError("a capability was built without verification")
+    _cap_auth = dict(genuine["authorization"], expires_at=time.time() - 1)
+    try:
+        _actions.execute_gated(None, _gated.mint(_cap_auth, proposal))
+    except PermissionError as exc:
+        assert "expired" in str(exc)
+    else:
+        raise AssertionError("expired capability executed")
+    _wrong_path = dict(genuine["authorization"], reroute_path="primary")
+    try:
+        _actions.execute_gated(None, _gated.mint(_wrong_path, proposal))
+    except PermissionError as exc:
+        assert "not the authorized path" in str(exc)
+    else:
+        raise AssertionError("capability for another path executed")
+    # The ungated entry point needs an explicit reason.
+    try:
+        _actions.execute_ungated(None, "DO_NOTHING", {}, reason="")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("ungated execution without a reason")
+    # Single flight: a second authorized execution while one runs is refused.
+    with _gated.single_flight():
+        busy = _try(_issued())
+    assert calls == [] and busy["execution_error"] == "another authorized execution is in progress", busy
+
+    # The controller resolves a reroute path exactly as the gate does (ungated path).
+    _moved = []
+    _real_set = _actions.ctl.set_active_path
+    _actions.ctl.set_active_path = lambda _net, path: _moved.append(path)
+    try:
+        for bad in (
+            {"proposed_path": ["r1", "r3", "r2", "r4"]},
+            {"proposed_path": "r3"},
+            {"path": "backup", "proposed_path": ["r1", "r2", "r4"]},
+            {"path": "sideways"},
+            {},
+        ):
+            assert _choice(bad) is None
+            try:
+                _actions.execute_ungated(None, "REROUTE", bad, reason="self-check")
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f"controller acted on a path the gate rejects: {bad!r}")
+        assert _moved == [], _moved
+        for good, want in (
+            ({"path": "backup"}, "backup"),
+            ({"proposed_path": ["r1", "r3", "r4"]}, "backup"),
+            ({"proposed_path": ["r1", "r2", "r4"]}, "primary"),
+            ({"path": "primary", "proposed_path": ["r1", "r2", "r4"]}, "primary"),
+        ):
+            assert _actions.execute_ungated(None, "REROUTE", good, reason="self-check")["path"] == want == _choice(good)
+        assert _moved == ["backup", "backup", "primary", "primary"], _moved
+    finally:
+        _actions.ctl.set_active_path = _real_set
+
+    def _tampered(errs):
+        """A hand-edited authorization fails its specific check AND the gate signature."""
+        assert errs and errs[-1] in ("authorization signature is invalid", "authorization is not canonical"), errs
+        return errs[:-1]
 
     # B2: the decision is bound to the reroute path it resolved. A label is
     # part of the digest, and the bound path is checked on its own.
     labelled = dict(proposal)
     labelled.pop("proposed_path")
     labelled["proposed_path_label"] = "backup"
-    path_bound = bind_gate_decision(dict(integrity_allow), healthy, labelled, [])
-    assert path_bound["binding"]["reroute_path"] == "backup", path_bound["binding"]
-    assert not binding_errors(path_bound, healthy, labelled)
+    path_bound = _gate_stand_in(dict(integrity_allow), healthy, labelled, [])
+    assert path_bound["authorization"]["reroute_path"] == "backup", path_bound["authorization"]
+    assert not authorization_errors(path_bound, healthy, labelled)
     swapped = dict(labelled, proposed_path_label="primary")
-    swap_errors = binding_errors(path_bound, healthy, swapped)
+    swap_errors = authorization_errors(path_bound, healthy, swapped)
     assert "proposal changed since the gate decision" in swap_errors, swap_errors
     assert "reroute path changed since the gate decision" in swap_errors, swap_errors
     calls.clear()
     swap_run = apply_authorized_action(path_bound, swapped, execute, healthy, lambda: healthy)
     assert calls == [] and swap_run["execution_attempted"] is False, swap_run
     assert swap_run["execution_error"] == "proposal changed since the gate decision", swap_run
-    no_path = bind_gate_decision(dict(integrity_allow), healthy, proposal, [])
-    del no_path["binding"]["reroute_path"]
-    assert binding_errors(no_path, healthy, proposal) == ["decision is missing bound reroute path"]
-    wrong_path = bind_gate_decision(dict(integrity_allow), healthy, proposal, [])
-    wrong_path["binding"]["reroute_path"] = "primary"
-    assert binding_errors(wrong_path, healthy, proposal) == ["reroute path changed since the gate decision"]
+    no_path = _gate_stand_in(dict(integrity_allow), healthy, proposal, [])
+    del no_path["authorization"]["reroute_path"]
+    assert _tampered(authorization_errors(no_path, healthy, proposal)) == ["reroute path changed since the gate decision"]
+    wrong_path = _gate_stand_in(dict(integrity_allow), healthy, proposal, [])
+    wrong_path["authorization"]["reroute_path"] = "primary"
+    assert _tampered(authorization_errors(wrong_path, healthy, proposal)) == ["reroute path changed since the gate decision"]
     calls.clear()
     wrong_run = apply_authorized_action(wrong_path, proposal, execute, healthy, lambda: healthy)
     assert calls == [] and wrong_run["execution_error"] == "reroute path changed since the gate decision", wrong_run
-    quiet = bind_gate_decision(dict(integrity_allow), healthy, dict(proposal, action="DO_NOTHING"), [])
-    assert quiet["binding"]["reroute_path"] is None
+    quiet = _gate_stand_in(dict(integrity_allow), healthy, dict(proposal, action="DO_NOTHING"), [])
+    assert quiet["authorization"]["reroute_path"] is None
 
     # B3: the decision is bound to every field of every OAM row, in order
     # (evidence digest version 2). Rows are shaped like the live battery:
@@ -2183,14 +2801,14 @@ def _self_check():
         else:
             raise AssertionError(f"unknown digest version accepted: {unknown_version!r}")
 
-    with_rows = bind_gate_decision(dict(integrity_allow), healthy, proposal, rows_seen)
-    assert with_rows["binding"]["evidence_digest_version"] == 2
-    assert with_rows["binding"]["evidence_digest"] == _integrity.evidence_digest_v2(rows_seen)
-    assert not binding_errors(with_rows, healthy, proposal, rows_seen)
+    with_rows = _gate_stand_in(dict(integrity_allow), healthy, proposal, rows_seen)
+    assert with_rows["authorization"]["evidence_digest_version"] == 2
+    assert with_rows["authorization"]["evidence_digest"] == _integrity.evidence_digest_v2(rows_seen)
+    assert not authorization_errors(with_rows, healthy, proposal, rows_seen)
     # Same content, different key order or a fresh copy: same evidence.
-    assert not binding_errors(with_rows, healthy, proposal, _copy.deepcopy(rows_seen))
-    assert not binding_errors(with_rows, healthy, proposal, [dict(reversed(list(row.items()))) for row in rows_seen])
-    assert not binding_errors(with_rows, healthy, proposal, json.loads(json.dumps(rows_seen)))
+    assert not authorization_errors(with_rows, healthy, proposal, _copy.deepcopy(rows_seen))
+    assert not authorization_errors(with_rows, healthy, proposal, [dict(reversed(list(row.items()))) for row in rows_seen])
+    assert not authorization_errors(with_rows, healthy, proposal, json.loads(json.dumps(rows_seen)))
 
     changed = ["evidence changed since the gate decision"]
 
@@ -2238,7 +2856,7 @@ def _self_check():
     }
     seen_digests = {_integrity.evidence_digest_v2(rows_seen): "original"}
     for label, edited in value_edits.items():
-        assert binding_errors(with_rows, healthy, proposal, edited) == changed, label
+        assert authorization_errors(with_rows, healthy, proposal, edited) == changed, label
         mark = _integrity.evidence_digest_v2(edited)
         # "no evidence" and "evidence omitted" are the one intended equal pair.
         if label != "evidence omitted":
@@ -2286,37 +2904,140 @@ def _self_check():
             pass
         else:
             raise AssertionError(f"non-canonical evidence accepted: {junk!r}")
-        junk_bound = bind_gate_decision(dict(integrity_allow), healthy, proposal, junk)
-        assert junk_bound["binding"]["evidence_digest"] is None
-        assert binding_errors(junk_bound, healthy, proposal, junk) == ["decision is missing evidence digest"]
-        assert binding_errors(with_rows, healthy, proposal, junk)[0].startswith("evidence cannot be canonicalized"), junk
+        junk_bound = _gate_stand_in(dict(integrity_allow), healthy, proposal, junk)
+        assert junk_bound["authorization"]["evidence_digest"] is None
+        assert authorization_errors(junk_bound, healthy, proposal, junk) == ["decision is missing evidence digest"]
+        assert authorization_errors(with_rows, healthy, proposal, junk)[0].startswith("evidence cannot be canonicalized"), junk
+
+    # Nested values (hops, probes, intervals, interfaces, queues in live
+    # rows) are canonicalized at every depth.
+    nested_rows = [
+        {
+            "test_id": "T2_hop_ping",
+            "hops": [{"hop": "r1-r2", "ok": True, "loss": 0.0, "rtt": [1.5, 1.6]}, {"hop": "r2-r4", "ok": True, "loss": 0.0}],
+            "interfaces": {"r1-eth1": {"rx_errors": 0, "samples": [0, 0]}},
+            "raw": "r\u00e9ponse de 10.0.4.2 \u2014 0% perte",
+        }
+    ]
+    # Known answer with nested values and non-ASCII text.
+    assert _integrity.evidence_digest_v2(nested_rows) == "b8448df3004c259c5e6660cbf3c22911a3f198fcc96835ff50b204adec2b9888", _integrity.evidence_digest_v2(nested_rows)
+    nested_bound = _gate_stand_in(dict(integrity_allow), healthy, proposal, nested_rows)
+    assert not authorization_errors(nested_bound, healthy, proposal, json.loads(json.dumps(nested_rows)))
+
+    def _nested(mutate):
+        rows = _copy.deepcopy(nested_rows)
+        mutate(rows[0])
+        return rows
+
+    nested_edits = {
+        "hop ok flipped": _nested(lambda row: row["hops"][0].update(ok=False)),
+        "hop loss changed": _nested(lambda row: row["hops"][1].update(loss=100.0)),
+        "hop loss nan": _nested(lambda row: row["hops"][1].update(loss=float("nan"))),
+        "hop loss null": _nested(lambda row: row["hops"][1].update(loss=None)),
+        "hop loss missing": _nested(lambda row: row["hops"][1].pop("loss")),
+        "hop sample changed": _nested(lambda row: row["hops"][0]["rtt"].__setitem__(1, 9.9)),
+        "hop samples reordered": _nested(lambda row: row["hops"][0]["rtt"].reverse()),
+        "hops reordered": _nested(lambda row: row["hops"].reverse()),
+        "counter changed": _nested(lambda row: row["interfaces"]["r1-eth1"].update(rx_errors=1)),
+        "counter sample changed": _nested(lambda row: row["interfaces"]["r1-eth1"]["samples"].__setitem__(0, 7)),
+        "list vs tagged lookalike": _nested(lambda row: row["hops"][0].update(rtt=[{"list": [1.5, 1.6]}])),
+        "nan vs tagged lookalike": _nested(lambda row: row["hops"][1].update(loss={"float": "nan"})),
+        "accent changed": _nested(lambda row: row.update(raw="reponse de 10.0.4.2 \u2014 0% perte")),
+    }
+    nested_seen = {_integrity.evidence_digest_v2(nested_rows): "original"}
+    for label, edited in nested_edits.items():
+        assert authorization_errors(nested_bound, healthy, proposal, edited) == changed, label
+        mark = _integrity.evidence_digest_v2(edited)
+        assert mark not in nested_seen, (label, nested_seen.get(mark))
+        nested_seen[mark] = label
+    for label, mutate in (
+        ("set in nested dict", lambda row: row["interfaces"]["r1-eth1"].update(samples={1, 2})),
+        ("bytes in nested list", lambda row: row["hops"].append(b"raw")),
+        ("non-string key in nested dict", lambda row: row["hops"][0].update({7: "x"})),
+        ("object in nested list", lambda row: row["hops"][0]["rtt"].append(object())),
+    ):
+        try:
+            _integrity.evidence_digest_v2(_nested(mutate))
+        except _integrity.EvidenceNotCanonical:
+            pass
+        else:
+            raise AssertionError(f"non-canonical nested evidence accepted: {label}")
+    # Cyclic or absurdly deep evidence is refused, not a stack overflow.
+    cyclic = {"test_id": "T", "v": []}
+    cyclic["v"].append(cyclic)
+    deep = current = {"test_id": "T"}
+    for _ in range(200):
+        current["v"] = {}
+        current = current["v"]
+    # The limit is exact, and lists count as levels just like mappings.
+    def _nest(levels, kind):
+        value = 0
+        for _ in range(levels):
+            value = {"v": value} if kind == "dict" else [value]
+        return value
+
+    for kind in ("dict", "list"):
+        _integrity.evidence_digest_v2([{"test_id": "T", "v": _nest(_integrity._MAX_EVIDENCE_DEPTH - 1, kind)}])
+        try:
+            _integrity.evidence_digest_v2([{"test_id": "T", "v": _nest(_integrity._MAX_EVIDENCE_DEPTH, kind)}])
+        except _integrity.EvidenceNotCanonical:
+            pass
+        else:
+            raise AssertionError(f"evidence one level past the limit accepted ({kind})")
+    assert _integrity._MAX_EVIDENCE_DEPTH == 32
+    for runaway in ([cyclic], [deep]):
+        try:
+            _integrity.evidence_digest_v2(runaway)
+        except _integrity.EvidenceNotCanonical:
+            pass
+        else:
+            raise AssertionError("runaway evidence accepted")
+        assert _gate_stand_in(dict(integrity_allow), healthy, proposal, runaway)["authorization"]["evidence_digest"] is None
 
     # Version handling: only version 2 authorizes. A version 1 digest that is
     # correct under version 1 is refused, and is never re-read as version 2.
-    legacy = bind_gate_decision(dict(integrity_allow), healthy, proposal, rows_seen)
-    del legacy["binding"]["evidence_digest_version"]
-    legacy["binding"]["evidence_digest"] = _integrity.evidence_digest_v1(rows_seen)
-    legacy_errors = binding_errors(legacy, healthy, proposal, rows_seen)
+    legacy = _gate_stand_in(dict(integrity_allow), healthy, proposal, rows_seen)
+    del legacy["authorization"]["evidence_digest_version"]
+    legacy["authorization"]["evidence_digest"] = _integrity.evidence_digest_v1(rows_seen)
+    legacy_errors = _tampered(authorization_errors(legacy, healthy, proposal, rows_seen))
     assert len(legacy_errors) == 1 and legacy_errors[0].startswith("decision has no evidence digest version"), legacy_errors
-    for bad_version in (1, 3, "2", True, 2.5):
-        versioned = bind_gate_decision(dict(integrity_allow), healthy, proposal, rows_seen)
-        versioned["binding"]["evidence_digest_version"] = bad_version
-        version_errors = binding_errors(versioned, healthy, proposal, rows_seen)
+    import decimal as _decimal
+    import fractions as _fractions
+
+    for bad_version in (1, 3, "2", True, 2.5, 2.0, _decimal.Decimal(2), _fractions.Fraction(2), 2 + 0j, [2]):
+        versioned = _gate_stand_in(dict(integrity_allow), healthy, proposal, rows_seen)
+        versioned["authorization"]["evidence_digest_version"] = bad_version
+        version_errors = _tampered(authorization_errors(versioned, healthy, proposal, rows_seen))
         assert len(version_errors) == 1 and "is not accepted for execution" in version_errors[0], (bad_version, version_errors)
     # A binding that claims version 2 but carries the version 1 digest of the
     # same rows is refused: there is no fallback to the weaker definition.
-    downgraded = bind_gate_decision(dict(integrity_allow), healthy, proposal, rows_seen)
-    downgraded["binding"]["evidence_digest"] = _integrity.evidence_digest_v1(rows_seen)
-    assert binding_errors(downgraded, healthy, proposal, rows_seen) == changed
+    downgraded = _gate_stand_in(dict(integrity_allow), healthy, proposal, rows_seen)
+    downgraded["authorization"]["evidence_digest"] = _integrity.evidence_digest_v1(rows_seen)
+    assert _tampered(authorization_errors(downgraded, healthy, proposal, rows_seen)) == changed
     calls.clear()
     downgraded_run = apply_authorized_action(downgraded, proposal, execute, healthy, lambda: healthy, evidence=rows_seen)
     assert calls == [] and downgraded_run["execution_error"] == changed[0], downgraded_run
-    unversioned_v2 = bind_gate_decision(dict(integrity_allow), healthy, proposal, rows_seen)
-    del unversioned_v2["binding"]["evidence_digest_version"]
-    assert binding_errors(unversioned_v2, healthy, proposal, rows_seen), "a version 2 digest without its version must not pass"
-    no_mark = bind_gate_decision(dict(integrity_allow), healthy, proposal, rows_seen)
-    no_mark["binding"]["evidence_digest"] = None
-    assert binding_errors(no_mark, healthy, proposal, rows_seen) == ["decision is missing evidence digest"]
+    unversioned_v2 = _gate_stand_in(dict(integrity_allow), healthy, proposal, rows_seen)
+    del unversioned_v2["authorization"]["evidence_digest_version"]
+    assert authorization_errors(unversioned_v2, healthy, proposal, rows_seen), "a version 2 digest without its version must not pass"
+    no_mark = _gate_stand_in(dict(integrity_allow), healthy, proposal, rows_seen)
+    no_mark["authorization"]["evidence_digest"] = None
+    assert _tampered(authorization_errors(no_mark, healthy, proposal, rows_seen)) == ["decision is missing evidence digest"]
+    # A malformed stored digest is a refusal, never an exception at the boundary.
+    for odd_mark, expected in (
+        ("", "decision is missing evidence digest"),
+        ("d\u00e9j\u00e0", changed[0]),
+        (b"4551ad88", "decision is missing evidence digest"),
+        (4551, "decision is missing evidence digest"),
+        (with_rows["authorization"]["evidence_digest"].upper(), changed[0]),
+        (with_rows["authorization"]["evidence_digest"][:32], changed[0]),
+    ):
+        odd = _gate_stand_in(dict(integrity_allow), healthy, proposal, rows_seen)
+        odd["authorization"]["evidence_digest"] = odd_mark
+        assert _tampered(authorization_errors(odd, healthy, proposal, rows_seen)) == [expected], (odd_mark, authorization_errors(odd, healthy, proposal, rows_seen))
+        calls.clear()
+        odd_run = apply_authorized_action(odd, proposal, execute, healthy, lambda: healthy, evidence=rows_seen)
+        assert calls == [] and odd_run["execution_error"] == expected, (odd_mark, odd_run)
 
     # The boundary refuses a changed measurement and executes nothing.
     for label in (
@@ -2327,7 +3048,7 @@ def _self_check():
         "row duplicated",
         "evidence omitted",
     ):
-        fresh = bind_gate_decision(dict(integrity_allow), healthy, proposal, rows_seen)
+        fresh = _gate_stand_in(dict(integrity_allow), healthy, proposal, rows_seen)
         calls.clear()
         refused_run = apply_authorized_action(
             fresh, proposal, execute, healthy, lambda: healthy, evidence=value_edits[label]
@@ -2344,9 +3065,10 @@ def _self_check():
     assert calls == [proposal] and evidence_ok["remediation_succeeded"] is True, evidence_ok
 
     # Stored version 1 digests still verify under version 1, unchanged.
-    stored_dir = Path(__file__).resolve().parent.parent / "results" / "pilot" / "v4_episodes"
+    stored_root = Path(__file__).resolve().parent.parent / "results"
+    stored_files = sorted(stored_root.glob("pilot/v*_episodes/*.json")) + sorted(stored_root.glob("episodes/*.json"))
     stored_checked = 0
-    for stored_file in sorted(stored_dir.glob("*.json")):
+    for stored_file in stored_files:
         stored = json.loads(stored_file.read_text(encoding="utf-8"))
         stored_binding = (stored.get("gate_decision") or {}).get("binding")
         if not isinstance(stored_binding, dict) or "evidence_digest" not in stored_binding:
@@ -2356,7 +3078,7 @@ def _self_check():
         assert _integrity.evidence_digest_v1(stored_rows) == stored_binding["evidence_digest"], stored_file.name
         assert _integrity.evidence_digest_v2(stored_rows) != stored_binding["evidence_digest"], stored_file.name
         stored_checked += 1
-    assert stored_checked or not stored_dir.is_dir(), "no stored version 1 digest was checked"
+    assert stored_checked or not stored_files, "no stored version 1 digest was checked"
 
     # B10a: an interrupted write leaves the previous file whole and no temp file.
     import tempfile as _tempfile
@@ -2746,7 +3468,7 @@ def _self_check():
         lambda: healthy,
     )
     assert calls == [] and unbound_allow["execution_attempted"] is False
-    assert unbound_allow["execution_error"] == "allow is missing decision binding", unbound_allow
+    assert unbound_allow["execution_error"] == "decision has no gate-issued authorization", unbound_allow
 
     from agent.validate import MAX_EXPECTED_LEN
 
@@ -2796,7 +3518,7 @@ def _self_check():
     assert backup_claim_out["decision"] == "block" and backup_claim_out["reason"] == "proposal contradicted", backup_claim_out
     calls.clear()
     down_exec = apply_authorized_action(
-        bind_gate_decision({"decision": "allow"}, hidden_snap, backup, []),
+        _gate_stand_in({"decision": "allow"}, hidden_snap, backup, []),
         backup,
         execute,
         hidden_snap,
@@ -3090,8 +3812,8 @@ def live_recheck():
     if refused:
         return refused
     from bench.mininet_util import mn_cleanup, run_in_node
-    from control.actions import execute, proposal_to_action
-    from gate.integrity import bind_gate_decision
+    from control.actions import execute_gated
+    from control.routes import RouteControl
     from network import controller as ctl
     from network.topology import create_network
 
@@ -3110,10 +3832,9 @@ def live_recheck():
     def read():
         return read_execution_state(net, links)
 
-    def controller(item):
+    def controller(item, capability=None):
         executed.append(item)
-        action, payload = proposal_to_action(item)
-        return execute(net, action, payload)
+        return execute_gated(net, capability)
 
     def one_sided(item):
         executed.append(item)
@@ -3124,11 +3845,12 @@ def live_recheck():
         executed.clear()
         approved_snap = approved or read()
         return apply_authorized_action(
-            bind_gate_decision(dict(allow), approved_snap, proposal, []),
+            _gate_stand_in(dict(allow), approved_snap, proposal, []),
             proposal,
             execute_fn,
             approved_snap,
             read,
+            route_control=RouteControl(net),
         )
 
     failures = []
@@ -3164,12 +3886,14 @@ def live_recheck():
 
         out = attempt(one_sided)
         expect(
-            "one-sided reroute is recorded as partial",
-            len(executed) == 1 and out["remediation_succeeded"] is False and out["execution_error"] == "partial remediation",
+            "one-sided reroute is recorded as partial and compensated on r1 only",
+            len(executed) == 1 and out["remediation_succeeded"] is False and out["execution_error"] == "partial remediation"
+            and out["partial_application"] is True and (out["compensation"] or {}).get("verified") is True
+            and (out["compensation"] or {}).get("routers") == ["r1"],
             str(out),
         )
+        expect("exact routes restored by compensation", _routes_on_path(read(), "primary"))
         ctl.set_active_path(net, "primary")
-        expect("primary restored", _routes_on_path(read(), "primary"))
 
         approved = read()
         changed = ctl.get_link(net, "r3-r4", links)
@@ -3383,7 +4107,6 @@ def live_integrity():
     if refused:
         return refused
     from bench.mininet_util import mn_cleanup
-    from gate.integrity import bind_gate_decision
     from network.topology import create_network
 
     mn_cleanup()
@@ -3420,8 +4143,8 @@ def live_integrity():
             "tests_run": [],
             "checks": {},
         }
-        bound = bind_gate_decision(allow, approved, proposal, [])
-        expect("unsigned bind", bound.get("binding", {}).get("signed") is False, str(bound.get("binding")))
+        bound = _gate_stand_in(allow, approved, proposal, [])
+        expect("gate-issued authorization", bool(bound.get("authorization", {}).get("signature")), str(bound.get("authorization")))
 
         executed.clear()
         out = apply_authorized_action(bound, proposal, stub, approved, read)
@@ -3439,7 +4162,7 @@ def live_integrity():
             str(replay),
         )
 
-        stale = bind_gate_decision(dict(allow), approved, proposal, [])
+        stale = _gate_stand_in(dict(allow), approved, proposal, [])
         other = dict(approved)
         other["routes"] = [
             dict(row, route=(row.get("route") or "") + " #stale")
@@ -3475,8 +4198,8 @@ def live_integrity():
         loaded = json.loads(Path(logged).read_text(encoding="utf-8"))
         expect(
             "auditable decision record",
-            loaded.get("gate_decision", {}).get("binding", {}).get("decision_id")
-            == stale.get("binding", {}).get("decision_id"),
+            loaded.get("gate_decision", {}).get("authorization", {}).get("decision_id")
+            == stale.get("authorization", {}).get("decision_id"),
             str(loaded.get("gate_decision")),
         )
         Path(logged).unlink()
@@ -3512,9 +4235,9 @@ def live_safety():
         return refused
     from agent.validate import MAX_EXPECTED_LEN
     from bench.mininet_util import mn_cleanup, run_in_node
-    from control.actions import execute, proposal_to_action
+    from control.actions import execute_gated
+    from control.routes import RouteControl
     from gate.decide import decide as gate_decide
-    from gate.integrity import bind_gate_decision
     from network import controller as ctl
     from network.topology import create_network
 
@@ -3531,10 +4254,9 @@ def live_safety():
         executed.append(item)
         return {"executed": False, "action": item.get("action")}
 
-    def controller(item):
+    def controller(item, capability=None):
         executed.append(item)
-        action, payload = proposal_to_action(item)
-        return execute(net, action, payload)
+        return execute_gated(net, capability)
 
     def expect(label, ok, detail=""):
         print(f"  {'PASS' if ok else 'FAIL'}  {label}" + (f": {detail}" if detail and not ok else ""))
@@ -3595,9 +4317,11 @@ def live_safety():
             "proposed_path": ["r1", "r2", "r4"],
         }
         allowed = gate_decide(net, nothing, snap, [], mode="full", run_missing_tests=False, noise_id="N0")
-        bound_nothing = bind_gate_decision(allowed, approved, nothing, [])
         executed.clear()
-        nothing_exec = apply_authorized_action(bound_nothing, nothing, controller, approved, read)
+        # The gate's own authorization, verified against the snapshot it evaluated.
+        nothing_exec = apply_authorized_action(
+            allowed, nothing, controller, approved, read, gate_snapshot=snap, route_control=RouteControl(net)
+        )
         expect(
             "gate allow and network outcome agree for do_nothing",
             allowed.get("decision") == "allow"
@@ -3610,7 +4334,7 @@ def live_safety():
         ctl.set_active_path(net, "backup")
         executed.clear()
         stale = apply_authorized_action(
-            bind_gate_decision({"decision": "allow"}, stale_approved, _cause_proposal("REROUTE", "F1"), []),
+            _gate_stand_in({"decision": "allow"}, stale_approved, _cause_proposal("REROUTE", "F1"), []),
             _cause_proposal("REROUTE", "F1"),
             stub,
             stale_approved,
@@ -3636,7 +4360,7 @@ def live_safety():
         executed.clear()
         hidden_exec = apply_authorized_action(hidden_out, hidden, stub, approved12, read)
         backup_exec = apply_authorized_action(
-            bind_gate_decision({"decision": "allow"}, approved12, backup_claim, []),
+            _gate_stand_in({"decision": "allow"}, approved12, backup_claim, []),
             backup_claim,
             stub,
             approved12,

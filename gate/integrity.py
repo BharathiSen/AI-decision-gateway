@@ -1,7 +1,9 @@
-"""Bind a gate decision to the snapshot, proposal, and evidence that produced it.
+"""Digests a gate authorization is bound to: proposal, reroute path, evidence.
 
-Signatures are optional. Unsigned tokens are valid unless require_signatures
-is enabled in config/gate.yaml.
+The authorization itself is issued and Ed25519-sealed by the gate
+(gate/authority.py) and verified at the execution boundary. Nothing here
+creates or signs an authorization; the former orchestrator-side
+bind_gate_decision / binding_errors / HMAC helpers are gone.
 
 Evidence digest versions
   1  test_id, state_fingerprint and observed_at of each row, sorted by test_id.
@@ -13,21 +15,21 @@ Evidence digest versions
 
 What a digest does not do: it does not prove who produced the evidence. Code
 running in this process can replace the evidence and the digest together.
-Authenticating the decision is the job of gate-issued signed tokens, which
-is separate work. The digest covers the rows handed to bind_gate_decision;
-rows a gate runs itself during decide() are not part of it.
+Authenticating the decision is gate/authority.py. The digest covers the
+rows handed to gate.decide, copied when decide() is entered, so a row changed
+during or after the gate call no longer matches at the boundary. Rows a gate
+runs itself during decide() are not part of it.
 """
 
 import hashlib
-import hmac
 import json
 import math
-import os
-import uuid
 
 EVIDENCE_DIGEST_VERSION = 2
+# Deeper than any OAM row. A cyclic or absurdly nested value is refused
+# instead of exhausting the stack.
+_MAX_EVIDENCE_DEPTH = 32
 
-_consumed = set()
 
 
 def _digest(payload):
@@ -75,7 +77,7 @@ class EvidenceNotCanonical(ValueError):
     """An evidence value has no single canonical form."""
 
 
-def _canonical(value, where="evidence"):
+def _canonical(value, where="evidence", depth=0):
     """One unambiguous JSON tree per value.
 
     Lists and mappings are wrapped in a one-key tag, so a non-finite float
@@ -83,6 +85,8 @@ def _canonical(value, where="evidence"):
     key, a null, False, 0, 0.0 and "" all stay distinct. Anything outside
     JSON types is refused, not stringified.
     """
+    if depth > _MAX_EVIDENCE_DEPTH:
+        raise EvidenceNotCanonical(f"{where} is nested deeper than {_MAX_EVIDENCE_DEPTH} levels")
     if value is None or isinstance(value, (bool, str)):
         return value
     if isinstance(value, int):
@@ -94,13 +98,13 @@ def _canonical(value, where="evidence"):
             return {"float": "nan"}
         return {"float": "inf" if value > 0 else "-inf"}
     if isinstance(value, (list, tuple)):
-        return {"list": [_canonical(item, f"{where}[{index}]") for index, item in enumerate(value)]}
+        return {"list": [_canonical(item, f"{where}[{index}]", depth + 1) for index, item in enumerate(value)]}
     if isinstance(value, dict):
         out = {}
         for key, item in value.items():
             if not isinstance(key, str):
                 raise EvidenceNotCanonical(f"{where} has a non-string key {key!r}")
-            out[key] = _canonical(item, f"{where}.{key}")
+            out[key] = _canonical(item, f"{where}.{key}", depth + 1)
         return {"dict": out}
     raise EvidenceNotCanonical(f"{where} has unsupported type {type(value).__name__}")
 
@@ -133,7 +137,8 @@ def evidence_digest(test_results, version=EVIDENCE_DIGEST_VERSION):
 def evidence_binding_errors(binding, test_results):
     """Why this evidence does not match the binding. Empty when it does."""
     version = binding.get("evidence_digest_version")
-    if isinstance(version, bool) or version != EVIDENCE_DIGEST_VERSION:
+    # Exactly the integer 2: not 2.0, not True, not "2".
+    if type(version) is not int or version != EVIDENCE_DIGEST_VERSION:
         if version is None:
             return [
                 "decision has no evidence digest version "
@@ -147,7 +152,9 @@ def evidence_binding_errors(binding, test_results):
         current = evidence_digest_v2(test_results)
     except EvidenceNotCanonical as exc:
         return [f"evidence cannot be canonicalized: {exc}"]
-    if not hmac.compare_digest(marked, current):
+    # Plain comparison: the digest is not a secret, and compare_digest raises
+    # on a non-ASCII string, which would abort the episode instead of refusing.
+    if marked != current:
         return ["evidence changed since the gate decision"]
     return []
 
@@ -170,138 +177,3 @@ def bound_reroute_path(proposal):
     except (ValueError, TypeError):
         return None
     return reroute_choice(proposal)
-
-
-def signatures_required():
-    try:
-        from gate.inputs import load_gate_config
-
-        cfg, _errors = load_gate_config()
-    except Exception:
-        return False
-    return bool(cfg.get("require_signatures"))
-
-
-def optional_sign(binding):
-    secret = os.environ.get("VERIFIX_GATE_HMAC")
-    if not secret or not isinstance(binding, dict):
-        if isinstance(binding, dict):
-            binding["signed"] = False
-            binding["signature"] = None
-        return binding
-    payload = {key: value for key, value in binding.items() if key not in ("signed", "signature")}
-    binding["signature"] = hmac.new(
-        secret.encode("utf-8"),
-        _digest(payload).encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
-    binding["signed"] = True
-    return binding
-
-
-def optional_verify_errors(binding):
-    if not isinstance(binding, dict) or not binding.get("signed"):
-        return []
-    secret = os.environ.get("VERIFIX_GATE_HMAC")
-    if not secret:
-        # A token that claims a signature cannot be checked without the key.
-        # Passing it would let anyone set signed=True and satisfy require_signatures.
-        return ["decision signature cannot be verified: VERIFIX_GATE_HMAC is not set"]
-    payload = {key: value for key, value in binding.items() if key not in ("signed", "signature")}
-    expected = hmac.new(
-        secret.encode("utf-8"),
-        _digest(payload).encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
-    marked = binding.get("signature")
-    if not isinstance(marked, str) or len(marked) != len(expected):
-        return ["decision signature is invalid"]
-    if not hmac.compare_digest(marked, expected):
-        return ["decision signature is invalid"]
-    return []
-
-
-def bind_gate_decision(decision, snapshot, proposal, test_results=None):
-    """Stamp an auditable bind. Existing binds are left unchanged."""
-    if not isinstance(decision, dict):
-        return decision
-    existing = decision.get("binding")
-    if isinstance(existing, dict) and existing.get("decision_id"):
-        return decision
-    from gate.decide import evidence_fingerprint
-
-    bound = dict(decision)
-    try:
-        evidence_mark = evidence_digest_v2(test_results)
-    except EvidenceNotCanonical:
-        # No digest: binding_errors then refuses the decision.
-        evidence_mark = None
-    binding = {
-        "decision_id": uuid.uuid4().hex,
-        "snapshot_fingerprint": evidence_fingerprint(snapshot),
-        "proposal_digest": proposal_digest(proposal),
-        "evidence_digest_version": EVIDENCE_DIGEST_VERSION,
-        "evidence_digest": evidence_mark,
-        "reroute_path": bound_reroute_path(proposal),
-        "snapshot_timestamp": (snapshot or {}).get("timestamp") if isinstance(snapshot, dict) else None,
-        "signed": False,
-        "signature": None,
-    }
-    optional_sign(binding)
-    bound["binding"] = binding
-    return bound
-
-
-def binding_errors(decision, snapshot, proposal, test_results=None):
-    """Allow requires a bind token. Bound tokens must match this snapshot,
-    this proposal, this reroute path and this evidence (None means no rows).
-
-    Evidence is compared under digest version 2: every field of every row, in
-    order. A version 1 or unversioned binding is refused, never re-read as 2.
-    """
-    if not isinstance(decision, dict):
-        return ["missing gate decision"]
-    binding = decision.get("binding")
-    if not isinstance(binding, dict):
-        if str(decision.get("decision") or "").strip().lower() == "allow":
-            return ["allow is missing decision binding"]
-        return []
-    from gate.decide import evidence_fingerprint
-
-    errors = []
-    marked = binding.get("snapshot_fingerprint")
-    if not marked:
-        errors.append("decision is missing snapshot fingerprint")
-    elif marked != evidence_fingerprint(snapshot):
-        errors.append("decision not bound to this snapshot")
-    if binding.get("proposal_digest") != proposal_digest(proposal):
-        errors.append("proposal changed since the gate decision")
-    if "reroute_path" not in binding:
-        errors.append("decision is missing bound reroute path")
-    elif binding.get("reroute_path") != bound_reroute_path(proposal):
-        errors.append("reroute path changed since the gate decision")
-    errors.extend(evidence_binding_errors(binding, test_results))
-    ts = binding.get("snapshot_timestamp")
-    snap_ts = (snapshot or {}).get("timestamp") if isinstance(snapshot, dict) else None
-    if ts and snap_ts and ts != snap_ts:
-        errors.append("decision snapshot timestamp does not match")
-    if signatures_required() and not binding.get("signed"):
-        errors.append("unsigned decision")
-    errors.extend(optional_verify_errors(binding))
-    return errors
-
-
-def consume_decision(decision):
-    """Mark a bound decision as used. Unbound records are not tracked."""
-    if not isinstance(decision, dict):
-        return None
-    binding = decision.get("binding")
-    if not isinstance(binding, dict):
-        return None
-    decision_id = binding.get("decision_id")
-    if not decision_id:
-        return None
-    if decision_id in _consumed:
-        return "decision already used"
-    _consumed.add(decision_id)
-    return None

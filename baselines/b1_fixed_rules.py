@@ -1,6 +1,6 @@
 """B1: fixed if-loss-then-reroute rules on the snapshot. No extra OAM tests."""
 
-from control.actions import Action, execute
+from control.actions import Action, execute_ungated
 
 from baselines.common import BACKUP_PATH, PERMITTED_ACTIONS
 
@@ -30,5 +30,5 @@ def decide(proposal, snapshot, test_results=None):
 def run(net, proposal, snapshot):
     d = decide(proposal, snapshot)
     if d["action"] == "REROUTE":
-        execute(net, d["action"], {"proposed_path": d["path"]})
+        execute_ungated(net, d["action"], {"proposed_path": d["path"]}, reason="B1 fixed-rule baseline")
     return d

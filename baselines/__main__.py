@@ -64,6 +64,11 @@ def _live():
             failures.append(f"B3 used T10 {b3.get('tests_run')}")
     except Exception as exc:
         failures.append(f"{type(exc).__name__}: {exc}")
+        record = getattr(exc, "record", None)
+        if record is not None:
+            import json
+
+            failures.append("attached record: " + json.dumps(record, default=str, sort_keys=True))
         live = None
     finally:
         inj.reset_all(net, baseline=True)

@@ -1288,6 +1288,7 @@ def run_loop(args, net, links):
                 oam_results,
                 mode="full",
                 run_missing_tests=False,
+                path_qdiscs=(episode.get("execution_baseline") or {}).get("qdiscs"),
                 noise_id=noise_id,
             )
 

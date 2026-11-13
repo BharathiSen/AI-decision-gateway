@@ -42,7 +42,7 @@ from bench.signature_checks import (
     separation_errors,
     valid_fix_set,
 )
-from control.actions import execute
+from control.actions import execute_ungated
 from network import controller as ctl
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -174,7 +174,7 @@ def measure_action(net, action):
     before = _far_routes(net)
     out = {"executed": False, "recovered": None}
     try:
-        out.update(execute(net, action, dict(_ACTION_PAYLOAD.get(action, {}))))
+        out.update(execute_ungated(net, action, dict(_ACTION_PAYLOAD.get(action, {})), reason="ground-truth remediation measurement"))
         if out["executed"]:
             time.sleep(SETTLE_SECONDS)
         out["path_after"] = {r: ctl.path_from_route(r, line) for r, line in _far_routes(net).items()}
@@ -579,7 +579,7 @@ def _self_check():
             raise RuntimeError("route replace failed")
         world["routes"][node] = original
 
-    def fake_execute(net, action, proposal=None):
+    def fake_execute(net, action, proposal=None, *, reason):
         world["log"].append(f"execute {action}")
         if action == "DO_NOTHING":
             return {"executed": False, "action": action}
@@ -644,7 +644,7 @@ def _self_check():
         (oam, "run_all", fake_run_all), (time, "sleep", lambda s: None),
     ]
     saved = [(mod, name, getattr(mod, name)) for mod, name, _ in patches]
-    saved_globals = {k: g[k] for k in ("execute", "signature", "_fresh_host_state")}
+    saved_globals = {k: g[k] for k in ("execute_ungated", "signature", "_fresh_host_state")}
     saved_compounds = dict(inj._COMPOUNDS)
 
     def check(label, ok, detail=""):
@@ -655,7 +655,7 @@ def _self_check():
     try:
         for mod, name, fake in patches:
             setattr(mod, name, fake)
-        g["execute"], g["signature"], g["_fresh_host_state"] = fake_execute, fake_signature, fake_fresh
+        g["execute_ungated"], g["signature"], g["_fresh_host_state"] = fake_execute, fake_signature, fake_fresh
         inj._COMPOUNDS["CX"] = {"id": "CX", "split": "development", "injection_order": ["F1", "F12"], "cleanup_order": ["F12", "F1"]}
 
         records = [measure_scenario(None, sid) for sid in ("H0", "F1", "F3", "F12", "F10", "F11")]

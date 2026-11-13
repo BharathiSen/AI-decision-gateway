@@ -51,6 +51,9 @@ def start_link_flap(net, link_name, node=None, interval_seconds=2.0, cycles=3, o
                 errors.append(f"{type(exc).__name__}: {exc}")
 
     def _run():
+        # The episode timeout (SIGALRM) belongs to the main thread; never let
+        # the kernel pick this thread for it (see control.gated.deferred_alarm).
+        block_alarm_in_this_thread()
         for _ in range(int(cycles)):
             if stop_event.is_set():
                 break
@@ -68,6 +71,17 @@ def start_link_flap(net, link_name, node=None, interval_seconds=2.0, cycles=3, o
         "thread": thread, "stop": stop_event, "link": link_name, "node": node, "errors": errors,
     }
     return flap_id
+
+
+def block_alarm_in_this_thread(sig=None):
+    """Block SIGALRM in the calling thread, where the platform supports it."""
+    import signal as _signal
+
+    sig = sig or _signal
+    if hasattr(sig, "pthread_sigmask") and hasattr(sig, "SIGALRM"):
+        sig.pthread_sigmask(sig.SIG_BLOCK, {sig.SIGALRM})
+        return True
+    return False
 
 
 def stop_flap(flap_id):

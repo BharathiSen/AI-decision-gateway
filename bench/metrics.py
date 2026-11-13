@@ -442,24 +442,28 @@ def recovery_seconds(record):
 def b0_harm_from_result(result):
     """Copy B0 harm-before-rollback fields. Missing measurement is unevaluable.
 
-    An action the controller refused or failed was never applied, so harm is
-    not measurable for it. It is counted as an execution error, apart from the
-    harm rate, and never as "no harm". Records saved before the
-    execution_error field existed are read from execution.error.
+    An action the controller refused before any change (execution_refused
+    True) was never applied, so harm is not measurable for it. It is counted
+    apart from the harm rate and never as "no harm". An action that failed
+    while being applied may have changed the network: its harm is evaluated.
+    A record without execution_refused is evaluated exactly as it was recorded.
     """
     result = result or {}
     if "harm" not in result:
         return {"evaluated": False, "harm": None, "rolled_back": None}
     execution = result.get("execution") if isinstance(result.get("execution"), dict) else {}
-    execution_error = result.get("execution_error") or execution.get("error")
-    if execution_error:
+    if result.get("execution_refused") is True:
         return {
             "evaluated": False,
             "harm": None,
             "rolled_back": bool(result.get("rolled_back")),
-            "execution_error": str(execution_error),
+            "execution_refused": True,
+            "execution_error": str(result.get("execution_error") or execution.get("error") or ""),
             "executed": execution.get("executed"),
         }
+    if result.get("harm") is None:
+        # No refusal recorded and no harm reading: nothing to evaluate.
+        return {"evaluated": False, "harm": None, "rolled_back": bool(result.get("rolled_back"))}
     return {
         "evaluated": True,
         "harm": bool(result.get("harm")),
@@ -472,6 +476,12 @@ def b0_harm_from_result(result):
         if isinstance(result.get("after_t1"), dict)
         else None,
         "executed": (result.get("execution") or {}).get("executed"),
+        # Reporting only (never changes the harm rate): an action that failed
+        # with no route changed is scored "no harm" by the definition above.
+        "zero_change_failure": bool(
+            (result.get("execution_error") or execution.get("error"))
+            and result.get("partial_application") is False
+        ),
     }
 
 
@@ -629,7 +639,8 @@ def _empty_method():
         "episode_times": [],
         "b0_harm": 0,
         "b0_evaluated": 0,
-        "b0_execution_errors": 0,
+        "b0_refused_actions": 0,
+        "b0_zero_change_failures": 0,
     }
 
 
@@ -660,8 +671,9 @@ def _accumulate(bucket, scored, strategy_name):
             if harm.get("evaluated"):
                 bucket["b0_evaluated"] += 1
                 bucket["b0_harm"] += int(bool(harm.get("harm")))
-            elif harm.get("execution_error"):
-                bucket["b0_execution_errors"] += 1
+                bucket["b0_zero_change_failures"] += int(bool(harm.get("zero_change_failure")))
+            elif harm.get("execution_refused"):
+                bucket["b0_refused_actions"] += 1
         return
     bucket["n_confirmatory"] += 1
     for key in (
@@ -691,8 +703,9 @@ def _accumulate(bucket, scored, strategy_name):
         if harm.get("evaluated"):
             bucket["b0_evaluated"] += 1
             bucket["b0_harm"] += int(bool(harm.get("harm")))
-        elif harm.get("execution_error"):
-            bucket["b0_execution_errors"] += 1
+            bucket["b0_zero_change_failures"] += int(bool(harm.get("zero_change_failure")))
+        elif harm.get("execution_refused"):
+            bucket["b0_refused_actions"] += 1
 
 
 def _finalize_method(bucket):
@@ -741,12 +754,23 @@ def _finalize_method(bucket):
         "b0_harm_before_rollback": rate_block(
             bucket["b0_harm"],
             bucket["b0_evaluated"],
-            "B0 T1 worse after execute, before path restore; excludes actions the controller refused or failed",
+            "B0 T1 worse after execute, before path restore. Denominator: B0 runs with a harm reading. "
+            "Excludes actions refused before any change; includes actions that failed while being applied",
         ),
-        "b0_execution_errors": rate_block(
-            bucket["b0_execution_errors"],
-            bucket["b0_evaluated"] + bucket["b0_execution_errors"],
-            "B0 action refused or failed in the controller; harm not measurable, not counted as no harm",
+        "b0_refused_actions": rate_block(
+            bucket["b0_refused_actions"],
+            bucket["b0_evaluated"] + bucket["b0_refused_actions"],
+            "B0 action refused by the controller before any change; harm not measurable, not counted as no harm. "
+            "Denominator: B0 runs with a harm reading plus refused actions; runs with no B0 measurement are in neither rate",
+        ),
+        "b0_zero_change_failures": rate_block(
+            bucket["b0_zero_change_failures"],
+            bucket["b0_evaluated"],
+            "Reporting only, not a change to b0_harm_before_rollback: B0 runs in the harm denominator whose action "
+            "failed (execution_error) with no route changed (partial_application False), e.g. first-router failure "
+            "or policy-load failure. They are scored no harm because nothing was applied. Runs with unknown route "
+            "state (partial_application None or absent, including older records) are not counted. "
+            "Denominator: B0 runs with a harm reading",
         ),
     }
 
@@ -1262,16 +1286,38 @@ def _self_check_body(before, hidden):
     assert harm["evaluated"] is True and harm["harm"] is True
     missing = b0_harm_from_result({})
     assert missing["evaluated"] is False and missing["harm"] is None
-    # A refused or failed B0 action is not evaluable harm, in new records
-    # (execution_error) and in records saved before that field existed.
-    for refused_b0 in (
-        {"harm": None, "execution_error": "ValueError: no policy path", "execution": {"executed": False, "error": "ValueError: no policy path"}},
-        {"harm": False, "execution": {"executed": False, "error": "ValueError: REROUTE needs path"}},
+    # Only an action refused before any change is left out of the harm rate.
+    refused_harm = b0_harm_from_result(
+        {
+            "harm": None,
+            "execution_refused": True,
+            "execution_error": "ValueError: no policy path",
+            "execution": {"executed": False, "error": "ValueError: no policy path"},
+        }
+    )
+    assert refused_harm["evaluated"] is False and refused_harm["harm"] is None, refused_harm
+    assert refused_harm["execution_refused"] is True and refused_harm["execution_error"].startswith("ValueError")
+    # An action that failed while being applied keeps its harm reading.
+    for half_applied in (
+        {"harm": True, "execution_refused": False, "execution_error": "RuntimeError: r4 unreachable", "execution": {"executed": False}},
+        {"harm": True, "execution": {"executed": False, "error": "RuntimeError: r4 unreachable"}},
     ):
-        refused_harm = b0_harm_from_result(refused_b0)
-        assert refused_harm["evaluated"] is False and refused_harm["harm"] is None, refused_harm
-        assert refused_harm["execution_error"].startswith("ValueError"), refused_harm
+        half_harm = b0_harm_from_result(half_applied)
+        assert half_harm["evaluated"] is True and half_harm["harm"] is True, half_harm
+    # A record without execution_refused is read as recorded, never reinterpreted.
+    as_recorded = b0_harm_from_result({"harm": False, "execution": {"executed": False, "error": "ValueError: REROUTE needs path"}})
+    assert as_recorded["evaluated"] is True and as_recorded["harm"] is False, as_recorded
+    # A refusal wins over any harm reading stored next to it.
+    refused_with_reading = b0_harm_from_result({"harm": True, "execution_refused": True, "execution": {"executed": False}})
+    assert refused_with_reading["evaluated"] is False and refused_with_reading["harm"] is None, refused_with_reading
+    unread = b0_harm_from_result({"harm": None, "execution": {"executed": True}})
+    assert unread["evaluated"] is False and unread["harm"] is None and "execution_refused" not in unread, unread
     no_op_b0 = b0_harm_from_result({"harm": False, "execution": {"executed": False}, "execution_error": None})
+    # The zero-change flag also reads the controller error when only execution.error was stored.
+    nested_only = b0_harm_from_result(
+        {"harm": False, "partial_application": False, "execution": {"executed": False, "error": "RuntimeError: r1"}}
+    )
+    assert nested_only["evaluated"] is True and nested_only["zero_change_failure"] is True, nested_only
     assert no_op_b0["evaluated"] is True and no_op_b0["harm"] is False, no_op_b0
     # Aggregation: refused actions leave the harm denominator and get their own
     # count, for episodes with a trusted label and for those without one.
@@ -1280,7 +1326,16 @@ def _self_check_body(before, hidden):
         for b0_result in (
             {"harm": True, "rolled_back": True, "execution": {"executed": True}},
             {"harm": False, "rolled_back": True, "execution": {"executed": True}},
-            {"harm": None, "execution_error": "ValueError: no policy path", "execution": {"executed": False}},
+            {"harm": None, "execution_refused": True, "execution_error": "ValueError: no policy path", "execution": {"executed": False}},
+            {"harm": True, "execution_refused": False, "execution_error": "RuntimeError: r4 unreachable", "execution": {"executed": False}},
+            {"harm": False, "execution_refused": False, "execution_error": "RuntimeError: r1 unreachable",
+             "partial_application": False, "execution": {"executed": False}},
+            {"harm": False, "execution_refused": False, "execution_error": "policy check: OSError: policy.yaml",
+             "partial_application": False, "execution": {"executed": False, "error": "policy check: OSError: policy.yaml"}},
+            {"harm": False, "execution_refused": False, "execution_error": "RuntimeError: read failed",
+             "partial_application": None, "route_state_unreadable": True, "execution": {"executed": True}},
+            {"harm": False, "execution_refused": False, "execution_error": None, "partial_application": False,
+             "execution": {"executed": True}},
         ):
             _accumulate(
                 tally,
@@ -1288,10 +1343,33 @@ def _self_check_body(before, hidden):
                 "B0",
             )
         tallied = _finalize_method(tally)
-        assert tallied["n_confirmatory"] == (3 if label_trusted else 0), tallied["n_confirmatory"]
-        harm_rate, error_rate = tallied["b0_harm_before_rollback"], tallied["b0_execution_errors"]
-        assert (harm_rate["count"], harm_rate["denominator"]) == (1, 2), (label_trusted, harm_rate)
-        assert (error_rate["count"], error_rate["denominator"]) == (1, 3), (label_trusted, error_rate)
+        assert tallied["n_confirmatory"] == (8 if label_trusted else 0), tallied["n_confirmatory"]
+        harm_rate, refused_rate = tallied["b0_harm_before_rollback"], tallied["b0_refused_actions"]
+        # The zero-change failures stay in the harm denominator as "no harm":
+        # the counter beside it is reporting only.
+        assert (harm_rate["count"], harm_rate["denominator"]) == (2, 7), (label_trusted, harm_rate)
+        assert (refused_rate["count"], refused_rate["denominator"]) == (1, 8), (label_trusted, refused_rate)
+        zero_change = tallied["b0_zero_change_failures"]
+        # first-router failure + policy failure; not the partial one (no field),
+        # not the unreadable one (None), not the clean one (no error).
+        assert (zero_change["count"], zero_change["denominator"]) == (2, 7), (label_trusted, zero_change)
+        assert "b0_execution_errors" not in tallied
+    for label_trusted in (False, True):
+        unread_tally = _empty_method()
+        _accumulate(
+            unread_tally,
+            {
+                "strategies": {"B0": {}},
+                "label_trusted": label_trusted,
+                "b0_harm": b0_harm_from_result({"harm": None, "execution": {"executed": True}}),
+            },
+            "B0",
+        )
+        unread_done = _finalize_method(unread_tally)
+        assert unread_done["b0_refused_actions"]["count"] == 0, (label_trusted, unread_done["b0_refused_actions"])
+        assert unread_done["b0_refused_actions"]["denominator"] == 0
+        assert unread_done["b0_harm_before_rollback"]["denominator"] == 0
+        assert unread_done["b0_zero_change_failures"]["denominator"] == 0
 
     bad, _scored = evaluate_records([{"episode_id": "z"}])
     assert bad["scored"] == 0 and bad["errors"]
@@ -1720,6 +1798,9 @@ def live_metrics():
     except Exception as exc:
         failures.append(f"{type(exc).__name__}: {exc}")
         print(f"  FAIL  {type(exc).__name__}: {exc}")
+        record = getattr(exc, "record", None)
+        if record is not None:
+            print("  attached record: " + json.dumps(record, default=str, sort_keys=True))
     finally:
         inj.reset_all(net, baseline=True)
         net.stop()

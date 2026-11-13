@@ -13,6 +13,9 @@ import tempfile
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
+# Also runnable as `python bench/cleanup_check.py`.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 
 def _fakes(events, pre=None, post=None, clear_raises=False):
     from gate.evidence_check import _snapshot
