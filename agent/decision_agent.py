@@ -24,7 +24,6 @@ import time
 from pathlib import Path
 
 import yaml
-from openai import OpenAI
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -196,6 +195,10 @@ def _setup_logging():
 def _client():
     _setup_logging()
     cfg = provider_config()
+    # Lazy import: episode records need PROMPT_* without the SDK installed
+    # (live-accept demos use fixed proposals; LLM calls still need openai).
+    from openai import OpenAI
+
     # Extra retries ride out per-minute rate limits on free tiers.
     return OpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"], max_retries=5)
 
