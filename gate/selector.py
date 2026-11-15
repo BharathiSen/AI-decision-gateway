@@ -98,8 +98,13 @@ def covering_separating_tests(candidates, fixes=None, matrix=None):
 
     Selection is model-independent: the agent cause id is only a set member.
     Predictions must not be consulted before this set is frozen.
+
+    A pair already covered by a chosen separator is skipped. Calling
+    pick_cheapest with already_ran=chosen would otherwise force a redundant
+    new test (e.g. T10) even when T1/T2 already separate that pair.
     """
     fixes = fixes or _load_fixes()
+    matrix = matrix if matrix is not None else _load_matrix()
     ids = sorted({cid for cid in (candidates or []) if isinstance(cid, str) and cid})
     chosen = []
     pairs = []
@@ -108,7 +113,10 @@ def covering_separating_tests(candidates, fixes=None, matrix=None):
             if needs_different_fixes(fault_a, fault_b, fixes=fixes):
                 pairs.append((fault_a, fault_b))
     for fault_a, fault_b in pairs:
-        tid = pick_cheapest_separating_test(fault_a, fault_b, already_ran=chosen, matrix=matrix)
+        separators = set(separating_tests(fault_a, fault_b, matrix=matrix))
+        if separators & set(chosen):
+            continue
+        tid = pick_cheapest_separating_test(fault_a, fault_b, already_ran=[], matrix=matrix)
         if tid and tid not in chosen:
             chosen.append(tid)
     return chosen

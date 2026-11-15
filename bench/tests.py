@@ -91,6 +91,12 @@ def classify_ping(output):
         "operation not permitted", "permission denied", "cannot assign requested address",
     )):
         return "command_error"
+    # Local routing refusal when an admin-down hop has no route: network
+    # evidence (link down), not a probe tool failure. Often has no stats line.
+    if any(token in low for token in (
+        "network is unreachable", "no route to host",
+    )):
+        return "unreachable"
     stats = _PING_STATS.search(text)
     if "frag needed" in low or "message too long" in low:
         return "frag_needed"
@@ -1409,10 +1415,13 @@ def _check_ping_classification():
     local_mtu = "ping: local error: message too long, mtu=1000\n"
     dns = "ping: hostB: Name or service not known\n"
     missing = "bash: line 1: ping: command not found\n"
+    no_route = "connect: Network is unreachable\n"
+    no_host = "ping: sendmsg: No route to host\n"
     cases = {
         ok: "ok", lossy: "loss", timeout: "no_reply", unreachable: "unreachable",
         frag: "frag_needed", local_mtu: "frag_needed", dns: "dns", missing: "command_error",
         "": "command_error", "garbage without statistics\n": "command_error",
+        no_route: "unreachable", no_host: "unreachable",
     }
     for text, want in cases.items():
         got = classify_ping(text)
