@@ -95,25 +95,61 @@ def experiment_config():
     }
 
 
+def _compact_matrix_expected(tid, expected):
+    """Shrink matrix outcomes that exceed the agent expected-string cap.
+
+    Full T2 path strings are often longer than MAX_EXPECTED_LEN; keep only
+    non-ok hops so the demo proposal still predicts the F1 separator.
+    """
+    if not isinstance(expected, str) or not expected.strip():
+        return None
+    if len(expected) <= MAX_EXPECTED_LEN:
+        return expected
+    if tid != "T2_hop_ping":
+        return None
+    from bench.contracts import parse_t2_prediction
+
+    parsed = parse_t2_prediction(expected)
+    if not parsed.get("ok"):
+        return None
+    by_path = {}
+    for (path, hop), outcome in (parsed.get("pairs") or {}).items():
+        if outcome == "ok":
+            continue
+        by_path.setdefault(path, []).append(f"{hop}={outcome}")
+    if not by_path:
+        return None
+    chunks = []
+    for path in ("primary", "backup"):
+        hops = by_path.get(path) or []
+        if hops:
+            chunks.append(f"{path}:" + ",".join(hops))
+    compact = ";".join(chunks)
+    if not compact or len(compact) > MAX_EXPECTED_LEN:
+        return None
+    return compact
+
+
 def f1_proposal():
     """Correct F1 diagnosis: reroute to backup with catalog predictions."""
     preds = []
+    seen = set()
     for row in _load_matrix():
         if row.get("fault_id") != "F1":
             continue
         tid = row.get("test_id")
-        expected = row.get("outcome")
-        if tid not in TEST_IDS or not isinstance(expected, str) or not expected.strip():
+        expected = _compact_matrix_expected(tid, row.get("outcome"))
+        if tid not in TEST_IDS or expected is None:
             continue
-        if len(expected) > MAX_EXPECTED_LEN:
+        if tid in seen:
             continue
+        seen.add(tid)
         preds.append({"test_id": tid, "expected": expected})
-        if len(preds) >= 8:
-            break
     if not preds:
         preds = [
-            {"test_id": "T1_e2e_ping", "expected": "loss=100"},
-            {"test_id": "T7_route_check", "expected": "none"},
+            {"test_id": "T1_e2e_ping", "expected": "down"},
+            {"test_id": "T2_hop_ping", "expected": "r2-r4=down"},
+            {"test_id": "T7_route_check", "expected": "primary"},
         ]
     return {
         "action": "REROUTE",
@@ -313,6 +349,13 @@ def _self_check():
     f1 = f1_proposal()
     if f1.get("action") != "REROUTE" or (f1.get("causes") or [{}])[0].get("cause_id") != "F1":
         failures.append(f"F1 proposal {f1}")
+    f1_tids = {
+        p.get("test_id")
+        for p in ((f1.get("causes") or [{}])[0].get("predicted_tests") or [])
+        if isinstance(p, dict)
+    }
+    if "T2_hop_ping" not in f1_tids:
+        failures.append(f"F1 proposal missing T2 compact prediction {f1_tids}")
     trap = trap_proposal({"metrics": {"packet_loss_percent": 0}})
     if trap.get("action") != "REROUTE":
         failures.append(f"F12 stub {trap}")

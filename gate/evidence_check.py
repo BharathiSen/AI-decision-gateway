@@ -276,6 +276,26 @@ def main():
     cover_b = covering_separating_tests(cands_b, fixes=frozen["fixes"], matrix=frozen["matrix"])
     assert cover_a == cover_b and cover_a, (cover_a, cover_b)
 
+    # (7a) F1 with both link_down and high_loss: held-out ids must not consume
+    # top-k slots and leave only same-fix REROUTE siblings (empty covering).
+    f1_both = _snapshot(loss=100.0, connectivity=False)
+    for link in f1_both["links"]:
+        if link["name"] == "r2-r4":
+            link["up"] = False
+            link["packet_loss_percent"] = 100.0
+    f1_symptoms = _symptoms_from_snapshot(f1_both)
+    assert f1_symptoms.get("link_down") and f1_symptoms.get("high_loss"), f1_symptoms
+    f1_cands = _candidate_set("F1", ["F1"], f1_symptoms, frozen["held_out"] or set())
+    assert not (set(f1_cands) & set(frozen["held_out"] or set())), f1_cands
+    assert any(
+        cid != "F1"
+        and set((frozen["fixes"].get(cid) or {}).get("correct") or [])
+        != set((frozen["fixes"].get("F1") or {}).get("correct") or [])
+        for cid in f1_cands
+    ), f1_cands
+    f1_cover = covering_separating_tests(f1_cands, fixes=frozen["fixes"], matrix=frozen["matrix"])
+    assert f1_cover, f1_cands
+
     # (7b) B4 parity: same selected tests as VeriFix; only prediction source differs.
     from baselines.b4_llm_checker import decide as decide_b4
 

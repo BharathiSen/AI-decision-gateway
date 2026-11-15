@@ -106,14 +106,17 @@ def _candidate_set(primary, ai_causes, symptoms, hidden):
 
     The catalog top-k does not exclude the primary, so swapping which cause
     the model ranked first cannot reshape the symptom-derived set. Held-out
-    ids never enter except as primary (later escalated as outside catalog).
+    ids are excluded before the top-k cut so they cannot crowd out development
+    alternatives that need different fixes (e.g. F12/F11 next to F1). Held-out
+    never enters except as primary (later escalated as outside catalog).
     """
     stages = pipeline_interfaces()
     hidden = set(hidden or [])
-    # exclude=[]: symptom ranking is independent of the model's preferred cause.
+    # Exclude held-out only. Do not exclude the primary: symptom ranking must
+    # stay independent of which cause the model preferred.
     alts = [
         fid
-        for fid in stages["candidate_generation"](symptoms, exclude=[])
+        for fid in stages["candidate_generation"](symptoms, exclude=sorted(hidden))
         if fid not in hidden
     ]
     seen = []
