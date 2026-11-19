@@ -168,6 +168,76 @@ def scenarios_from_faults(text):
     return out
 
 
+PAPER_NOISE_LEVELS = ("N0", "N1", "N2")
+PAPER_COMPARE_ARMS = ("verifix", "B6", "B2", "B0")
+
+
+def paper_stratified_scenarios(episodes, seed=1):
+    """Deterministic paper batch: singles, compounds, held-out U*, each N0/N1/N2."""
+    if episodes < 1:
+        raise ValueError("episodes must be >= 1")
+    singles = _development_faults()
+    compounds = _development_compounds()
+    held = sorted(inj.held_out_ids())
+    strata = []
+    for noise_id in PAPER_NOISE_LEVELS:
+        strata.append(
+            {
+                "kind": "healthy",
+                "fault_id": "H0",
+                "compound_id": None,
+                "noise_id": noise_id,
+                "stress_mode": None,
+                "ticket_text": None,
+                "slice": "healthy",
+            }
+        )
+        for fid in singles:
+            strata.append(
+                {
+                    "kind": "normal",
+                    "fault_id": fid,
+                    "compound_id": None,
+                    "noise_id": noise_id,
+                    "stress_mode": None,
+                    "ticket_text": None,
+                    "slice": "single",
+                }
+            )
+        for cid in compounds:
+            strata.append(
+                {
+                    "kind": "stress",
+                    "fault_id": "H0",
+                    "compound_id": cid,
+                    "noise_id": noise_id,
+                    "stress_mode": "misleading_ticket",
+                    "ticket_text": STRESS_TICKET,
+                    "slice": "compound",
+                }
+            )
+        for uid in held:
+            strata.append(
+                {
+                    "kind": "normal",
+                    "fault_id": uid,
+                    "compound_id": None,
+                    "noise_id": noise_id,
+                    "stress_mode": None,
+                    "ticket_text": None,
+                    "slice": "held_out",
+                }
+            )
+    rng = random.Random(seed)
+    order = list(range(len(strata)))
+    rng.shuffle(order)
+    out = []
+    for index in range(episodes):
+        row = dict(strata[order[index % len(order)]])
+        out.append(row)
+    return out
+
+
 def _stub_proposal(snapshot):
     """Deterministic stub when no API key. Snapshot only; no true fault_id."""
     metrics = (snapshot or {}).get("metrics", {})
@@ -1164,6 +1234,11 @@ def _parser():
         default="",
         help="Comma-separated catalog ids (H0,F1,C1,...) instead of the random 500 picker",
     )
+    parser.add_argument(
+        "--paper-stratified",
+        action="store_true",
+        help="Paper batch mix: singles, compounds, held-out U*, each noise N0/N1/N2",
+    )
     return parser
 
 
@@ -1257,6 +1332,8 @@ def run_loop(args, net, links):
         planned = scenarios_from_faults(args.faults)
         stats["target_episodes"] = len(planned)
         args.episodes = len(planned)
+    elif getattr(args, "paper_stratified", False):
+        planned = paper_stratified_scenarios(args.episodes, seed=args.seed)
 
     for index in range(start, args.episodes):
         scenario = planned[index] if planned is not None else pick_scenario(args.seed, index)
@@ -1411,9 +1488,14 @@ def main(argv=None):
         return 2
     from bench.outcomes import require_accepted_thresholds
 
+    if args.faults and args.paper_stratified:
+        print("use only one of --faults or --paper-stratified", file=sys.stderr)
+        return 2
     planned = (
         scenarios_from_faults(args.faults)
         if args.faults
+        else paper_stratified_scenarios(args.episodes, seed=args.seed)
+        if args.paper_stratified
         else [pick_scenario(args.seed, index) for index in range(args.episodes)]
     )
     refusal = require_accepted_thresholds({row["noise_id"] for row in planned})
@@ -1525,6 +1607,13 @@ def _self_check_body(summary, before):
     import tempfile
 
     hidden = inj.held_out_ids()
+    paper = paper_stratified_scenarios(60, seed=7)
+    assert len(paper) == 60
+    assert {row["noise_id"] for row in paper} == set(PAPER_NOISE_LEVELS)
+    assert any(row.get("slice") == "held_out" for row in paper)
+    assert any(row.get("slice") == "compound" for row in paper)
+    assert any(row.get("slice") == "single" for row in paper)
+    assert paper_stratified_scenarios(12, seed=7) == paper_stratified_scenarios(12, seed=7)
     kinds = {"healthy": 0, "normal": 0, "stress": 0}
     for index in range(TARGET_EPISODES):
         scen = pick_scenario(1, index)

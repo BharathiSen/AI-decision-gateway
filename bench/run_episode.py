@@ -368,8 +368,10 @@ def attach_post_action_recovery(
 ):
     """Record independent recovery after an authorized execution attempt.
 
-    Runs for every execution_attempted episode (including DO_NOTHING, where
-    executed=False). Never sets traffic_recovered from remediation_succeeded.
+    Runs for every execution_attempted episode. DO_NOTHING still gets post_oam
+    observation but recovery_status=not_attempted so it never fills
+    recovery_time_seconds / recovery_known. Never sets traffic_recovered from
+    remediation_succeeded alone.
     """
     record = record if isinstance(record, dict) else {}
     measure_fn = measure_fn or measure_traffic_recovery
@@ -445,9 +447,18 @@ def attach_post_action_recovery(
             },
         }
     record["post_oam"] = post
+    record["recovery_measurement_duration_seconds"] = post.get("duration_seconds")
+    # DO_NOTHING applies no remediation: keep post_oam for observation but do not
+    # contribute recovery_time / recovery_known (protocol §7 / paper Stage D).
+    action = ((record.get("execution_result") or {}).get("action")
+              or ((record.get("agent_proposal") or {}).get("action")))
+    if action == "DO_NOTHING":
+        record["recovery_status"] = RECOVERY_NOT_ATTEMPTED
+        record["traffic_recovered"] = None
+        record["recovery_time_seconds"] = None
+        return record
     record["recovery_status"] = post.get("recovery_status")
     record["traffic_recovered"] = post.get("traffic_recovered")
-    record["recovery_measurement_duration_seconds"] = post.get("duration_seconds")
     if post.get("recovery_status") == RECOVERY_RECOVERED:
         span = _iso_span_seconds(
             record.get("remediation_started_at") or post.get("started_at"),
@@ -1343,6 +1354,8 @@ def _self_check():
             "execution_attempted": True,
             "remediation_succeeded": True,
             "remediation_started_at": "2026-01-01T00:00:00+00:00",
+            "execution_result": {"executed": True, "action": "REROUTE"},
+            "agent_proposal": {"action": "REROUTE"},
             "oam": {"results": _recovery_rows(mbit=0.5, loss=40.0, connectivity=True)},
             "network_snapshot": _snapshot(),
             "execution_baseline": {"qdiscs": None, "error": None},
@@ -1360,6 +1373,24 @@ def _self_check():
         assert synthetic["pre_remediation"]["throughput_mbit"] == 0.5
         assert isinstance(synthetic.get("recovery_time_seconds"), (int, float))
         assert synthetic["post_oam"]["post_action"]["throughput_mbit"] == 8.0
+        # DO_NOTHING allow: measure post_oam but do not populate recovery_known.
+        oam.run_all = _fake_recovery
+        noop = {
+            "noise_id": "N0",
+            "execution_attempted": True,
+            "remediation_succeeded": False,
+            "remediation_started_at": "2026-01-01T00:00:00+00:00",
+            "execution_result": {"executed": False, "action": "DO_NOTHING"},
+            "agent_proposal": {"action": "DO_NOTHING"},
+            "oam": {"results": _recovery_rows()},
+            "network_snapshot": _snapshot(),
+            "execution_baseline": {"qdiscs": None},
+        }
+        attach_post_action_recovery(noop, _Net(), read_state=lambda *_a, **_k: _snapshot())
+        assert noop["post_oam"] is not None
+        assert noop["recovery_status"] == RECOVERY_NOT_ATTEMPTED
+        assert noop["recovery_time_seconds"] is None
+        assert noop["traffic_recovered"] is None
         # Failed remediation still preserves an independent post measurement.
         broken = {
             "noise_id": "N0",
@@ -1367,6 +1398,8 @@ def _self_check():
             "remediation_succeeded": False,
             "execution_error": "partial remediation",
             "remediation_started_at": "2026-01-01T00:00:00+00:00",
+            "execution_result": {"executed": False, "action": "REROUTE"},
+            "agent_proposal": {"action": "REROUTE"},
             "oam": {"results": _recovery_rows()},
             "network_snapshot": _snapshot(),
             "execution_baseline": {"qdiscs": None},
@@ -1387,6 +1420,8 @@ def _self_check():
             "noise_id": "N0",
             "execution_attempted": True,
             "remediation_succeeded": True,
+            "execution_result": {"executed": True, "action": "REROUTE"},
+            "agent_proposal": {"action": "REROUTE"},
             "network_snapshot": _snapshot(),
             "execution_baseline": {"qdiscs": None},
         }

@@ -50,7 +50,7 @@ def _live():
         snap = collect_current_state(net, links)
         battery = oam.run_all(net)
         results = battery.get("results") or []
-        for method in ("B0", "B1", "B2", "B3", "B4", "B5"):
+        for method in ("B0", "B1", "B2", "B3", "B4", "B5", "B6"):
             out = run_method(method, proposal, snap, results, noise_id="N0")
             if out.get("decision") not in {"allow", "block", "escalate"}:
                 failures.append(f"{method} decision {out}")
@@ -62,6 +62,9 @@ def _live():
             failures.append(f"B3 over budget {b3.get('budget')}")
         if "T10_speed" in (b3.get("tests_run") or []):
             failures.append(f"B3 used T10 {b3.get('tests_run')}")
+        b6 = run_method("B6", proposal, snap, results, noise_id="N0")
+        if "relevant_alternatives" not in b6:
+            failures.append(f"B6 missing relevant_alternatives {b6}")
     except Exception as exc:
         failures.append(f"{type(exc).__name__}: {exc}")
         record = getattr(exc, "record", None)

@@ -1,5 +1,5 @@
 """
-Paired strategy comparison: B0–B5 and VeriFix on the same episode inputs.
+Paired strategy comparison: B0–B6 and VeriFix on the same episode inputs.
 
 Replay saved episodes (does not retune the gate):
 
@@ -136,9 +136,9 @@ def score_arm(decision, action, fault_id):
 
 
 def evaluated_action(name, row, proposal, invalid):
-    """B5 is scored on its sanitized action; gate arms on nothing when invalid."""
+    """B5/B6 are scored on sanitized action; gate arms on nothing when invalid."""
     row = row or {}
-    if name == "B5":
+    if name in {"B5", "B6"}:
         return row.get("action") or ""
     if invalid:
         return "" if name in GATE_ARMS else row.get("action") or ""
@@ -226,16 +226,29 @@ def run_b5_independent(proposal, snapshot, test_results, net=None, budget_second
     noise_id grades B5 with the same traffic-level thresholds as the gate.
     Post-teardown nets are refused for live OAM (see `_verifix_teardown_complete`).
     """
+    return _run_sanitized_baseline(
+        "B5", proposal, snapshot, test_results, net=net, budget_seconds=budget_seconds, noise_id=noise_id
+    )
+
+
+def run_b6_independent(proposal, snapshot, test_results, net=None, budget_seconds=None, noise_id=None):
+    """B6 cause-aware arm on the same sanitized proposal as B5."""
+    return _run_sanitized_baseline(
+        "B6", proposal, snapshot, test_results, net=net, budget_seconds=budget_seconds, noise_id=noise_id
+    )
+
+
+def _run_sanitized_baseline(method, proposal, snapshot, test_results, net=None, budget_seconds=None, noise_id=None):
     if noise_id is None:
-        raise ValueError("run_b5_independent requires noise_id (episode traffic level)")
+        raise ValueError(f"run_{method.lower()}_independent requires noise_id (episode traffic level)")
     cap = DEFAULT_BUDGET_SECONDS if budget_seconds is None else float(budget_seconds)
     cleaned = b5_safe_proposal(proposal)
     if not cleaned:
-        return invalid_gate_outcome("B5", cap)
+        return invalid_gate_outcome(method, cap)
     if net is not None and getattr(net, "_verifix_teardown_complete", False):
         return attach_contract(
             {
-                "method": "B5",
+                "method": method,
                 "action": cleaned.get("action"),
                 "tests_run": [row.get("test_id") for row in (test_results or []) if row.get("test_id")],
                 "decision": "escalate",
@@ -245,7 +258,7 @@ def run_b5_independent(proposal, snapshot, test_results, net=None, budget_second
             cleaned,
             budget_seconds=cap,
         )
-    return run_method("B5", cleaned, snapshot, test_results, net=net, budget_seconds=cap, noise_id=noise_id)
+    return run_method(method, cleaned, snapshot, test_results, net=net, budget_seconds=cap, noise_id=noise_id)
 
 
 def _contract(result, proposal, method, budget_seconds):
@@ -255,7 +268,7 @@ def _contract(result, proposal, method, budget_seconds):
 
 
 def run_strategies(proposal, snapshot, test_results, net=None, noise_id=None, budget_seconds=None):
-    """Run B0–B5 and VeriFix on one shared input. No fault_id argument."""
+    """Run B0–B6 and VeriFix on one shared input. No fault_id argument."""
     if noise_id is None:
         raise ValueError("run_strategies requires noise_id (episode traffic level)")
     cap = DEFAULT_BUDGET_SECONDS if budget_seconds is None else float(budget_seconds)
@@ -364,6 +377,14 @@ def compare_episode(record, net=None, budget_seconds=None):
         for name in GATE_ARMS:
             decisions[name] = invalid_gate_outcome(name, cap)
     decisions["B5"] = run_b5_independent(
+        raw_proposal(record),
+        inputs["snapshot"],
+        inputs["test_results"],
+        net=net,
+        budget_seconds=cap,
+        noise_id=inputs["noise_id"],
+    )
+    decisions["B6"] = run_b6_independent(
         raw_proposal(record),
         inputs["snapshot"],
         inputs["test_results"],

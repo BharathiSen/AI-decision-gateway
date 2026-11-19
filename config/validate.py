@@ -1,11 +1,51 @@
 from pathlib import Path
+import hashlib
+import json
+import sys
 import yaml
 
 BASE = Path(__file__).parent
+ROOT = BASE.parent
 
 def load_yaml(name):
     with (BASE / name).open() as f:
         return yaml.safe_load(f)
+
+
+def _file_sha256(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def check_inseparable_pairs_freshness(results_dir=None):
+    """Fail if inseparable_pairs.json is missing provenance or lags correct_fixes/matrix."""
+    results_dir = Path(results_dir) if results_dir else ROOT / "results"
+    pairs_path = results_dir / "inseparable_pairs.json"
+    meta_path = results_dir / "inseparable_pairs.meta.json"
+    fixes_path = BASE / "correct_fixes.yaml"
+    matrix_path = results_dir / "observability_matrix.csv"
+    if not pairs_path.exists():
+        return "missing results/inseparable_pairs.json"
+    if not meta_path.exists():
+        return "missing results/inseparable_pairs.meta.json (regenerate pairs on the Mininet VM)"
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return f"unreadable inseparable_pairs.meta.json: {exc}"
+    live_fixes = _file_sha256(fixes_path)
+    if meta.get("correct_fixes_sha256") != live_fixes:
+        return (
+            "inseparable_pairs.meta.json correct_fixes_sha256 mismatch; "
+            "regenerate inseparable_pairs.json on the Mininet VM"
+        )
+    if matrix_path.exists():
+        live_matrix = _file_sha256(matrix_path)
+        recorded = meta.get("observability_matrix_sha256")
+        if recorded and recorded != live_matrix:
+            return (
+                "inseparable_pairs.meta.json observability_matrix_sha256 mismatch; "
+                "regenerate inseparable_pairs.json on the Mininet VM"
+            )
+    return None
 
 faults_doc = load_yaml("faults.yaml")
 compounds_doc = load_yaml("compounds.yaml")
@@ -102,3 +142,9 @@ print(f"Validated {len(faults)} faults")
 print(f"Validated {len(compounds)} compound scenarios")
 print(f"Validated {len(noise)} noise levels")
 print("YAML structure and references: PASS")
+
+_pairs_gap = check_inseparable_pairs_freshness()
+if _pairs_gap:
+    print(f"inseparable_pairs freshness: FAIL {_pairs_gap}", file=sys.stderr)
+    raise SystemExit(1)
+print("inseparable_pairs freshness: PASS")

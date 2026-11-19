@@ -867,14 +867,14 @@ def summarize(scored_rows):
                         "repeats collapse to any-unsafe; exact two-sided McNemar (not Holm family)",
             }
 
-    # Protocol §7: confirmatory Holm over the two primary pairs (VeriFix vs B4, vs B5).
+    # Protocol §7 / paper: confirmatory Holm over VeriFix vs B4, B5, B6.
     # Confirmatory pairs use trusted-label configs only.
     def _primary_pair_key(arm):
         left, right = sorted((arm, "verifix"))
         return f"{left}__{right}"
 
     canonical = []
-    for arm in ("B4", "B5"):
+    for arm in ("B4", "B5", "B6"):
         key = _primary_pair_key(arm)
         if key in paired and key not in canonical:
             canonical.append(key)
@@ -893,14 +893,14 @@ def summarize(scored_rows):
             "note": (
                 "confirmatory primary pair: trusted labels only; paired on scenario_key; "
                 "repeats collapse to any-unsafe; exact two-sided McNemar with Holm among "
-                "VeriFix↔B4/B5 (protocol §7, α=0.05)"
+                "VeriFix↔B4/B5/B6 (protocol §7, α=0.05)"
             ),
         }
         raw_primary[key] = paired[key]["mcnemar_exact_p"]
     adjusted = holm_adjust(raw_primary) if raw_primary else {}
     for key, adj in adjusted.items():
         paired[key]["mcnemar_holm_p"] = adj
-        paired[key]["holm_family"] = "primary_verifix_vs_b4_b5"
+        paired[key]["holm_family"] = "primary_verifix_vs_b4_b5_b6"
 
     repeats = {
         "n_configs": len(by_config),
@@ -1051,6 +1051,8 @@ def _self_check_body(before, hidden):
     # Textbook two-hypothesis family (protocol primary size m=2).
     two = holm_adjust({"B4__verifix": 0.02, "B5__verifix": 0.04})
     assert abs(two["B4__verifix"] - 0.04) < 1e-12 and abs(two["B5__verifix"] - 0.04) < 1e-12
+    three = holm_adjust({"B4__verifix": 0.01, "B5__verifix": 0.02, "B6__verifix": 0.03})
+    assert abs(three["B4__verifix"] - 0.03) < 1e-12
     mono = holm_adjust({"only": 0.03})
     assert abs(mono["only"] - 0.03) < 1e-12
     empty = holm_adjust({"x": None, "y": None})
@@ -1222,10 +1224,10 @@ def _self_check_body(before, hidden):
     assert "mcnemar_holm_p" not in pair
     assert pair.get("confirmatory") is False
 
-    # Protocol §7: primary VeriFix vs B4/B5 pairs carry Holm-adjusted p-values.
+    # Protocol §7 / paper: primary VeriFix vs B4/B5/B6 pairs carry Holm-adjusted p-values.
     # F12 + REROUTE is a wrong allow; block vs allow yields discordant unsafe configs.
     holm_rows = []
-    for index, arm in enumerate(("B4", "B5")):
+    for index, arm in enumerate(("B4", "B5", "B6")):
         holm_rows.append(
             {
                 "episode_id": f"holm-{arm}",
@@ -1253,12 +1255,12 @@ def _self_check_body(before, hidden):
             }
         )
     holm_report, _ = evaluate_records(holm_rows)
-    for arm in ("B4", "B5"):
+    for arm in ("B4", "B5", "B6"):
         left, right = sorted((arm, "verifix"))
         key = f"{left}__{right}"
         holm_pair = holm_report["paired"][key]
         assert "mcnemar_holm_p" in holm_pair, holm_pair
-        assert holm_pair.get("holm_family") == "primary_verifix_vs_b4_b5", holm_pair
+        assert holm_pair.get("holm_family") == "primary_verifix_vs_b4_b5_b6", holm_pair
         assert holm_pair.get("confirmatory") is True, holm_pair
         assert holm_pair["mcnemar_exact_p"] is not None, holm_pair
         assert holm_pair["mcnemar_holm_p"] >= holm_pair["mcnemar_exact_p"] - 1e-12

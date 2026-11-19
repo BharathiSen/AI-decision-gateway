@@ -1,4 +1,4 @@
-"""Experiment baselines B0–B5. One call shape for every method."""
+"""Experiment baselines B0–B6. One call shape for every method."""
 
 from baselines.common import (
     DEFAULT_BUDGET_SECONDS,
@@ -110,6 +110,21 @@ def _dispatch(name, proposal, snapshot, test_results, net, cap, noise_id):
             noise_id=noise_id,
             budget_seconds=cap,
         )
+    elif name == "B6":
+        from baselines.b6_cause_aware import decide_b6
+        from bench.outcomes import load_thresholds
+
+        thresholds = load_thresholds(noise_id)
+        result = decide_b6(
+            net,
+            proposal,
+            snapshot,
+            test_results,
+            run_tests=net is not None,
+            thresholds=thresholds,
+            noise_id=noise_id,
+            budget_seconds=cap,
+        )
     else:
         raise ValueError(f"unknown method {name!r}")
     return result
@@ -176,10 +191,26 @@ def _self_check():
         pass
 
     try:
-        run_method("B6", shared, healthy, [], noise_id="N0")
+        run_method("B99", shared, healthy, [], noise_id="N0")
         raise AssertionError("unknown method was accepted")
     except ValueError:
         pass
+
+    # B6 keeps same-fix alts relevant; B5 drops them via needs_different_fixes.
+    from gate.selector import covering_separating_tests, needs_different_fixes, _load_fixes
+    from baselines.b5_adaptive import decide_b5
+    from baselines.b6_cause_aware import decide_b6
+
+    fixes = _load_fixes()
+    assert needs_different_fixes("F1", "F3", fixes=fixes) is False
+    b6_cover = covering_separating_tests(
+        ["F1", "F3", "F12"], fixes=fixes, require_different_fixes=False
+    )
+    b5_cover = covering_separating_tests(
+        ["F1", "F3", "F12"], fixes=fixes, require_different_fixes=True
+    )
+    assert b6_cover, b6_cover
+    assert set(b5_cover) <= set(b6_cover) or b5_cover, (b5_cover, b6_cover)
 
     try:
         run_method("B0", shared, healthy, [])
@@ -202,6 +233,22 @@ def _self_check():
     assert b2_acl["action"] == "ESCALATE", b2_acl
     assert "missing_evidence" not in b2_acl, b2_acl
     t1_loss = [{"test_id": "T1_e2e_ping", "packet_loss_percent": 40, "latency_ms": 12, "connectivity": True}]
+    same_fix_pair = {
+        "action": "REROUTE",
+        "target": "HostA_to_HostB",
+        "reason": "b6 vs b5",
+        "proposed_path": ["r1", "r3", "r4"],
+        "causes": [
+            {"cause_id": "F1", "predicted_tests": []},
+            {"cause_id": "F3", "predicted_tests": []},
+            {"cause_id": "F12", "predicted_tests": []},
+        ],
+    }
+    b5_rel = decide_b5(None, same_fix_pair, lossy, t1_loss, run_tests=False, noise_id="N0")
+    b6_rel = decide_b6(None, same_fix_pair, lossy, t1_loss, run_tests=False, noise_id="N0")
+    assert "F3" not in (b5_rel.get("relevant_alternatives") or []), b5_rel
+    assert "F3" in (b6_rel.get("relevant_alternatives") or []), b6_rel
+    assert "F12" in (b6_rel.get("relevant_alternatives") or []), b6_rel
     b2_reroute = run_method("B2", shared, healthy, t1_loss, noise_id="N0")
     assert b2_reroute["action"] == "REROUTE", b2_reroute
     b2_f12 = run_method("B2", shared, backup_down, t1_loss, noise_id="N0")

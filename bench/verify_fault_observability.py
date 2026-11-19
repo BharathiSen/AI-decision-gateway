@@ -326,6 +326,38 @@ def run_failures(report, spec, full_run=True):
     return failures
 
 
+def pairs_provenance_payload(results_dir=RESULTS):
+    """Fingerprint of inputs that inseparable_pairs.json must stay tied to."""
+    import hashlib
+
+    results_dir = Path(results_dir)
+    fixes_path = ROOT / "config" / "correct_fixes.yaml"
+    matrix_path = results_dir / "observability_matrix.csv"
+    try:
+        matrix_rel = str(matrix_path.resolve().relative_to(ROOT.resolve())).replace("\\", "/")
+    except ValueError:
+        matrix_rel = str(matrix_path)
+    payload = {
+        "correct_fixes_yaml": "config/correct_fixes.yaml",
+        "correct_fixes_sha256": hashlib.sha256(fixes_path.read_bytes()).hexdigest(),
+        "observability_matrix_csv": matrix_rel,
+        "observability_matrix_sha256": (
+            hashlib.sha256(matrix_path.read_bytes()).hexdigest() if matrix_path.exists() else None
+        ),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    return payload
+
+
+def write_pairs_provenance(results_dir=RESULTS):
+    from bench.contracts import atomic_write_text
+
+    results_dir = Path(results_dir)
+    payload = pairs_provenance_payload(results_dir)
+    atomic_write_text(results_dir / "inseparable_pairs.meta.json", json.dumps(payload, indent=2) + "\n")
+    return payload
+
+
 def write_outputs(report, results_dir=RESULTS):
     results_dir.mkdir(parents=True, exist_ok=True)
     import io
@@ -354,6 +386,7 @@ def write_outputs(report, results_dir=RESULTS):
     }
     atomic_write_text(results_dir / "ground_truth.json", json.dumps(ground_truth, indent=2) + "\n")
     atomic_write_text(results_dir / "inseparable_pairs.json", json.dumps(report["pairs"], indent=2) + "\n")
+    write_pairs_provenance(results_dir)
 
 
 def print_report(report):

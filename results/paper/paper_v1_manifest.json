@@ -1,0 +1,79 @@
+{
+  "freeze_id": "paper_v1",
+  "generated_at": "2026-11-19T06:48:22.218635+00:00",
+  "note": "No further gate/baseline logic changes before or during the live paper batch.",
+  "git": {
+    "head": "d0d26d1070db80fb9f1b1458393a3e387f9ea3cd",
+    "tag": null
+  },
+  "seed": 1,
+  "target_episodes": 300,
+  "paper_arms": [
+    "verifix",
+    "B6",
+    "B2",
+    "B0"
+  ],
+  "full_battery": "B2",
+  "cause_aware_control": "B6",
+  "fix_aware": "verifix",
+  "ungated_floor": "B0",
+  "all_methods": [
+    "B0",
+    "B1",
+    "B2",
+    "B3",
+    "B4",
+    "B5",
+    "B6",
+    "verifix"
+  ],
+  "noise_levels": [
+    "N0",
+    "N1",
+    "N2"
+  ],
+  "prompt_version": "v3",
+  "prompt_sha256": "6c67154ad8355bed4bb2c24348f8ef466dcfcb3c2507d5de3c133860cdb2176f",
+  "model_id": "openai/gpt-oss-120b",
+  "config_fingerprint": "d2c054130f94fd8907547dde3a4f3424c5250661e46cfe6c427b4607449ffd00",
+  "artifacts": {
+    "thresholds.yaml": {
+      "path": "config/thresholds.yaml",
+      "sha256": "8e10e6c6f37d21c12b8a835c6ef9ab0bacb388ae3587e0d9b0142be89634e872"
+    },
+    "correct_fixes.yaml": {
+      "path": "config/correct_fixes.yaml",
+      "sha256": "8d434d9b55fb8b0808e935e1deb1bd4ec199d82cf147b92d5809dbd01d85d255"
+    },
+    "faults.yaml": {
+      "path": "config/faults.yaml",
+      "sha256": "e90e028c03376d1f3dac8ea5833f1baa2378c5bf8ef10924071a91018960bd71"
+    },
+    "compounds.yaml": {
+      "path": "config/compounds.yaml",
+      "sha256": "9cf1a2cf779f036479e5843ce7e28870b1f3f2dc38d7389fce34005eb567facd"
+    },
+    "observability_matrix.csv": {
+      "path": "results/observability_matrix.csv",
+      "sha256": "9e91d34fc8a6c9788786725a091fb5b4122c1d8a43c17f1cc9349402d0c30e67"
+    },
+    "inseparable_pairs.json": {
+      "path": "results/inseparable_pairs.json",
+      "sha256": "65f47ced8a876ab103206126f40b394c8c255a0964593e4c88af003ec3f8d58a"
+    },
+    "inseparable_pairs.meta.json": {
+      "path": "results/inseparable_pairs.meta.json",
+      "sha256": "34916fb59c7672d3194db1d6ed52ae3e040a23c6c2da5f775a0ccae0b8a21cfd"
+    },
+    "live_oam_cost.json": {
+      "path": "results/live_oam_cost.json",
+      "sha256": "47801b603d208b0e453c9f0c9798562629aa288f61e63a18281cc359748cd374",
+      "summary": {
+        "tests": 9,
+        "duration_seconds": null,
+        "additional_bytes": null
+      }
+    }
+  }
+}

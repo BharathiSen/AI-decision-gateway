@@ -1,0 +1,7 @@
+{
+  "correct_fixes_yaml": "config/correct_fixes.yaml",
+  "correct_fixes_sha256": "8d434d9b55fb8b0808e935e1deb1bd4ec199d82cf147b92d5809dbd01d85d255",
+  "observability_matrix_csv": "results/observability_matrix.csv",
+  "observability_matrix_sha256": "9e91d34fc8a6c9788786725a091fb5b4122c1d8a43c17f1cc9349402d0c30e67",
+  "generated_at": "2026-11-19T06:45:49.828516+00:00"
+}
