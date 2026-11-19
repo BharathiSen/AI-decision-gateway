@@ -1007,12 +1007,29 @@ def restore_baseline(net):
         _run(net.get(router), f"ip route replace {cfg['dest']} via {hop['via']} dev {hop['dev']}")
 
 
+def _primary_route_problems(net):
+    """Non-primary r1/r4 far-LAN routes after restore_baseline, else []."""
+    problems = []
+    for router, cfg in ctl.ROUTE_TARGETS.items():
+        out, _ = _sh(net.get(router), f"ip route show {cfg['dest']}")
+        text = (out or "").strip()
+        hop = cfg["primary"]
+        want = f"via {hop['via']} "
+        if want not in text + " ":
+            problems.append(f"{router} {cfg['dest']}: {text or '(empty)'}")
+    return problems
+
+
 def reset_all(net, baseline=False):
     """Reset every active injection, newest first, then ping hostA to hostB.
 
     Only injected changes are undone, so noise and remediation state stay.
     baseline=True also runs restore_baseline() (episode teardown). A failed
     reset is reported in "errors" and stays active for a retry.
+
+    Per-fault residual is computed before restore_baseline. A successful
+    REROUTE changes r1/r4 routes outside the fault undo, so that residual is
+    expected; after restore_baseline puts the primary path back it is cleared.
     """
     try:
         from bench import flap as flap_mod
@@ -1036,6 +1053,11 @@ def reset_all(net, baseline=False):
     if baseline:
         try:
             restore_baseline(net)
+            # Remediation route moves show up as per-fault residual above;
+            # restore_baseline is the authoritative cleanup for those.
+            residual = {}
+            for problem in _primary_route_problems(net):
+                errors.append({"correlation_id": None, "error": f"post-baseline route: {problem}"})
         except Exception as exc:
             errors.append({"correlation_id": None, "error": f"restore_baseline: {type(exc).__name__}: {exc}"})
 

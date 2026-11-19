@@ -93,8 +93,12 @@ def test_cost(tid, costs):
     return entry.get("time_seconds", 999)
 
 
-def covering_separating_tests(candidates, fixes=None, matrix=None):
-    """Cheapest matrix separators covering all candidate pairs with different fixes.
+def covering_separating_tests(candidates, fixes=None, matrix=None, require_different_fixes=True):
+    """Cheapest matrix separators covering candidate pairs.
+
+    By default only pairs that need different fixes are covered (VeriFix / B5).
+    Cause-aware B6 passes require_different_fixes=False so every candidate pair
+    is covered.
 
     Selection is model-independent: the agent cause id is only a set member.
     Predictions must not be consulted before this set is frozen.
@@ -110,8 +114,9 @@ def covering_separating_tests(candidates, fixes=None, matrix=None):
     pairs = []
     for i, fault_a in enumerate(ids):
         for fault_b in ids[i + 1 :]:
-            if needs_different_fixes(fault_a, fault_b, fixes=fixes):
-                pairs.append((fault_a, fault_b))
+            if require_different_fixes and not needs_different_fixes(fault_a, fault_b, fixes=fixes):
+                continue
+            pairs.append((fault_a, fault_b))
     for fault_a, fault_b in pairs:
         separators = set(separating_tests(fault_a, fault_b, matrix=matrix))
         if separators & set(chosen):
