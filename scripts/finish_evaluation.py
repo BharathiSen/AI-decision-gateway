@@ -12,7 +12,7 @@ Offline (no Mininet, e.g. Windows dev / CI smoke):
 Live (Mininet VM, root):
     sudo --preserve-env=GROQ_API_KEY python3 scripts/finish_evaluation.py --mode live --run-name v5 --episodes 500
 
-Paper batch (VirtualBox, ≥300 paired episodes, stratified):
+Paper batch (WSL Ubuntu-22.04 Mininet, ≥300 paired episodes, stratified):
     sudo --preserve-env=GROQ_API_KEY python3 scripts/finish_evaluation.py \\
         --mode live --run-name paper_v1 --episodes 300 --paper-stratified --write-freeze
 """

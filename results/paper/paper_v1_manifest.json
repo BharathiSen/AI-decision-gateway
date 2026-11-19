@@ -1,7 +1,7 @@
 {
   "freeze_id": "paper_v1",
   "generated_at": "2026-11-19T06:48:22.218635+00:00",
-  "note": "No further gate/baseline logic changes before or during the live paper batch.",
+  "note": "Live host is WSL Ubuntu-22.04 (not VirtualBox). No further gate/baseline logic changes before or during the live paper batch.",
   "git": {
     "head": "d0d26d1070db80fb9f1b1458393a3e387f9ea3cd",
     "tag": null
@@ -75,5 +75,6 @@
         "additional_bytes": null
       }
     }
-  }
+  },
+  "live_host": "wsl:Ubuntu-22.04"
 }
