@@ -283,7 +283,20 @@ def score_agent_quality(record, thresholds=None):
 
 def summarize_agent_quality(records):
     """Aggregate diagnosis/prediction metrics. Invalid output is not a diagnosis miss."""
-    scored = [score_agent_quality(record) for record in (records or [])]
+    from bench.outcomes import load_thresholds
+
+    threshold_cache = {}
+
+    def _limits_for(record):
+        noise_id = (record or {}).get("noise_id") or "N0"
+        if noise_id not in threshold_cache:
+            threshold_cache[noise_id] = load_thresholds(noise_id)
+        return threshold_cache[noise_id]
+
+    scored = [
+        score_agent_quality(record, thresholds=_limits_for(record))
+        for record in (records or [])
+    ]
     n = len(scored)
     classes = {"infra_error": 0, "model_error": 0, "invalid_output": 0, "wrong_diagnosis": 0, "wrong_prediction": 0, "correct": 0}
     by_test = {}
@@ -1702,7 +1715,7 @@ def live_metrics():
     import os
 
     if not hasattr(os, "geteuid") or os.geteuid() != 0:
-        print("metrics engine must run as root on the Mininet VM.", file=sys.stderr)
+        print("metrics engine must run as root on WSL Mininet (Ubuntu-22.04).", file=sys.stderr)
         return 2
     from bench.outcomes import refuse_live_if_unaccepted
 

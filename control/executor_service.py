@@ -238,7 +238,7 @@ class MininetBackend:
     before every use, so a restarted topology or a reused pid is refused.
     Commands run in the node through `mnexec -a <pid>`, exit status checked.
     Still trusts root-owned processes on the host: run on a single-tenant VM.
-    NOT RUN offline: needs the VM (the discovery rules are checked on a fake /proc).
+    NOT RUN offline: needs WSL Mininet (the discovery rules are checked on a fake /proc).
     """
 
     NODES = ("r1", "r2", "r3", "r4")
@@ -359,7 +359,7 @@ def main(argv=None):
         if args.stdio:
             parser.error("--backend mininet is served on --socket only")
         if not hasattr(os, "geteuid") or os.geteuid() != 0:
-            parser.error("--backend mininet needs root (CAP_NET_ADMIN) on the Mininet VM")
+            parser.error("--backend mininet needs root (CAP_NET_ADMIN) on WSL Mininet (Ubuntu-22.04)")
         backend = MininetBackend()
     else:
         if args.socket:

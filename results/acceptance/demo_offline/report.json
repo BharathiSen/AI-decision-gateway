@@ -1,9 +1,9 @@
 {
   "build": "stage20-accept-v1",
-  "implementation_tag": "verifix-stage20-accept-v1-ed8b2df5eec3",
+  "implementation_tag": "verifix-stage20-accept-v1-196a79a712b3",
   "mode": "test_mode_simulation",
   "live_network": false,
-  "note": "Offline simulation using test-only thresholds. Not Mininet proof. Live demos require: sudo python3 bench/accept.py --live-accept on the VM after accepted thresholds exist (D2).",
+  "note": "Offline simulation using test-only thresholds. Not Mininet proof. Live demos require: sudo python3 bench/accept.py --live-accept on WSL Mininet after accepted thresholds exist (D2).",
   "scenarios": [
     {
       "scenario": "1_authorized_success",
@@ -40,7 +40,7 @@
             ]
           }
         ],
-        "observed_at": "2026-11-13T10:37:11.510378+00:00"
+        "observed_at": "2026-11-21T14:05:58.939182+00:00"
       },
       "telemetry": {
         "metrics": {
@@ -164,7 +164,7 @@
       },
       "audit": {
         "authorization_present": true,
-        "decision_id": "cf1a4df809bc4ef5835dda4275463d06"
+        "decision_id": "4290e306e13b4b568fa329a7e8826149"
       }
     },
     {
@@ -196,7 +196,7 @@
             ]
           }
         ],
-        "observed_at": "2026-11-13T10:37:11.846701+00:00"
+        "observed_at": "2026-11-21T14:05:59.505665+00:00"
       },
       "gate_decision": {
         "decision": "block",
@@ -238,7 +238,7 @@
             ]
           }
         ],
-        "observed_at": "2026-11-13T10:37:12.057948+00:00"
+        "observed_at": "2026-11-21T14:05:59.716503+00:00"
       },
       "oam_evidence": [],
       "gate_decision": {
@@ -255,5 +255,5 @@
     }
   ],
   "failures": [],
-  "generated_at": "2026-11-13T10:37:12.457472+00:00"
+  "generated_at": "2026-11-21T14:06:00.050886+00:00"
 }

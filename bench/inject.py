@@ -978,7 +978,7 @@ def health_check(net, count=5, deadline=5):
     """(loss percent or None, ping output) for hostA to hostB.
 
     -w makes ping wait for every reply up to the deadline. Without it ping
-    stops about two RTTs after the last send, and a slow reply on the VM
+    stops about two RTTs after the last send, and a slow reply on WSL Mininet
     counts as lost.
     """
     out, _ = _sh(net.get("hostA"), f"ping -c {count} -i 0.2 -w {deadline} {net.get('hostB').IP()}")

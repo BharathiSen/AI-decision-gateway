@@ -1,6 +1,6 @@
 """Assert the diamond topology, static routes, and hostA-hostB connectivity.
 
-Run on the Mininet VM as root:
+Run on WSL Mininet (Ubuntu-22.04) as root:
 
     sudo python3 bench/verify_baseline.py
 """
@@ -38,7 +38,7 @@ def _check(failures, label, ok, detail=""):
 
 def main():
     if not hasattr(os, "geteuid") or os.geteuid() != 0:
-        print("verify_baseline.py must run as root on the Mininet VM.", file=sys.stderr)
+        print("verify_baseline.py must run as root on WSL Mininet (Ubuntu-22.04).", file=sys.stderr)
         return 2
 
     failures = []

@@ -1,7 +1,7 @@
 """
 Phase 9 / Stage 13 pilot: ~500 resumable episodes, gate v0 vs B5.
 
-Main live run (real LLM, Mininet VM):
+Main live run (real LLM, WSL Mininet):
 
     export GROQ_API_KEY=gsk_...     # Groq is the default provider (LLM_PROVIDER=grok for xAI)
     sudo --preserve-env=GROQ_API_KEY python3 bench/run_pilot.py \\
@@ -1500,7 +1500,7 @@ def run_loop(args, net, links):
 def main(argv=None):
     args = _parser().parse_args(argv)
     if not hasattr(os, "geteuid") or os.geteuid() != 0:
-        print("run_pilot.py requires root on Mininet VM.", file=sys.stderr)
+        print("run_pilot.py requires root on WSL Mininet.", file=sys.stderr)
         return 2
     from bench.outcomes import require_accepted_thresholds
 
@@ -1536,7 +1536,7 @@ def main(argv=None):
 def live_pilot():
     """Two stub episodes on the live diamond. Does not overwrite summary.json."""
     if not hasattr(os, "geteuid") or os.geteuid() != 0:
-        print("pilot live check must run as root on the Mininet VM.", file=sys.stderr)
+        print("pilot live check must run as root on WSL Mininet (Ubuntu-22.04).", file=sys.stderr)
         return 2
     rc = main(
         [

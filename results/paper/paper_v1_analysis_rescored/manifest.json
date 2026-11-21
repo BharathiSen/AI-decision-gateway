@@ -1,0 +1,56 @@
+{
+  "build": "stage18-analysis-v1",
+  "source": "/tmp/verifix_paper_v1_ep_cache",
+  "out_dir": "/mnt/c/Users/Admin/Projects/AI-decision-gateway/results/paper/paper_v1_analysis_rescored",
+  "n_records": 300,
+  "n_ready": 300,
+  "n_scored": 300,
+  "n_skipped": 0,
+  "errors": [],
+  "methods": [
+    "B0",
+    "B1",
+    "B2",
+    "B3",
+    "B4",
+    "B5",
+    "B6",
+    "gate_full",
+    "gate_no_discrimination",
+    "gate_no_grader",
+    "gate_no_predictions",
+    "gate_v0",
+    "verifix"
+  ],
+  "artifacts": {
+    "tables": [
+      "false_allow_by_strategy",
+      "test_cost_vs_false_allow",
+      "recovery_time",
+      "held_out",
+      "ablations",
+      "normal_vs_stress",
+      "topology1_vs_topology2",
+      "all_slices",
+      "episode_scores",
+      "skipped"
+    ],
+    "plots": [
+      "false_allow_by_strategy",
+      "test_cost_vs_false_allow",
+      "recovery_time",
+      "held_out_generalization",
+      "ablations",
+      "normal_vs_stress",
+      "topology1_vs_topology2"
+    ],
+    "n_traces": 12
+  },
+  "provenance": {
+    "software_version": "196a79a712b3fb80b1f418ab47ca0e43ec9bc52b",
+    "config_fingerprint": "6a4e11fed82ee4d92abd45477376bf437f6169a00ef172fbdd4545a2e0a9075a",
+    "python": "3.10.12"
+  },
+  "source_episodes": "/mnt/c/Users/Admin/Projects/AI-decision-gateway/results/pilot/paper_v1_episodes",
+  "source_cache": "/tmp/verifix_paper_v1_ep_cache"
+}

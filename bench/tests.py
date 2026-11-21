@@ -1792,7 +1792,7 @@ def _check_h2_measurement_errors():
     finally:
         globals()["run_in_node"] = saved
 
-    # T10 passes its duration to the error label: the VM run-4 shape is a
+    # T10 passes its duration to the error label: the WSL Mininet run-4 shape is a
     # reading; the same receiver after an on-time sender is a named drain failure.
     for sender_end, want_mbit, want_err in (("3.22", 4.08, None), ("3.00", None, "iperf_drain_exceeded")):
         drain_text = (

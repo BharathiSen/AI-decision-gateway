@@ -4,6 +4,18 @@ Research prototype for **verification-gated** LLM-proposed network fixes. An AI 
 
 Paper track: *Fix-Aware Evidence Selection for Authorizing AI-Proposed Network Remediation* (see private `docs/` research package).
 
+## Linux host (Mininet)
+
+Live network work runs on **WSL Ubuntu-22.04** with Mininet (system Python, as root). This project does **not** use VirtualBox or a separate VM image for Linux.
+
+Typical layout on this machine:
+
+- Windows checkout: `C:\Users\Admin\Projects\AI-decision-gateway`
+- Same tree in WSL: `/mnt/c/Users/Admin/Projects/AI-decision-gateway` (and/or `~/AI-decision-gateway`)
+- Enter WSL: `wsl -d Ubuntu-22.04`, then `cd` to the repo and run `sudo python3 …`
+
+Offline self-checks and `python bench/accept.py --demo` run on Windows without Mininet. Threshold acceptance hashes that point at `/mnt/c/...` paths are valid when graded **inside WSL**, not from native Windows Python.
+
 ## Architecture
 
 ```text
@@ -41,34 +53,63 @@ export GROQ_API_KEY=gsk_...     # optional; stub agent used if unset
 python agent/decision_agent.py  # one live Groq call: prints latency + tokens
 ```
 
-### Mininet VM (live network + benchmarks)
+### WSL Ubuntu + Mininet (live network + benchmarks)
 
-Install [Mininet](http://mininet.org/) on Ubuntu (system Python). Run benchmark scripts as **root**:
+Install [Mininet](http://mininet.org/) inside **WSL Ubuntu-22.04** (system Python, not a venv). Run live scripts as **root** in that distro — not VirtualBox:
 
 ```bash
+wsl -d Ubuntu-22.04
+cd /mnt/c/Users/Admin/Projects/AI-decision-gateway
 sudo python3 main.py                    # interactive CLI
 sudo python3 bench/run_pilot.py --save-episodes --episodes 500 --out results/pilot/<run-name>.json
 ```
 
-Windows/macOS hosts can develop offline; live numbers require the VM.
+Windows can develop offline; live / label / calibration numbers require WSL + Mininet + sudo.
 
-## Quick start
+## Quick start (manager path)
 
-### 1. Offline product demo (no Mininet)
+### 1. Offline product demo (Windows, no Mininet)
 
 Three scenarios (authorized allow, unsafe block, insufficient-evidence escalate).
 Uses test thresholds only — labeled `test_mode_simulation`, not live traffic proof:
 
-```bash
+```powershell
 python bench/accept.py --demo
 ```
 
-Records: `results/acceptance/demo_offline/`. Live VM demos:
-`sudo python3 bench/accept.py --live-accept` (requires accepted research thresholds).
+Expect `demo offline: PASS`. Records: `results/acceptance/demo_offline/`.
 
-### 2. Interactive demo (Mininet VM)
+### 1b. Manager-facing paper_v1 numbers
+
+Quoted only from command-emitted JSON (Path B = untrusted labels, confirmatory denoms 0):
+[`results/paper/MANAGER_RESULTS_v1.md`](results/paper/MANAGER_RESULTS_v1.md)
+(regenerate with `python scripts/write_manager_results.py`).
+
+Re-score frozen episodes inside **WSL** (thresholds hash `/mnt/c/...` paths; do not invent rates):
 
 ```bash
+wsl -d Ubuntu-22.04
+cd /mnt/c/Users/Admin/Projects/AI-decision-gateway
+unset VERIFIX_LABELS
+python3 bench/metrics.py --episodes-dir results/pilot/paper_v1_episodes --out results/paper/paper_v1_rescored_metrics.json
+python3 bench/analyze.py --from results/pilot/paper_v1_episodes --out-dir results/paper/paper_v1_analysis_rescored
+python3 bench/run_experiments.py --episodes-dir results/pilot/paper_v1_episodes --out results/experiment_summary_paper_v1_rescored.json
+python3 bench/labels.py && python3 bench/metrics.py --self-check && python3 bench/analyze.py --self-check
+```
+
+### 1c. Live accept (WSL + sudo + Mininet)
+
+```bash
+sudo python3 bench/accept.py --live-accept
+```
+
+Requires interactive sudo and accepted research thresholds. Do not fake PASS if sudo is unavailable.
+
+### 2. Interactive demo (WSL + Mininet)
+
+```bash
+wsl -d Ubuntu-22.04
+cd /mnt/c/Users/Admin/Projects/AI-decision-gateway
 sudo python3 main.py
 ```
 
@@ -82,10 +123,12 @@ Useful CLI commands: `status`, `fail_primary`, `restore all`, `reroute backup`, 
 python scripts/finish_evaluation.py --mode offline --episodes 500
 ```
 
-**Live pilot** (paper-grade; Mininet + root):
+**Live pilot** (paper-grade; WSL Ubuntu-22.04 + Mininet + root — not VirtualBox):
 
 ```bash
-sudo --preserve-env=GROQ_API_KEY python3 scripts/finish_evaluation.py --mode live --run-name v5 --episodes 500
+wsl -d Ubuntu-22.04
+cd /mnt/c/Users/Admin/Projects/AI-decision-gateway
+sudo --preserve-env=GROQ_API_KEY,GEMINI_API_KEY,LLM_PROVIDER python3 scripts/finish_evaluation.py --mode live --run-name v5 --episodes 500
 ```
 
 Live mode requires root and `--run-name`. Outputs go to new, run-specific paths; preserved evidence
@@ -102,7 +145,7 @@ Pilot success criteria are frozen in [`results/pilot_criteria.md`](results/pilot
 
 Offline self-checks (no root, no network, no model calls). Each exits non-zero on failure. They do not
 write preserved results. Passing them is not live validation: route, OAM and rollback behaviour on real
-kernels is only checked on the Mininet VM.
+kernels is only checked under WSL Ubuntu-22.04 with Mininet (not VirtualBox).
 
 ```bash
 python agent/test_validate.py

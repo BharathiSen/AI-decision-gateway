@@ -17,7 +17,7 @@ Even cycles reset with reset()/reset_compound(), odd cycles with
 reset_all(). Held-out faults run here with purpose="validation"; they
 are still refused for calibration, training and tuning.
 
-Run on the Mininet VM as root:
+Run on WSL Mininet (Ubuntu-22.04) as root:
 
     sudo python3 bench/validate_faults.py
     sudo python3 bench/validate_faults.py --fault F6 --noise N2 --iterations 3
@@ -182,7 +182,7 @@ def main():
         sys.exit(2)
 
     if os.geteuid() != 0:
-        print("validate_faults.py must run as root (sudo) on the Mininet VM.", file=sys.stderr)
+        print("validate_faults.py must run as root (sudo) on WSL Mininet (Ubuntu-22.04).", file=sys.stderr)
         sys.exit(2)
 
     from network.topology import create_network

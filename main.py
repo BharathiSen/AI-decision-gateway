@@ -3,9 +3,11 @@ Entry point: build the emulated network, then drop into an
 interactive Mininet CLI extended with commands for triggering each
 fault scenario and inspecting the live network state.
 
-Must be run as root inside the Mininet VM (Mininet requires raw
-network-namespace/OVS access):
+Must be run as root on the project's Linux host: WSL Ubuntu-22.04 with
+Mininet (not VirtualBox). Mininet needs raw network-namespace/OVS access:
 
+    wsl -d Ubuntu-22.04
+    cd /mnt/c/Users/Admin/Projects/AI-decision-gateway
     sudo python3 main.py
 
 Extra CLI commands (on top of the usual Mininet ones like pingall):

@@ -4,7 +4,7 @@ Offline checks for bench/inject.py against a simulated network.
 FakeNode keeps per-interface link, tc, route, iptables and process state
 and answers the commands inject.py sends through pexec. These checks cover
 what inject() changes and whether reset() puts back exactly that. They do
-not prove the kernel accepts the commands; that is the VM run of
+not prove the kernel accepts the commands; that is the WSL Mininet run of
 bench/validate_faults.py.
 
 Run: python bench/test_inject.py
@@ -767,7 +767,7 @@ def main():
         for name in _FAILURES:
             print(" -", name)
         sys.exit(1)
-    print(f"ALL CHECKS PASSED in {time.monotonic() - started:.1f}s (simulated network; live proof is bench/validate_faults.py on the VM)")
+    print(f"ALL CHECKS PASSED in {time.monotonic() - started:.1f}s (simulated network; live proof is bench/validate_faults.py on WSL Mininet)")
 
 
 if __name__ == "__main__":

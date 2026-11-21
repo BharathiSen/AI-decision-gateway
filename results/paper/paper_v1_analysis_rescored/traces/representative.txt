@@ -1,0 +1,119 @@
+episode: 0d5626f0-85c6-4142-a4d3-855971f8dc41
+representative: allow
+fault: U5
+topology: diamond  mode: normal
+AI claim: DO_NOTHING (Active path is healthy with zero packet loss and normal latency, meeting the policy criteria for DO_NOTHING.)
+causes: H0
+selected tests: T1_e2e_ping T2_hop_ping T4_mtu T5_if_errors T6_queue_stats T7_route_check T8_tcp_vs_ping T9_oneway_loss T10_speed
+ruled-out alternatives: none
+gate decision: allow (healthy no-op)
+
+episode: 00963244-864d-4665-bf12-a8926cb717e9
+representative: block
+fault: F2
+topology: diamond  mode: normal
+AI claim: REROUTE (The primary path link r1-r2 is down with 100% packet loss, while the backup path via r3 is fully healthy.)
+causes: F2, F1
+selected tests: T1_e2e_ping T2_hop_ping T4_mtu T5_if_errors T6_queue_stats T8_tcp_vs_ping T9_oneway_loss
+ruled-out alternatives: F12 via T1_e2e_ping; F11 via T1_e2e_ping
+gate decision: block (consistency failed)
+
+episode: 01af90f5-483b-4e81-a1b8-9f9b2f58a8cf
+representative: escalate
+fault: C1
+topology: diamond  mode: normal
+AI claim: DO_NOTHING (All telemetry indicates the primary path r1‑r2‑r4 is operational (links up, no packet loss, acceptable interface counters). The only abnormal metric is high overall latency, but no link or interface failure is detected; thus the operator’s ticket is misleading.)
+causes: H0
+selected tests: T1_e2e_ping T2_hop_ping T4_mtu T5_if_errors T6_queue_stats T7_route_check T8_tcp_vs_ping T9_oneway_loss
+ruled-out alternatives: none
+gate decision: escalate (no-op not justified: test unavailable (T10_speed))
+
+episode: 021dd545-78b7-4651-867c-15b57ba5e506
+representative: held_out
+fault: U2
+topology: diamond  mode: normal
+AI claim: REROUTE (The primary path is experiencing high latency and queue backlog, while the backup path is healthy.)
+causes: F5, F6
+selected tests: T1_e2e_ping T2_hop_ping T4_mtu T5_if_errors T6_queue_stats T7_route_check T8_tcp_vs_ping T9_oneway_loss T10_speed
+ruled-out alternatives: none
+gate decision: block (consistency failed)
+
+episode: 0e4bff25-7774-49d2-b288-546eac791cf6
+representative: has_ruled_out
+fault: C3
+topology: diamond  mode: normal
+AI claim: REROUTE (The primary path currently exhibits 100% packet loss and high queue congestion/drops on r2-r4, while the backup path via r3 is healthy.)
+causes: F6, F3, F1
+selected tests: T1_e2e_ping T2_hop_ping T4_mtu T5_if_errors T6_queue_stats T7_route_check T8_tcp_vs_ping T9_oneway_loss
+ruled-out alternatives: F11 via T1_e2e_ping
+gate decision: block (consistency failed)
+
+episode: 02abd478-e9c2-4a46-9b03-6c962fab5009
+representative: additional
+fault: C1
+topology: diamond  mode: normal
+AI claim: REROUTE (Telemetry shows 50% packet loss on the active primary path with drops on r2/r2-eth1 queue, while the backup path via r3 is fully healthy.)
+causes: F6, F3
+selected tests: T1_e2e_ping T2_hop_ping T4_mtu T5_if_errors T6_queue_stats T7_route_check T8_tcp_vs_ping T9_oneway_loss
+ruled-out alternatives: none
+gate decision: block (safety failed)
+
+episode: 03657dfa-bbfe-4898-9035-f4758d7bf227
+representative: additional
+fault: C1
+topology: diamond  mode: normal
+AI claim: REROUTE (Queue congestion and drops are observed on r2/r2-eth1 causing high latency on the primary path, while the backup path is healthy.)
+causes: F6, F5
+selected tests: T1_e2e_ping T2_hop_ping T4_mtu T5_if_errors T6_queue_stats T7_route_check T8_tcp_vs_ping T9_oneway_loss
+ruled-out alternatives: none
+gate decision: escalate (insufficient evidence: no discriminating test)
+
+episode: 04e6f465-3a69-4382-a77b-19661ab31b4c
+representative: additional
+fault: U3
+topology: diamond  mode: normal
+AI claim: REROUTE (The primary path currently exhibits high latency (140.567 ms) due to high latency links r1-r2 and r2-r4, while the backup path is healthy and available.)
+causes: F5, F6, H0
+selected tests: T1_e2e_ping T2_hop_ping T4_mtu T5_if_errors T6_queue_stats T7_route_check T8_tcp_vs_ping T9_oneway_loss T10_speed
+ruled-out alternatives: none
+gate decision: block (consistency failed)
+
+episode: 05759012-6eee-4980-b3b7-74c22da2b2dd
+representative: additional
+fault: F7
+topology: diamond  mode: normal
+AI claim: REROUTE (The primary path active link r1-r2 has 100% packet loss and queue congestion, while the backup path via r3 is healthy.)
+causes: F2, F7
+selected tests: T1_e2e_ping T2_hop_ping T4_mtu T5_if_errors T6_queue_stats T7_route_check T8_tcp_vs_ping T9_oneway_loss
+ruled-out alternatives: none
+gate decision: block (consistency failed)
+
+episode: 06f626ad-412e-42b1-8db2-5a7b52751945
+representative: additional
+fault: F11
+topology: diamond  mode: normal
+AI claim: REROUTE (The primary path currently exhibits packet loss and queue congestion on r2-r4, while the backup path via r3 is healthy.)
+causes: F6, F3, F5
+selected tests: T1_e2e_ping T2_hop_ping T4_mtu T5_if_errors T6_queue_stats T7_route_check T8_tcp_vs_ping T9_oneway_loss
+ruled-out alternatives: none
+gate decision: block (consistency failed)
+
+episode: 08c1a73b-ad84-41a2-ba2b-be044d2f0bc3
+representative: additional
+fault: U2
+topology: diamond  mode: normal
+AI claim: DO_NOTHING (Telemetry shows all links up, packet_loss_percent 0.0, latency_ms 42.542 within acceptable limits, and active_path is primary with connectivity true.)
+causes: H0
+selected tests: T1_e2e_ping T2_hop_ping T4_mtu T5_if_errors T6_queue_stats T7_route_check T8_tcp_vs_ping T9_oneway_loss T10_speed
+ruled-out alternatives: none
+gate decision: escalate (no-op not justified)
+
+episode: 0a06298f-8e48-4c39-92ae-8ed80d23dac4
+representative: additional
+fault: F11
+topology: diamond  mode: normal
+AI claim: DO_NOTHING (The active path is healthy with 0% packet loss and normal latency.)
+causes: H0
+selected tests: T1_e2e_ping T2_hop_ping T4_mtu T5_if_errors T6_queue_stats T7_route_check T8_tcp_vs_ping T9_oneway_loss
+ruled-out alternatives: none
+gate decision: escalate (no-op not justified: test unavailable (T10_speed))

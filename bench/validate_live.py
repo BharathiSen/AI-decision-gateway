@@ -413,7 +413,7 @@ def live_validate():
     import os
 
     if not hasattr(os, "geteuid") or os.geteuid() != 0:
-        print("live validation must run as root on the Mininet VM.", file=sys.stderr)
+        print("live validation must run as root on WSL Mininet (Ubuntu-22.04).", file=sys.stderr)
         return 2
 
     from bench import inject as inj

@@ -568,7 +568,7 @@ def live_matrix():
     import os
 
     if not hasattr(os, "geteuid") or os.geteuid() != 0:
-        print("experiment matrix must run as root on the Mininet VM.", file=sys.stderr)
+        print("experiment matrix must run as root on WSL Mininet (Ubuntu-22.04).", file=sys.stderr)
         return 2
     from bench.mininet_util import mn_cleanup, run_in_node
     from bench.tests import _parse_ping

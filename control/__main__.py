@@ -351,7 +351,7 @@ def _check_separate_processes(tmp):
 
 
 def _check_discovery(tmp):
-    """MininetBackend's /proc rules on a fake /proc (the real one needs the VM)."""
+    """MininetBackend's /proc rules on a fake /proc (the real one needs WSL Mininet)."""
     from control.executor_service import MininetBackend
 
     proc = Path(tmp) / "proc"

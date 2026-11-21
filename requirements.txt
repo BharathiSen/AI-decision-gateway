@@ -1,13 +1,13 @@
 # Network emulation runs entirely on the Mininet Python API, which
 # ships with the system-wide Mininet install and is NOT installed via
-# pip. In the Ubuntu VM, if Mininet isn't already installed:
+# pip. Live Linux host for this project is WSL Ubuntu-22.04 (not
+# VirtualBox). If Mininet isn't already installed in that distro:
 #
 #   git clone https://github.com/mininet/mininet
 #   mininet/util/install.sh -a
 #
-# This must be run with the VM's system Python (not a virtualenv),
-# since the mininet package is installed system-wide alongside
-# Open vSwitch.
+# Run with WSL system Python as root (not a Windows venv), since the
+# mininet package is installed system-wide alongside Open vSwitch.
 #
 # Nothing else is required for the network/telemetry layer.
 #
@@ -20,10 +20,10 @@
 # loads its policy context from policy/policy.yaml, hence pyyaml.
 # Exact versions: an unpinned SDK runs as root next to the network controller.
 # These are the versions the offline suite was run against (2026-11-12).
-# Confirm `pip show openai pyyaml` on the VM before reinstalling there.
+# Confirm `pip show openai pyyaml` inside WSL before reinstalling there.
 openai==2.45.0
 pyyaml==6.0.3
 
 # Ed25519 gate authorizations (gate/authority.py). Host version the offline
-# suite ran against (2026-11-13); confirm on the VM before installing there.
+# suite ran against (2026-11-13); confirm inside WSL before installing there.
 cryptography==47.0.0

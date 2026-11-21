@@ -72,7 +72,7 @@ def main():
     args = parser.parse_args()
 
     if os.geteuid() != 0:
-        print("Requires root on Mininet VM.", file=sys.stderr)
+        print("Requires root on WSL Mininet.", file=sys.stderr)
         sys.exit(2)
 
     from bench.outcomes import refuse_live_if_unaccepted

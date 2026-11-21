@@ -26,7 +26,7 @@ def check_inseparable_pairs_freshness(results_dir=None):
     if not pairs_path.exists():
         return "missing results/inseparable_pairs.json"
     if not meta_path.exists():
-        return "missing results/inseparable_pairs.meta.json (regenerate pairs on the Mininet VM)"
+        return "missing results/inseparable_pairs.meta.json (regenerate pairs on WSL Mininet (Ubuntu-22.04))"
     try:
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -35,7 +35,7 @@ def check_inseparable_pairs_freshness(results_dir=None):
     if meta.get("correct_fixes_sha256") != live_fixes:
         return (
             "inseparable_pairs.meta.json correct_fixes_sha256 mismatch; "
-            "regenerate inseparable_pairs.json on the Mininet VM"
+            "regenerate inseparable_pairs.json on WSL Mininet (Ubuntu-22.04)"
         )
     if matrix_path.exists():
         live_matrix = _file_sha256(matrix_path)
@@ -43,7 +43,7 @@ def check_inseparable_pairs_freshness(results_dir=None):
         if recorded and recorded != live_matrix:
             return (
                 "inseparable_pairs.meta.json observability_matrix_sha256 mismatch; "
-                "regenerate inseparable_pairs.json on the Mininet VM"
+                "regenerate inseparable_pairs.json on WSL Mininet (Ubuntu-22.04)"
             )
     return None
 

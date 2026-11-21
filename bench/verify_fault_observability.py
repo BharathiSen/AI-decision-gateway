@@ -1,7 +1,7 @@
 """Inject each fault and compound, record the OAM outcomes, then try every
 remediation and measure whether traffic recovers.
 
-Run on the Mininet VM as root. A full run writes a NEW directory given by
+Run on WSL Mininet (Ubuntu-22.04) as root. A full run writes a NEW directory given by
 --out-dir (matrix, ground_truth.json, inseparable_pairs.json and a run
 manifest with code provenance). It refuses results/ itself, protected paths
 and existing files, so the frozen results/ evidence is never overwritten.
@@ -465,7 +465,7 @@ def main(argv=None):
             return 2
 
     if not hasattr(os, "geteuid") or os.geteuid() != 0:
-        print("verify_fault_observability.py must run as root on the Mininet VM.", file=sys.stderr)
+        print("verify_fault_observability.py must run as root on WSL Mininet (Ubuntu-22.04).", file=sys.stderr)
         return 2
 
     from bench.run_pilot import _git_revision, provenance_error, untracked_source_error

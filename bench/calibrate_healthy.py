@@ -15,8 +15,8 @@ results/calibration_report.json is protected and refused. Example reprint:
 
     python bench/calibrate_healthy.py --from-saved --noise all --report results/calibration/<run-id>.json
 
-Live collection, on the VM as root. Each launch saves 10 samples and exits
-so the VM can be powered off. Run the same command again to continue:
+Live collection, on WSL Mininet as root. Each launch saves 10 samples and exits
+so WSL can be stopped. Run the same command again to continue:
 
     sudo python3 bench/calibrate_healthy.py --noise N0 --runs 200 --eval-runs 50
 
@@ -2237,7 +2237,7 @@ def _print_iperf_tail(raw):
 
 
 def fill_missing_speed(net, bundles, noise_id, sample_path=SAMPLES_PATH, batch=CALIBRATION_BATCH):
-    """Fill missing T10 readings, then return so the VM can stop.
+    """Fill missing T10 readings, then return so WSL can stop.
 
     A long-lived iperf3 on 5201 dies after a few clients (Broken pipe).
     Each fill uses a one-off `iperf3 -s -1` after freeing that port.
@@ -2727,7 +2727,7 @@ def main():
         return
 
     if not _is_root():
-        print("calibrate_healthy.py collects on the Mininet VM as root.", file=sys.stderr)
+        print("calibrate_healthy.py collects on WSL Mininet (Ubuntu-22.04) as root.", file=sys.stderr)
         sys.exit(2)
 
     print(f"Saving episode-aligned samples to {sample_path}", flush=True)

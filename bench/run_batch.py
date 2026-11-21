@@ -544,7 +544,7 @@ def _self_check():
 
 def live_dataset():
     if not hasattr(os, "geteuid") or os.geteuid() != 0:
-        print("master dataset must run as root on the Mininet VM.", file=sys.stderr)
+        print("master dataset must run as root on WSL Mininet (Ubuntu-22.04).", file=sys.stderr)
         return 2
     from bench.outcomes import refuse_live_if_unaccepted
 
@@ -646,7 +646,7 @@ def live_dataset():
 
 def overnight(args):
     if not hasattr(os, "geteuid") or os.geteuid() != 0:
-        print("run_batch.py requires root on Mininet VM.", file=sys.stderr)
+        print("run_batch.py requires root on WSL Mininet.", file=sys.stderr)
         return 2
     from bench.outcomes import refuse_live_if_unaccepted
 

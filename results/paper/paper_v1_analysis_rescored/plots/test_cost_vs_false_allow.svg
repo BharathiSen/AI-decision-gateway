@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="320.0" y="24" text-anchor="middle" font-size="14">Test cost versus false allows</text>
+<text x="320.0" y="388" text-anchor="middle" font-size="11">mean test cost (s)</text>
+<text x="18" y="195.0" font-size="11" transform="rotate(-90 18,195.0)">false-allow rate</text>
+<line x1="70" y1="40" x2="70" y2="350" stroke="#333"/>
+<line x1="70" y1="350" x2="550" y2="350" stroke="#333"/>
+<text x="320.0" y="200.0" text-anchor="middle" font-size="12">no data</text>
+</svg>

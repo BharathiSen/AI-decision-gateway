@@ -206,7 +206,7 @@ def run_offline_pilot(episodes=500, seed=1, save_episodes=True, episodes_dir=Non
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "note": (
             "Simulated from observability matrix + stub agent. "
-            "Run scripts/finish_evaluation.py --mode live on a Mininet VM for paper numbers."
+            "Run scripts/finish_evaluation.py --mode live on WSL Mininet (Ubuntu-22.04) for paper numbers."
         ),
     }
 

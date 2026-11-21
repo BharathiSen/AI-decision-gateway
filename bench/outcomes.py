@@ -68,10 +68,25 @@ ACCEPTANCE_BINDING_FIELDS = (
 DIAGNOSTIC_UNACCEPTED_LABEL = "thresholds unaccepted — not research data"
 
 
+_FILE_SHA256_CACHE = {}
+
+
 def file_sha256(path):
-    """SHA-256 of a file's bytes, or None if missing/unreadable."""
+    """SHA-256 of a file's bytes, or None if missing/unreadable.
+
+    Caches by (resolved path, size, mtime_ns) so repeated acceptance checks
+    during offline re-score do not re-read multi-MB sample files each call.
+    """
     try:
-        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+        resolved = Path(path).resolve()
+        st = resolved.stat()
+        key = (str(resolved), st.st_size, getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9)))
+        cached = _FILE_SHA256_CACHE.get(key)
+        if cached is not None:
+            return cached
+        digest = hashlib.sha256(resolved.read_bytes()).hexdigest()
+        _FILE_SHA256_CACHE[key] = digest
+        return digest
     except (OSError, TypeError):
         return None
 
@@ -383,7 +398,7 @@ def require_accepted_thresholds(noise_ids):
         return None
     return (
         "refusing: calibration thresholds are unaccepted for " + ", ".join(missing)
-        + ". Run calibrate_healthy.py on the VM and --write-thresholds once ready_to_write passes."
+        + ". Run calibrate_healthy.py on WSL Mininet and --write-thresholds once ready_to_write passes."
     )
 
 HOP_NAMES = {

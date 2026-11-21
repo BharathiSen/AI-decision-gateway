@@ -1,5 +1,5 @@
 VeriFix offline demo (test_mode_simulation - not live network)
-tag: verifix-stage20-accept-v1-ed8b2df5eec3
+tag: verifix-stage20-accept-v1-196a79a712b3
 
 === 1_authorized_success ===
 decision=allow reason=all checks passed

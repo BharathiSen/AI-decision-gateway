@@ -9,7 +9,7 @@ output path passes bench.contracts.refuse_protected_path first.
 Offline (no Mininet, e.g. Windows dev / CI smoke):
     python scripts/finish_evaluation.py --mode offline --episodes 500
 
-Live (Mininet VM, root):
+Live (WSL Ubuntu-22.04 + Mininet as root — not VirtualBox):
     sudo --preserve-env=GROQ_API_KEY python3 scripts/finish_evaluation.py --mode live --run-name v5 --episodes 500
 
 Paper batch (WSL Ubuntu-22.04 Mininet, ≥300 paired episodes, stratified):
@@ -218,7 +218,7 @@ def main():
 
     if mode == "live":
         if os.geteuid() != 0:
-            print("Live mode requires root (Mininet VM). Use --mode offline otherwise.", file=sys.stderr)
+            print("Live mode requires root on WSL Ubuntu-22.04 (Mininet; not VirtualBox). Use --mode offline otherwise.", file=sys.stderr)
             sys.exit(2)
         if not args.run_name:
             print("Live mode requires --run-name so outputs never mix with earlier runs.", file=sys.stderr)

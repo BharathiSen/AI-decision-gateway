@@ -455,7 +455,7 @@ def live_accept():
     import os
 
     if not hasattr(os, "geteuid") or os.geteuid() != 0:
-        print("acceptance must run as root on the Mininet VM.", file=sys.stderr)
+        print("acceptance must run as root on WSL Mininet (Ubuntu-22.04).", file=sys.stderr)
         return 2
 
     from bench import inject as inj
@@ -893,7 +893,7 @@ def demo_offline():
         "note": (
             "Offline simulation using test-only thresholds. "
             "Not Mininet proof. Live demos require: sudo python3 bench/accept.py --live-accept "
-            "on the VM after accepted thresholds exist (D2)."
+            "on WSL Mininet after accepted thresholds exist (D2)."
         ),
         "scenarios": records,
         "failures": failures,

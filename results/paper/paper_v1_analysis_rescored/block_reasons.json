@@ -1,0 +1,199 @@
+{
+  "source_episodes": "results/pilot/paper_v1_episodes",
+  "labels": {
+    "source": "results/ground_truth.json",
+    "sha256": "b19e33d2a09d01e498c94d452f28206c148034662b08489254c3e7f2f558e434",
+    "generated_at": "2026-10-28T15:20:40.629864+00:00",
+    "noise_id": "N0",
+    "seed": 42,
+    "scenarios": 23,
+    "rule": "DO_NOTHING alone if traffic is fine unchanged; else each remediation that recovered; else ESCALATE",
+    "action_space": [
+      "REROUTE",
+      "DO_NOTHING",
+      "ESCALATE"
+    ],
+    "trusted_scenarios": [],
+    "untrusted_scenarios": [
+      "C1",
+      "C2",
+      "C3",
+      "C4",
+      "C5",
+      "F1",
+      "F10",
+      "F11",
+      "F12",
+      "F2",
+      "F3",
+      "F4",
+      "F5",
+      "F6",
+      "F7",
+      "F8",
+      "F9",
+      "H0",
+      "U1",
+      "U2",
+      "U3",
+      "U4",
+      "U5"
+    ]
+  },
+  "n_episodes_scanned": 300,
+  "n_verifix_block": 103,
+  "n_blocked_correct_measured_label": 65,
+  "reason_counts_all_blocks": {
+    "consistency failed": 70,
+    "safety failed": 29,
+    "proposal contradicted": 4
+  },
+  "reason_counts_blocked_correct": {
+    "consistency failed": 46,
+    "safety failed": 19
+  },
+  "consistency_mismatched_tests_blocked_correct": {
+    "T2_hop_ping": 35,
+    "T1_e2e_ping": 14
+  },
+  "safety_detail_blocked_correct": {
+    "{'passed': False, 'reason': 'path not in policy-approved routes'}": 19,
+    "proposed_path=['hostA', 'r1', 'r3', 'r4', 'hostB']": 19
+  },
+  "faults_blocked_correct": {
+    "F2": 7,
+    "U2": 4,
+    "F7": 10,
+    "C3": 8,
+    "F9": 11,
+    "F4": 4,
+    "F3": 5,
+    "U1": 3,
+    "F6": 9,
+    "F1": 4
+  },
+  "examples_blocked_correct": [
+    {
+      "episode_id": "00963244-864d-4665-bf12-a8926cb717e9",
+      "fault_id": "F2",
+      "action": "REROUTE",
+      "measured_correct": [
+        "REROUTE"
+      ],
+      "reason": "consistency failed",
+      "proposed_path": [
+        "r1",
+        "r3",
+        "r4"
+      ]
+    },
+    {
+      "episode_id": "021dd545-78b7-4651-867c-15b57ba5e506",
+      "fault_id": "U2",
+      "action": "REROUTE",
+      "measured_correct": [
+        "REROUTE"
+      ],
+      "reason": "consistency failed",
+      "proposed_path": [
+        "r1",
+        "r3",
+        "r4"
+      ]
+    },
+    {
+      "episode_id": "05759012-6eee-4980-b3b7-74c22da2b2dd",
+      "fault_id": "F7",
+      "action": "REROUTE",
+      "measured_correct": [
+        "REROUTE"
+      ],
+      "reason": "consistency failed",
+      "proposed_path": [
+        "r1",
+        "r3",
+        "r4"
+      ]
+    },
+    {
+      "episode_id": "0d2deedc-111b-4164-a3e9-e6dfe2f837d6",
+      "fault_id": "F2",
+      "action": "REROUTE",
+      "measured_correct": [
+        "REROUTE"
+      ],
+      "reason": "safety failed",
+      "proposed_path": [
+        "hostA",
+        "r1",
+        "r3",
+        "r4",
+        "hostB"
+      ]
+    },
+    {
+      "episode_id": "0e4bff25-7774-49d2-b288-546eac791cf6",
+      "fault_id": "C3",
+      "action": "REROUTE",
+      "measured_correct": [
+        "REROUTE"
+      ],
+      "reason": "consistency failed",
+      "proposed_path": [
+        "r1",
+        "r3",
+        "r4"
+      ]
+    },
+    {
+      "episode_id": "0ece1704-c877-49f6-96bd-3c4e56179826",
+      "fault_id": "F9",
+      "action": "REROUTE",
+      "measured_correct": [
+        "REROUTE"
+      ],
+      "reason": "consistency failed",
+      "proposed_path": [
+        "r1",
+        "r3",
+        "r4"
+      ]
+    },
+    {
+      "episode_id": "10eb1e50-c6bf-47d4-bc75-e6fc0200b1ba",
+      "fault_id": "F7",
+      "action": "REROUTE",
+      "measured_correct": [
+        "REROUTE"
+      ],
+      "reason": "safety failed",
+      "proposed_path": [
+        "hostA",
+        "r1",
+        "r3",
+        "r4",
+        "hostB"
+      ]
+    },
+    {
+      "episode_id": "1294a2fc-4bbc-4446-a494-6b5b76f1bfcf",
+      "fault_id": "F2",
+      "action": "REROUTE",
+      "measured_correct": [
+        "REROUTE"
+      ],
+      "reason": "consistency failed",
+      "proposed_path": [
+        "r1",
+        "r3",
+        "r4"
+      ]
+    }
+  ],
+  "assessment": {
+    "consistency_failed": "intended when agent predictions disagree with OAM (gate doing its job)",
+    "safety_failed_host_inclusive_path": "agent often proposes host-inclusive paths; policy allows only [r1,r2,r4] or [r1,r3,r4]. Count as product gap (path shape), not invented proof.",
+    "fix_applied": false,
+    "note": "No gate logic change in this pass; manager writeup cites these counts."
+  }
+}

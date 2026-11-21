@@ -1,0 +1,12 @@
+{
+  "path": "B",
+  "verifix_labels": null,
+  "n_episodes": 300,
+  "metrics_out": "/mnt/c/Users/Admin/Projects/AI-decision-gateway/results/paper/paper_v1_rescored_metrics.json",
+  "analysis_out": "/mnt/c/Users/Admin/Projects/AI-decision-gateway/results/paper/paper_v1_analysis_rescored",
+  "summary_out": "/mnt/c/Users/Admin/Projects/AI-decision-gateway/results/experiment_summary_paper_v1_rescored.json",
+  "verifix_n_confirmatory": 0,
+  "verifix_excluded_untrusted": 300,
+  "metrics_scored": 300,
+  "note": "Path B: VERIFIX_LABELS unset; decisions filled offline via compare_episode into /tmp cache; confirmatory denoms stay 0."
+}

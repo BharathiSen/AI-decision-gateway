@@ -1,4 +1,4 @@
-"""Shared Mininet VM helpers."""
+"""Shared WSL Mininet helpers."""
 
 import codecs
 import os

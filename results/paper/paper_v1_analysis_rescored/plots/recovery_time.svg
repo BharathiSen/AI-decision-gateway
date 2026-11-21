@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="380">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="360.0" y="24" text-anchor="middle" font-size="14">Recovery time by strategy</text>
+<text x="18" y="165.0" font-size="11" transform="rotate(-90 18,165.0)">mean seconds</text>
+<line x1="70" y1="40" x2="70" y2="290" stroke="#333"/>
+<line x1="70" y1="290" x2="696" y2="290" stroke="#333"/>
+<rect x="80.8" y="40.0" width="26.5" height="250.0" fill="#334155"/>
+<text x="94.1" y="306.0" text-anchor="middle" font-size="10" transform="rotate(32 94.1,306.0)">B0</text>
+<text x="94.1" y="36.0" text-anchor="middle" font-size="9">7.74</text>
+<rect x="129.0" y="40.0" width="26.5" height="250.0" fill="#334155"/>
+<text x="142.2" y="306.0" text-anchor="middle" font-size="10" transform="rotate(32 142.2,306.0)">B1</text>
+<text x="142.2" y="36.0" text-anchor="middle" font-size="9">7.74</text>
+<rect x="177.1" y="40.0" width="26.5" height="250.0" fill="#334155"/>
+<text x="190.4" y="306.0" text-anchor="middle" font-size="10" transform="rotate(32 190.4,306.0)">B2</text>
+<text x="190.4" y="36.0" text-anchor="middle" font-size="9">7.74</text>
+<rect x="225.3" y="40.0" width="26.5" height="250.0" fill="#334155"/>
+<text x="238.5" y="306.0" text-anchor="middle" font-size="10" transform="rotate(32 238.5,306.0)">B3</text>
+<text x="238.5" y="36.0" text-anchor="middle" font-size="9">7.74</text>
+<rect x="273.5" y="40.0" width="26.5" height="250.0" fill="#334155"/>
+<text x="286.7" y="306.0" text-anchor="middle" font-size="10" transform="rotate(32 286.7,306.0)">B4</text>
+<text x="286.7" y="36.0" text-anchor="middle" font-size="9">7.74</text>
+<rect x="321.6" y="40.0" width="26.5" height="250.0" fill="#334155"/>
+<text x="334.8" y="306.0" text-anchor="middle" font-size="10" transform="rotate(32 334.8,306.0)">B5</text>
+<text x="334.8" y="36.0" text-anchor="middle" font-size="9">7.74</text>
+<rect x="369.8" y="40.0" width="26.5" height="250.0" fill="#334155"/>
+<text x="383.0" y="306.0" text-anchor="middle" font-size="10" transform="rotate(32 383.0,306.0)">B6</text>
+<text x="383.0" y="36.0" text-anchor="middle" font-size="9">7.74</text>
+<rect x="417.9" y="40.0" width="26.5" height="250.0" fill="#334155"/>
+<text x="431.2" y="306.0" text-anchor="middle" font-size="10" transform="rotate(32 431.2,306.0)">gate_full</text>
+<text x="431.2" y="36.0" text-anchor="middle" font-size="9">7.74</text>
+<rect x="466.1" y="40.0" width="26.5" height="250.0" fill="#334155"/>
+<text x="479.3" y="306.0" text-anchor="middle" font-size="10" transform="rotate(32 479.3,306.0)">gate_no_discrimination</text>
+<text x="479.3" y="36.0" text-anchor="middle" font-size="9">7.74</text>
+<rect x="514.2" y="40.0" width="26.5" height="250.0" fill="#334155"/>
+<text x="527.5" y="306.0" text-anchor="middle" font-size="10" transform="rotate(32 527.5,306.0)">gate_no_grader</text>
+<text x="527.5" y="36.0" text-anchor="middle" font-size="9">7.74</text>
+<rect x="562.4" y="40.0" width="26.5" height="250.0" fill="#334155"/>
+<text x="575.6" y="306.0" text-anchor="middle" font-size="10" transform="rotate(32 575.6,306.0)">gate_no_predictions</text>
+<text x="575.6" y="36.0" text-anchor="middle" font-size="9">7.74</text>
+<rect x="610.5" y="40.0" width="26.5" height="250.0" fill="#334155"/>
+<text x="623.8" y="306.0" text-anchor="middle" font-size="10" transform="rotate(32 623.8,306.0)">gate_v0</text>
+<text x="623.8" y="36.0" text-anchor="middle" font-size="9">7.74</text>
+<rect x="658.7" y="40.0" width="26.5" height="250.0" fill="#334155"/>
+<text x="671.9" y="306.0" text-anchor="middle" font-size="10" transform="rotate(32 671.9,306.0)">verifix</text>
+<text x="671.9" y="36.0" text-anchor="middle" font-size="9">7.74</text>
+</svg>

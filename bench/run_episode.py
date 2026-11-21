@@ -3606,14 +3606,14 @@ def _live_preflight(noise_ids=("N0",)):
 def live_oam_cost():
     """Full OAM battery on the diamond; checks measured cost fields.
 
-    On the VM, as root:
+    On WSL Mininet, as root:
 
         sudo python3 bench/run_episode.py --live-cost
     """
     import os
 
     if not hasattr(os, "geteuid") or os.geteuid() != 0:
-        print("live OAM cost check must run as root on the Mininet VM.", file=sys.stderr)
+        print("live OAM cost check must run as root on WSL Mininet (Ubuntu-22.04).", file=sys.stderr)
         return 2
     refused = _live_preflight()
     if refused:
@@ -3679,14 +3679,14 @@ def live_oam_cost():
 def live_diamond():
     """One healthy pass on the diamond topology.
 
-    On the VM, as root:
+    On WSL Mininet, as root:
 
         sudo python3 bench/run_episode.py --live
     """
     import os
 
     if not hasattr(os, "geteuid") or os.geteuid() != 0:
-        print("diamond integration must run as root on the Mininet VM.", file=sys.stderr)
+        print("diamond integration must run as root on WSL Mininet (Ubuntu-22.04).", file=sys.stderr)
         return 2
     refused = _live_preflight()
     if refused:
@@ -3758,14 +3758,14 @@ def live_diamond():
 def live_model():
     """One live diamond snapshot through the configured LLM. No frozen writes.
 
-    On the VM, as root, with the provider key in the same sudo environment:
+    On WSL Mininet, as root, with the provider key in the same sudo environment:
 
         sudo --preserve-env=GROQ_API_KEY python3 bench/run_episode.py --live-model
     """
     import os
 
     if not hasattr(os, "geteuid") or os.geteuid() != 0:
-        print("live model check must run as root on the Mininet VM.", file=sys.stderr)
+        print("live model check must run as root on WSL Mininet (Ubuntu-22.04).", file=sys.stderr)
         return 2
     refused = _live_preflight()
     if refused:
@@ -3831,7 +3831,7 @@ def live_model():
 def live_recheck():
     """Execution recheck against the live diamond, one case per stale-state kind.
 
-    On the VM, as root:
+    On WSL Mininet, as root:
 
         sudo python3 bench/run_episode.py --live-recheck
 
@@ -3841,7 +3841,7 @@ def live_recheck():
     import os
 
     if not hasattr(os, "geteuid") or os.geteuid() != 0:
-        print("live recheck must run as root on the Mininet VM.", file=sys.stderr)
+        print("live recheck must run as root on WSL Mininet (Ubuntu-22.04).", file=sys.stderr)
         return 2
     refused = _live_preflight()
     if refused:
@@ -3957,14 +3957,14 @@ def live_recheck():
 def live_gate_inputs():
     """Frozen catalog/matrix plus a live diamond snapshot into decide(, noise_id="N0").
 
-    On the VM, as root:
+    On WSL Mininet, as root:
 
         sudo python3 bench/run_episode.py --live-gate-inputs
     """
     import os
 
     if not hasattr(os, "geteuid") or os.geteuid() != 0:
-        print("gate inputs live check must run as root on the Mininet VM.", file=sys.stderr)
+        print("gate inputs live check must run as root on WSL Mininet (Ubuntu-22.04).", file=sys.stderr)
         return 2
     refused = _live_preflight()
     if refused:
@@ -4027,14 +4027,14 @@ def live_gate_inputs():
 def live_gate():
     """Stage 10 algorithm on the live diamond: safety block, then F1 decide(, noise_id="N0").
 
-    On the VM, as root:
+    On WSL Mininet, as root:
 
         sudo python3 bench/run_episode.py --live-gate
     """
     import os
 
     if not hasattr(os, "geteuid") or os.geteuid() != 0:
-        print("gate algorithm live check must run as root on the Mininet VM.", file=sys.stderr)
+        print("gate algorithm live check must run as root on WSL Mininet (Ubuntu-22.04).", file=sys.stderr)
         return 2
     refused = _live_preflight()
     if refused:
@@ -4128,7 +4128,7 @@ def live_gate():
 def live_integrity():
     """Bind, replay, and revalidation on the live diamond. Does not reroute.
 
-    On the VM, as root:
+    On WSL Mininet, as root:
 
         sudo python3 bench/run_episode.py --live-integrity
     """
@@ -4136,7 +4136,7 @@ def live_integrity():
     import tempfile
 
     if not hasattr(os, "geteuid") or os.geteuid() != 0:
-        print("verification integrity must run as root on the Mininet VM.", file=sys.stderr)
+        print("verification integrity must run as root on WSL Mininet (Ubuntu-22.04).", file=sys.stderr)
         return 2
     refused = _live_preflight()
     if refused:
@@ -4256,14 +4256,14 @@ def live_integrity():
 def live_safety():
     """Stage 12 negative and safety cases on the live diamond.
 
-    On the VM, as root:
+    On WSL Mininet, as root:
 
         sudo python3 bench/run_episode.py --live-safety
     """
     import os
 
     if not hasattr(os, "geteuid") or os.geteuid() != 0:
-        print("negative safety must run as root on the Mininet VM.", file=sys.stderr)
+        print("negative safety must run as root on WSL Mininet (Ubuntu-22.04).", file=sys.stderr)
         return 2
     refused = _live_preflight()
     if refused:

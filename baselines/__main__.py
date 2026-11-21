@@ -11,7 +11,7 @@ from baselines.b0_ungated import run as b0_run
 
 def _live():
     if not hasattr(os, "geteuid") or os.geteuid() != 0:
-        print("baselines --live must run as root on the Mininet VM.", file=sys.stderr)
+        print("baselines --live must run as root on WSL Mininet (Ubuntu-22.04).", file=sys.stderr)
         return 2
 
     from bench.outcomes import refuse_live_if_unaccepted

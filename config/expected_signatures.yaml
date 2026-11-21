@@ -1,7 +1,7 @@
 version: 1
 
 # How each catalog fault should change graded OAM outcomes relative to H0.
-# required: the VM verifier fails if none of differs_from_healthy moved.
+# required: the WSL Mininet verifier fails if none of differs_from_healthy moved.
 # Flap faults are timing-sensitive, so they are recorded but not required.
 # pairs: faults that need different fixes and must not share a signature
 # on every listed test.

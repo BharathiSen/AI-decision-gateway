@@ -33,7 +33,7 @@
         ]
       }
     ],
-    "observed_at": "2026-11-13T10:37:11.510378+00:00"
+    "observed_at": "2026-11-21T14:05:58.939182+00:00"
   },
   "telemetry": {
     "metrics": {
@@ -157,6 +157,6 @@
   },
   "audit": {
     "authorization_present": true,
-    "decision_id": "cf1a4df809bc4ef5835dda4275463d06"
+    "decision_id": "4290e306e13b4b568fa329a7e8826149"
   }
 }

@@ -509,7 +509,7 @@ def live_compare():
     import os
 
     if not hasattr(os, "geteuid") or os.geteuid() != 0:
-        print("strategy comparison must run as root on the Mininet VM.", file=sys.stderr)
+        print("strategy comparison must run as root on WSL Mininet (Ubuntu-22.04).", file=sys.stderr)
         return 2
     from bench import inject as inj
     from bench import tests as oam
