@@ -194,6 +194,6 @@
     "consistency_failed": "intended when agent predictions disagree with OAM (gate doing its job)",
     "safety_failed_host_inclusive_path": "agent often proposes host-inclusive paths; policy allows only [r1,r2,r4] or [r1,r3,r4]. Count as product gap (path shape), not invented proof.",
     "fix_applied": false,
-    "note": "No gate logic change in this pass; manager writeup cites these counts."
+    "note": "No gate logic change in this pass; results note cites these counts."
   }
 }

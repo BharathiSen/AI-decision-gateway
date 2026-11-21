@@ -1,4 +1,4 @@
-"""Write results/paper/MANAGER_RESULTS_v1.md from command-emitted JSON only.
+"""Write results/paper/paper_v1_results_note.md from command-emitted JSON only.
 
 Interim Path B note: confirmatory rates stay unavailable until label runs.
 """
@@ -72,7 +72,7 @@ def main() -> int:
             return "n/a"
         return f"{x.get('count')}/{x.get('denom')} = {x.get('rate')}"
 
-    md = f"""# VeriFix manager results (paper_v1)
+    md = f"""# VeriFix paper_v1 results note
 
 {INTERIM_BANNER}
 
@@ -183,7 +183,7 @@ From `block_reasons.json` (measured `correct_actions`, not catalog):
 ```powershell
 python bench/accept.py --demo
 python scripts/model_breakdown.py
-python scripts/write_manager_results.py
+python scripts/write_results_note.py
 ```
 
 ```bash
@@ -192,7 +192,7 @@ cd /mnt/c/Users/Admin/Projects/AI-decision-gateway
 python3 -m bench.label_audit results/ground_truth.json
 ```
 """
-    out = ROOT / "results/paper/MANAGER_RESULTS_v1.md"
+    out = ROOT / "results/paper/paper_v1_results_note.md"
     out.write_text(md, encoding="utf-8")
     print(f"wrote {out}")
     return 0

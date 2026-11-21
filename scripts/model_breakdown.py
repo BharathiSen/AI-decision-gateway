@@ -1,4 +1,4 @@
-"""Add per-model VeriFix descriptive breakdown to rescored metrics + manager note inputs.
+"""Add per-model VeriFix descriptive breakdown to rescored metrics + results note inputs.
 
 Gemini-family slice is primary. Model mix is a limitation (mid-batch swaps).
 Uses gate_decision on saved episodes + measured correct_actions (descriptive, not confirmatory).

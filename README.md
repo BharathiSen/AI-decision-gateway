@@ -66,7 +66,7 @@ sudo python3 bench/run_pilot.py --save-episodes --episodes 500 --out results/pil
 
 Windows can develop offline; live / label / calibration numbers require WSL + Mininet + sudo.
 
-## Quick start (manager path)
+## Quick start (results path)
 
 ### 1. Offline product demo (Windows, no Mininet)
 
@@ -79,11 +79,11 @@ python bench/accept.py --demo
 
 Expect `demo offline: PASS`. Records: `results/acceptance/demo_offline/`.
 
-### 1b. Manager-facing paper_v1 numbers
+### 1b. paper_v1 results note
 
 Quoted only from command-emitted JSON (Path B = untrusted labels, confirmatory denoms 0):
-[`results/paper/MANAGER_RESULTS_v1.md`](results/paper/MANAGER_RESULTS_v1.md)
-(regenerate with `python scripts/write_manager_results.py`).
+[`results/paper/paper_v1_results_note.md`](results/paper/paper_v1_results_note.md)
+(regenerate with `python scripts/write_results_note.py`).
 
 Re-score frozen episodes inside **WSL** (thresholds hash `/mnt/c/...` paths; do not invent rates):
 
