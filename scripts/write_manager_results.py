@@ -39,12 +39,38 @@ def main() -> int:
     assess = blocks.get("assessment") or {}
     labels = blocks.get("labels") or {}
 
-    counts: Counter[str] = Counter()
-    for path in (ROOT / "results/pilot/paper_v1_episodes").glob("*.json"):
-        rec = json.loads(path.read_text(encoding="utf-8"))
-        ap = rec.get("agent_proposal") or {}
-        counts[str(ap.get("_model") or ap.get("model") or "unknown")] += 1
-    mix = ", ".join(f"{k}={n}" for k, n in counts.most_common())
+    by_model_path = ROOT / "results/paper/paper_v1_rescored_by_model.json"
+    by_model = metrics.get("by_model") or {}
+    if not by_model and by_model_path.exists():
+        by_model = json.loads(by_model_path.read_text(encoding="utf-8"))
+    gem = by_model.get("gemini_family") or {}
+    all_m = by_model.get("all") or {}
+    mix_obj = by_model.get("model_mix") or {}
+    if mix_obj:
+        mix = ", ".join(f"{k}={n}" for k, n in mix_obj.items())
+    else:
+        counts: Counter[str] = Counter()
+        for path in (ROOT / "results/pilot/paper_v1_episodes").glob("*.json"):
+            rec = json.loads(path.read_text(encoding="utf-8"))
+            ap = rec.get("agent_proposal") or {}
+            counts[str(ap.get("_model") or ap.get("model") or "unknown")] += 1
+        mix = ", ".join(f"{k}={n}" for k, n in counts.most_common())
+
+    per_model_rows = []
+    for name, row in (by_model.get("by_model") or {}).items():
+        ua = row.get("unsafe_allow") or {}
+        ca = row.get("correct_allow") or {}
+        per_model_rows.append(
+            f"| {name} | {row.get('n')} | {ua.get('count')}/{ua.get('denom')} | "
+            f"{ca.get('count')}/{ca.get('denom')} | {row.get('block_rate_raw')} |"
+        )
+    per_model_table = "\n".join(per_model_rows) if per_model_rows else "| (run scripts/model_breakdown.py) | | | | |"
+
+    def br(obj, key):
+        x = (obj or {}).get(key) or {}
+        if not x:
+            return "n/a"
+        return f"{x.get('count')}/{x.get('denom')} = {x.get('rate')}"
 
     md = f"""# VeriFix manager results (paper_v1)
 
@@ -55,7 +81,8 @@ Generated: {datetime.now(timezone.utc).isoformat()}
 Sources only (no hand-typed rates):
 
 - `results/experiment_summary_paper_v1_rescored.json`
-- `results/paper/paper_v1_rescored_metrics.json`
+- `results/paper/paper_v1_rescored_metrics.json` (includes `by_model`)
+- `results/paper/paper_v1_rescored_by_model.json`
 - `results/paper/paper_v1_analysis_rescored/block_reasons.json`
 - `results/paper/paper_v1_rescore_provenance.json`
 - `results/pilot/paper_v1.json`
@@ -76,9 +103,26 @@ Sources only (no hand-typed rates):
 - Paper primary VeriFix rates tagged `{v.get('label')}` — **not confirmatory**
 - `paper_label_caveat`: {summary.get('paper_label_caveat')}
 
-## Main table (VeriFix descriptive measured-label rates)
+## Primary table (gemini-family slice)
 
-From `paper_primary.verifix` in `results/experiment_summary_paper_v1_rescored.json`:
+Primary reporting cut from `by_model.gemini_family` (descriptive measured labels). Limitation: mid-batch model mix — see Known limits.
+
+| Metric | Value |
+|--------|-------|
+| n | {gem.get('n')} |
+| unsafe_allow | {br(gem, 'unsafe_allow')} |
+| correct_allow | {br(gem, 'correct_allow')} |
+| correct_blocked | {br(gem, 'correct_blocked')} |
+| unnecessary_escalation | {br(gem, 'unnecessary_escalation')} |
+| allow_rate_raw | {gem.get('allow_rate_raw')} |
+| block_rate_raw | {gem.get('block_rate_raw')} |
+| escalate_rate_raw | {gem.get('escalate_rate_raw')} |
+| n_correct_proposal | {gem.get('n_correct_proposal')} |
+| label | {gem.get('label')} |
+
+## All-models table (full 300)
+
+From `paper_primary.verifix` in `results/experiment_summary_paper_v1_rescored.json` (cross-check `by_model.all`):
 
 | Metric | Value |
 |--------|-------|
@@ -95,8 +139,20 @@ From `paper_primary.verifix` in `results/experiment_summary_paper_v1_rescored.js
 | recovery_seconds_mean | {v['recovery_seconds_mean']} |
 | n_correct_proposal | {v['n_correct_proposal']} |
 | label | {v.get('label')} |
+| by_model.all unsafe_allow | {br(all_m, 'unsafe_allow')} |
+| by_model.all correct_allow | {br(all_m, 'correct_allow')} |
 
 Caveat (`paper_primary.verifix.note`): {v.get('note')}
+
+## Per-model breakdown
+
+From `by_model.by_model`:
+
+| model | n | unsafe_allow | correct_allow | block_rate_raw |
+|-------|---|--------------|---------------|----------------|
+{per_model_table}
+
+Limitation note: `{by_model.get('limitation')}`
 
 ## Why ~34% blocks (blocked-but-correct)
 
@@ -118,7 +174,7 @@ From `block_reasons.json` (measured `correct_actions`, not catalog):
 
 - **Path B / untrusted labels:** confirmatory safety stays null until WSL label repeats (≥3×N0/N1/N2) + `label_audit --write`.
 - **Pilot:** episodes_attempted={pilot.get('episodes_attempted')}, episodes_scored={pilot.get('episodes_scored')}, invalid_output={pilot.get('invalid_output')}, model_errors={pilot.get('model_errors')} (`results/pilot/paper_v1.json`).
-- **Mid-batch model mix** (episode `_model` recount): {mix}. Freeze agent field: `{pilot.get('agent')}`.
+- **Mid-batch model mix (limitation):** {mix}. Freeze agent field: `{pilot.get('agent')}`. Gemini-family is the primary slice; full mix is not a single-model freeze.
 - **Live accept:** `sudo python3 bench/accept.py --live-accept` needs interactive sudo in WSL.
 - **Rescore provenance note:** {prov.get('note')}
 
@@ -126,6 +182,7 @@ From `block_reasons.json` (measured `correct_actions`, not catalog):
 
 ```powershell
 python bench/accept.py --demo
+python scripts/model_breakdown.py
 python scripts/write_manager_results.py
 ```
 

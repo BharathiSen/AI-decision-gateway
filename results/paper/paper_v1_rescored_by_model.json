@@ -1,0 +1,257 @@
+{
+  "generated_at": "2026-11-21T16:22:57.338729+00:00",
+  "source_episodes": "C:/Users/Admin/Projects/AI-decision-gateway/results/pilot/paper_v1_episodes",
+  "n_episodes": 300,
+  "model_mix": {
+    "gemini-3.5-flash-lite": 235,
+    "openai/gpt-oss-20b": 42,
+    "gemini-3.1-flash-lite": 7,
+    "gemini-3.6-flash": 7,
+    "unknown": 7,
+    "gemini-3.8-flash": 2
+  },
+  "primary_slice": "gemini_family",
+  "limitation": "Mid-batch model mix: episodes were not frozen to a single model. Gemini-family slice is the primary reporting cut; full mix is a known limit.",
+  "all": {
+    "n": 300,
+    "allow_rate_raw": 0.22666666666666666,
+    "block_rate_raw": 0.3433333333333333,
+    "escalate_rate_raw": 0.43,
+    "unsafe_allow": {
+      "count": 10,
+      "denom": 300,
+      "rate": 0.03333333333333333
+    },
+    "correct_allow": {
+      "count": 58,
+      "denom": 152,
+      "rate": 0.3815789473684211
+    },
+    "correct_blocked": {
+      "count": 65,
+      "denom": 152,
+      "rate": 0.4276315789473684
+    },
+    "unnecessary_escalation": {
+      "count": 29,
+      "denom": 152,
+      "rate": 0.19078947368421054
+    },
+    "n_correct_proposal": 152,
+    "safety_blocked_correct": 19,
+    "consistency_blocked_correct": 46,
+    "label": "descriptive_measured_labels_untrusted"
+  },
+  "gemini_family": {
+    "n": 251,
+    "allow_rate_raw": 0.2350597609561753,
+    "block_rate_raw": 0.3705179282868526,
+    "escalate_rate_raw": 0.3944223107569721,
+    "unsafe_allow": {
+      "count": 9,
+      "denom": 251,
+      "rate": 0.035856573705179286
+    },
+    "correct_allow": {
+      "count": 50,
+      "denom": 135,
+      "rate": 0.37037037037037035
+    },
+    "correct_blocked": {
+      "count": 60,
+      "denom": 135,
+      "rate": 0.4444444444444444
+    },
+    "unnecessary_escalation": {
+      "count": 25,
+      "denom": 135,
+      "rate": 0.18518518518518517
+    },
+    "n_correct_proposal": 135,
+    "safety_blocked_correct": 19,
+    "consistency_blocked_correct": 41,
+    "label": "descriptive_measured_labels_untrusted"
+  },
+  "by_model": {
+    "gemini-3.5-flash-lite": {
+      "n": 235,
+      "allow_rate_raw": 0.24680851063829787,
+      "block_rate_raw": 0.37872340425531914,
+      "escalate_rate_raw": 0.37446808510638296,
+      "unsafe_allow": {
+        "count": 9,
+        "denom": 235,
+        "rate": 0.03829787234042553
+      },
+      "correct_allow": {
+        "count": 49,
+        "denom": 132,
+        "rate": 0.3712121212121212
+      },
+      "correct_blocked": {
+        "count": 59,
+        "denom": 132,
+        "rate": 0.44696969696969696
+      },
+      "unnecessary_escalation": {
+        "count": 24,
+        "denom": 132,
+        "rate": 0.18181818181818182
+      },
+      "n_correct_proposal": 132,
+      "safety_blocked_correct": 19,
+      "consistency_blocked_correct": 40,
+      "label": "descriptive_measured_labels_untrusted"
+    },
+    "openai/gpt-oss-20b": {
+      "n": 42,
+      "allow_rate_raw": 0.21428571428571427,
+      "block_rate_raw": 0.23809523809523808,
+      "escalate_rate_raw": 0.5476190476190477,
+      "unsafe_allow": {
+        "count": 1,
+        "denom": 42,
+        "rate": 0.023809523809523808
+      },
+      "correct_allow": {
+        "count": 8,
+        "denom": 17,
+        "rate": 0.47058823529411764
+      },
+      "correct_blocked": {
+        "count": 5,
+        "denom": 17,
+        "rate": 0.29411764705882354
+      },
+      "unnecessary_escalation": {
+        "count": 4,
+        "denom": 17,
+        "rate": 0.23529411764705882
+      },
+      "n_correct_proposal": 17,
+      "safety_blocked_correct": 0,
+      "consistency_blocked_correct": 5,
+      "label": "descriptive_measured_labels_untrusted"
+    },
+    "gemini-3.1-flash-lite": {
+      "n": 7,
+      "allow_rate_raw": 0.0,
+      "block_rate_raw": 0.14285714285714285,
+      "escalate_rate_raw": 0.8571428571428571,
+      "unsafe_allow": {
+        "count": 0,
+        "denom": 7,
+        "rate": 0.0
+      },
+      "correct_allow": {
+        "count": 0,
+        "denom": 1,
+        "rate": 0.0
+      },
+      "correct_blocked": {
+        "count": 1,
+        "denom": 1,
+        "rate": 1.0
+      },
+      "unnecessary_escalation": {
+        "count": 0,
+        "denom": 1,
+        "rate": 0.0
+      },
+      "n_correct_proposal": 1,
+      "safety_blocked_correct": 0,
+      "consistency_blocked_correct": 1,
+      "label": "descriptive_measured_labels_untrusted"
+    },
+    "gemini-3.6-flash": {
+      "n": 7,
+      "allow_rate_raw": 0.14285714285714285,
+      "block_rate_raw": 0.42857142857142855,
+      "escalate_rate_raw": 0.42857142857142855,
+      "unsafe_allow": {
+        "count": 0,
+        "denom": 7,
+        "rate": 0.0
+      },
+      "correct_allow": {
+        "count": 1,
+        "denom": 1,
+        "rate": 1.0
+      },
+      "correct_blocked": {
+        "count": 0,
+        "denom": 1,
+        "rate": 0.0
+      },
+      "unnecessary_escalation": {
+        "count": 0,
+        "denom": 1,
+        "rate": 0.0
+      },
+      "n_correct_proposal": 1,
+      "safety_blocked_correct": 0,
+      "consistency_blocked_correct": 0,
+      "label": "descriptive_measured_labels_untrusted"
+    },
+    "unknown": {
+      "n": 7,
+      "allow_rate_raw": 0.0,
+      "block_rate_raw": 0.0,
+      "escalate_rate_raw": 1.0,
+      "unsafe_allow": {
+        "count": 0,
+        "denom": 7,
+        "rate": 0.0
+      },
+      "correct_allow": {
+        "count": 0,
+        "denom": 0,
+        "rate": null
+      },
+      "correct_blocked": {
+        "count": 0,
+        "denom": 0,
+        "rate": null
+      },
+      "unnecessary_escalation": {
+        "count": 0,
+        "denom": 0,
+        "rate": null
+      },
+      "n_correct_proposal": 0,
+      "safety_blocked_correct": 0,
+      "consistency_blocked_correct": 0,
+      "label": "descriptive_measured_labels_untrusted"
+    },
+    "gemini-3.8-flash": {
+      "n": 2,
+      "allow_rate_raw": 0.0,
+      "block_rate_raw": 0.0,
+      "escalate_rate_raw": 1.0,
+      "unsafe_allow": {
+        "count": 0,
+        "denom": 2,
+        "rate": 0.0
+      },
+      "correct_allow": {
+        "count": 0,
+        "denom": 1,
+        "rate": 0.0
+      },
+      "correct_blocked": {
+        "count": 0,
+        "denom": 1,
+        "rate": 0.0
+      },
+      "unnecessary_escalation": {
+        "count": 1,
+        "denom": 1,
+        "rate": 1.0
+      },
+      "n_correct_proposal": 1,
+      "safety_blocked_correct": 0,
+      "consistency_blocked_correct": 0,
+      "label": "descriptive_measured_labels_untrusted"
+    }
+  }
+}

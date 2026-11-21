@@ -16,6 +16,7 @@ results/calibration/_*.sh
 results/calibration/_*.py
 results/acceptance/_smoke/
 results/paper/vm_authorized_keys.pub
+results/paper/MANAGER_RESULTS_v1.md
 
 results/episodes/*.json 
 
