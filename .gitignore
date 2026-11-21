@@ -8,11 +8,14 @@
 
 __pycache__/
 *.pyc
+.pytest_cache/
 
 *.log
+*.ps1
 results/calibration/_*.sh
 results/calibration/_*.py
 results/acceptance/_smoke/
+results/paper/vm_authorized_keys.pub
 
 results/episodes/*.json 
 

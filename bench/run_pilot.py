@@ -1703,12 +1703,12 @@ def _self_check_body(summary, before):
         os.environ.pop("LLM_MODEL", None)
         cfg = _provider()
         assert cfg["key_env"] == "GEMINI_API_KEY" and cfg["model"].startswith("gemini"), cfg
-        assert cfg["reasoning_effort"] == "low", cfg
+        assert cfg["reasoning_effort"] == "none", cfg
         os.environ["LLM_MODEL"] = "gemini-x"
         assert _provider()["model"] == "gemini-x"
         from agent.decision_agent import _request_args
 
-        assert _request_args() == {"model": "gemini-x", "reasoning_effort": "low"}
+        assert _request_args() == {"model": "gemini-x", "reasoning_effort": "none"}
         os.environ["LLM_REASONING_EFFORT"] = "default"
         assert _request_args() == {"model": "gemini-x"}
         os.environ["LLM_REASONING_EFFORT"] = "minimal"
