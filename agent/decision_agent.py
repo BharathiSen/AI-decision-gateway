@@ -35,8 +35,11 @@ XAI_BASE_URL = "https://api.x.ai/v1"
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 
 DEFAULT_PROVIDER = "groq"
+_ENV_LOADED = False
 
 # LLM_PROVIDER picks the backend; LLM_MODEL overrides its default model.
+# LLM_FALLBACK_PROVIDER (e.g. groq) is tried once when the primary hits a
+# rate/quota limit. Keys may live in the process env or a repo-root .env.
 # All speak the OpenAI chat-completions API, so one client serves them all.
 # Note: Groq (groq.com, keys start gsk_) and Grok (xAI, keys start xai-) are
 # different services.
@@ -66,13 +69,57 @@ PROVIDERS = {
         "base_url": GEMINI_BASE_URL,
         "key_env": "GEMINI_API_KEY",
         "model": "gemini-3.8-flash",
-        # Default thinking took 36-87 s per call, past the 120 s proposal
-        # freshness window once telemetry and OAM time are added.
-        "reasoning_effort": "low",
+        # none keeps proposals inside the 120 s freshness window; "low"
+        # thinking often pushes total age past 120 s once OAM is included.
+        "reasoning_effort": "none",
     },
 }
 
 REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high")
+_RATE_LIMIT_MARKERS = (
+    "RateLimitError",
+    "Error code: 429",
+    "RESOURCE_EXHAUSTED",
+    "rate_limit",
+    "quota",
+    "tokens per day",
+    "TPD",
+    "exceeded your current quota",
+    # Transient capacity / overload — keep trying alt models and fallback.
+    "Error code: 503",
+    "UNAVAILABLE",
+    "high demand",
+    "currently experiencing high demand",
+    "overloaded",
+    # Transport hangs must fail over quickly; the proposal freshness window is 120s.
+    "APITimeoutError",
+    "Request timed out",
+    "timed out",
+    "TimeoutError",
+    "Error code: 504",
+)
+
+
+def load_dotenv(path=None):
+    """Load KEY=VAL lines from repo-root .env into os.environ (no overwrite)."""
+    global _ENV_LOADED
+    if _ENV_LOADED and path is None:
+        return
+    env_path = Path(path) if path else Path(__file__).resolve().parent.parent / ".env"
+    if env_path.is_file():
+        for raw in env_path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            if line.startswith("export "):
+                line = line[7:].strip()
+            key, _, val = line.partition("=")
+            key = key.strip()
+            val = val.strip().strip("'").strip('"')
+            if key and key not in os.environ:
+                os.environ[key] = val
+    if path is None:
+        _ENV_LOADED = True
 
 
 def _clean_api_key(value):
@@ -130,26 +177,45 @@ def _key_mismatch_hint(cfg):
     return None
 
 
-def provider_config():
+def provider_config(name=None):
     """{"provider", "base_url", "key_env", "api_key", "model", "reasoning_effort"}
     from the environment. LLM_REASONING_EFFORT overrides the provider default;
-    "default" sends nothing and leaves the model's own setting."""
-    name = (os.environ.get("LLM_PROVIDER") or DEFAULT_PROVIDER).strip().lower()
+    "default" sends nothing and leaves the model's own setting.
+
+    When name is set, resolve that provider (used for LLM_FALLBACK_PROVIDER).
+    LLM_MODEL only overrides the primary LLM_PROVIDER, not the fallback.
+    """
+    load_dotenv()
+    if name is None:
+        name = (os.environ.get("LLM_PROVIDER") or DEFAULT_PROVIDER).strip().lower()
+        primary = True
+    else:
+        name = str(name).strip().lower()
+        primary = False
     name = {"xai": "grok", "groqcloud": "groq"}.get(name, name)
     if name not in PROVIDERS:
         raise ValueError(f"LLM_PROVIDER must be one of {sorted(PROVIDERS)}, got {name!r}")
     cfg = dict(PROVIDERS[name], provider=name)
     cfg.setdefault("reasoning_effort", None)
-    cfg["model"] = (os.environ.get("LLM_MODEL") or "").strip() or cfg["model"]
-    effort = (os.environ.get("LLM_REASONING_EFFORT") or "").strip().lower()
-    if effort == "default":
-        cfg["reasoning_effort"] = None
-    elif effort:
-        if effort not in REASONING_EFFORTS:
-            raise ValueError(
-                f"LLM_REASONING_EFFORT must be one of {list(REASONING_EFFORTS) + ['default']}, got {effort!r}"
-            )
-        cfg["reasoning_effort"] = effort
+    if primary:
+        cfg["model"] = (os.environ.get("LLM_MODEL") or "").strip() or cfg["model"]
+        effort = (os.environ.get("LLM_REASONING_EFFORT") or "").strip().lower()
+        if effort == "default":
+            cfg["reasoning_effort"] = None
+        elif effort:
+            if effort not in REASONING_EFFORTS:
+                raise ValueError(
+                    f"LLM_REASONING_EFFORT must be one of {list(REASONING_EFFORTS) + ['default']}, got {effort!r}"
+                )
+            # Groq gpt-oss rejects "none"; Gemini is faster when the field is omitted.
+            if effort == "none" and name in ("groq", "gemini"):
+                cfg["reasoning_effort"] = None
+            else:
+                cfg["reasoning_effort"] = effort
+    else:
+        # Prefer a different Groq model than the primary so TPD quotas do not collide.
+        # Keep the fallback provider's own default effort (do not inherit primary override).
+        cfg["model"] = (os.environ.get("LLM_FALLBACK_MODEL") or "").strip() or cfg["model"]
     cfg["api_key"] = _clean_api_key(os.environ.get(cfg["key_env"]))
     if not cfg["api_key"] and name == "grok":
         cfg["api_key"] = _clean_api_key(os.environ.get("GROK_API_KEY"))
@@ -158,13 +224,121 @@ def provider_config():
     return cfg
 
 
-def _request_args():
+def _request_args(cfg=None):
     """Per-request arguments for the configured provider."""
-    cfg = provider_config()
+    cfg = cfg or provider_config()
     args = {"model": cfg["model"]}
     if cfg["reasoning_effort"]:
         args["reasoning_effort"] = cfg["reasoning_effort"]
     return args
+
+
+# Per-attempt budget so primary hang + alt/fallback can still fit in the
+# 120 s proposal freshness window (OAM already consumed part of it).
+_LLM_ATTEMPT_TIMEOUT_S = 45.0
+_LLM_MAX_RETRIES = 0
+
+
+def _client_for(cfg):
+    _setup_logging()
+    from openai import OpenAI
+
+    # max_retries=5 previously let one Gemini hang burn >15 min and then
+    # fail freshness (age > 120 s) even when a later attempt succeeded.
+    return OpenAI(
+        base_url=cfg["base_url"],
+        api_key=cfg["api_key"],
+        timeout=_LLM_ATTEMPT_TIMEOUT_S,
+        max_retries=_LLM_MAX_RETRIES,
+    )
+
+
+def _is_rate_limited(exc):
+    text = f"{type(exc).__name__}: {exc}"
+    lower = text.lower()
+    return any(marker.lower() in lower for marker in _RATE_LIMIT_MARKERS)
+
+
+def _fallback_provider_name(primary_name):
+    raw = (os.environ.get("LLM_FALLBACK_PROVIDER") or "").strip().lower()
+    if not raw:
+        return None
+    name = {"xai": "grok", "groqcloud": "groq"}.get(raw, raw)
+    if name == primary_name or name not in PROVIDERS:
+        return None
+    return name
+
+
+def _alt_models(cfg):
+    """Same-provider alternate models when the configured model hits a free-tier cap."""
+    if cfg["provider"] == "gemini":
+        raw = os.environ.get(
+            "LLM_GEMINI_ALT_MODELS",
+            "gemini-3.6-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite",
+        )
+    elif cfg["provider"] == "groq":
+        raw = os.environ.get(
+            "LLM_GROQ_ALT_MODELS",
+            "llama-3.3-70b-versatile,llama-3.1-8b-instant,qwen/qwen3-32b",
+        )
+    else:
+        return []
+    out = []
+    for part in raw.split(","):
+        model = part.strip()
+        if model and model != cfg["model"] and model not in out:
+            out.append(model)
+    return out
+
+
+def _parse_retry_wait_seconds(message, default=60, cap=3 * 3600):
+    """Parse provider retry hints like '2h24m20s' or '13m0.6s'."""
+    import re
+
+    text = str(message or "")
+    m = re.search(
+        r"retry in\s+(?:(\d+)\s*h)?\s*(?:(\d+)\s*m)?\s*([\d.]+)\s*s",
+        text,
+        re.I,
+    )
+    if m:
+        hours = int(m.group(1) or 0)
+        mins = int(m.group(2) or 0)
+        secs = float(m.group(3) or 0)
+        return min(int(hours * 3600 + mins * 60 + secs) + 5, cap)
+    m = re.search(r"try again in\s+(\d+)m([\d.]+)s", text, re.I)
+    if m:
+        return min(int(m.group(1)) * 60 + int(float(m.group(2))) + 5, cap)
+    m = re.search(r"try again in\s+([\d.]+)s", text, re.I)
+    if m:
+        return min(int(float(m.group(1))) + 5, cap)
+    return min(default, cap)
+
+
+def _try_provider_models(base_cfg, config, user_payload, payload, models, label):
+    """Try models in order; return (decision, response, fingerprint, args, cfg) or raise last error."""
+    last = None
+    for model in models:
+        cfg = dict(base_cfg)
+        cfg["model"] = model
+        try:
+            print(f"  trying {label}: {cfg['provider']}/{model}", flush=True)
+            decision, response, fingerprint, args = _complete_with_provider(
+                cfg, config, user_payload, payload, client=None
+            )
+            return decision, response, fingerprint, args, cfg
+        except Exception as exc:
+            last = exc
+            if _is_rate_limited(exc):
+                print(
+                    f"  {cfg['provider']}/{model} rate-limited ({type(exc).__name__})",
+                    flush=True,
+                )
+                continue
+            raise
+    if last is not None:
+        raise last
+    raise RuntimeError(f"no models to try for {label}")
 
 
 LOG_ENVS = ("GROQ_LOG", "GROK_LOG", "GEMINI_LOG", "LLM_LOG")
@@ -193,14 +367,9 @@ def _setup_logging():
 
 
 def _client():
-    _setup_logging()
-    cfg = provider_config()
-    # Lazy import: episode records need PROMPT_* without the SDK installed
-    # (live-accept demos use fixed proposals; LLM calls still need openai).
-    from openai import OpenAI
-
-    # Extra retries ride out per-minute rate limits on free tiers.
-    return OpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"], max_retries=5)
+    # Lazy import path kept via _client_for; episode records need PROMPT_*
+    # without the SDK installed (live-accept demos use fixed proposals).
+    return _client_for(provider_config())
 
 
 def _model_cost(response, started):
@@ -387,14 +556,43 @@ def request_config(
     target=DEFAULT_TARGET,
     stress_mode=None,
     ticket_text=None,
+    provider_name=None,
 ):
     """Everything propose_with_predictions sends except the live telemetry."""
     from agent.validate import SUPPORTED_TARGETS, catalog_cause_ids, catalog_entries
 
     allowed_actions = list(allowed_actions or DEFAULT_ALLOWED_ACTIONS)
     target = target or DEFAULT_TARGET
+    # Gemini's OpenAI-compatible endpoint rejects this proposal schema under
+    # strict json_schema ("too many states"). json_object still returns JSON;
+    # validate_proposal enforces the contract after the call.
+    provider = provider_config(provider_name)["provider"]
+    system = PREDICTION_SYSTEM_PROMPT
+    if provider == "gemini":
+        response_format = {"type": "json_object"}
+        system = (
+            PREDICTION_SYSTEM_PROMPT
+            + "\n\nReturn ONLY a JSON object with keys action, target, "
+            "proposed_path, reason, causes. Every causes[i] MUST include "
+            "cause_id and a non-empty predicted_tests array of "
+            "{test_id, expected} objects. Omit prose outside the JSON."
+        )
+    else:
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": SCHEMA_NAME,
+                "strict": True,
+                "schema": llm_proposal_schema(
+                    allowed_actions,
+                    predictions=True,
+                    cause_ids=sorted(catalog_cause_ids()),
+                    targets=sorted(SUPPORTED_TARGETS),
+                ),
+            },
+        }
     return {
-        "system": PREDICTION_SYSTEM_PROMPT,
+        "system": system,
         "telemetry_key": TELEMETRY_KEY,
         "snapshot_view": SNAPSHOT_VIEW,
         "payload": {
@@ -409,19 +607,8 @@ def request_config(
             "stress_mode": stress_mode,
             "ticket_text": ticket_text,
         },
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": {
-                "name": SCHEMA_NAME,
-                "strict": True,
-                "schema": llm_proposal_schema(
-                    allowed_actions,
-                    predictions=True,
-                    cause_ids=sorted(catalog_cause_ids()),
-                    targets=sorted(SUPPORTED_TARGETS),
-                ),
-            },
-        },
+        "response_format": response_format,
+        "provider": provider,
     }
 
 
@@ -441,9 +628,9 @@ def prompt_sha256():
 PROMPT_SHA256 = prompt_sha256()
 
 
-def request_fingerprint(config, request_args):
+def request_fingerprint(config, request_args, cfg=None):
     """Identity of one actual model request: full config plus provider, model and effort."""
-    cfg = provider_config()
+    cfg = cfg or provider_config()
     provider = {
         "provider": cfg["provider"],
         "base_url": cfg["base_url"],
@@ -538,6 +725,60 @@ def propose_decision(
     return decision
 
 
+def _complete_with_provider(
+    cfg,
+    config,
+    user_payload,
+    payload,
+    client=None,
+):
+    """One provider attempt, including a Gemini json_object repair pass."""
+    args = _request_args(cfg)
+    fingerprint = request_fingerprint(config, args, cfg=cfg)
+    messages = [
+        {"role": "system", "content": config["system"]},
+        {"role": "user", "content": json.dumps(user_payload, indent=2)},
+    ]
+    client = client or _client_for(cfg)
+    try:
+        response = client.chat.completions.create(
+            **args,
+            messages=messages,
+            response_format=config["response_format"],
+        )
+        decision = _decision_from_response(response, payload["allowed_action_types"], payload["target"])
+    except AgentOutputError as first_err:
+        if cfg["provider"] != "gemini":
+            first_err.request_fingerprint = fingerprint
+            raise
+        repair = {
+            "role": "user",
+            "content": (
+                "Your previous JSON was invalid: "
+                + "; ".join(first_err.errors or [str(first_err)])
+                + ". Resend the full JSON object; every cause must include "
+                "predicted_tests with {test_id, expected} entries."
+            ),
+        }
+        try:
+            response = client.chat.completions.create(
+                **args,
+                messages=messages
+                + [
+                    {"role": "assistant", "content": first_err.raw or "{}"},
+                    repair,
+                ],
+                response_format=config["response_format"],
+            )
+            decision = _decision_from_response(
+                response, payload["allowed_action_types"], payload["target"]
+            )
+        except Exception as exc:
+            exc.request_fingerprint = fingerprint
+            raise
+    return decision, response, fingerprint, args
+
+
 def propose_with_predictions(
     network_state,
     allowed_actions=None,
@@ -550,32 +791,92 @@ def propose_with_predictions(
 ):
     """Phase 8: fix proposal plus structured OAM predictions per cause.
 
-    The request is built only from request_config, so the recorded
-    fingerprint describes exactly what was sent.
+    On primary rate/quota limits, retries once with LLM_FALLBACK_PROVIDER
+    (typically groq) when that key is set.
     """
-    config = request_config(allowed_actions, policy_context, oam_test_catalog, target, stress_mode, ticket_text)
-    args = _request_args()
-    fingerprint = request_fingerprint(config, args)
+    primary = provider_config()
+    config = request_config(
+        allowed_actions,
+        policy_context,
+        oam_test_catalog,
+        target,
+        stress_mode,
+        ticket_text,
+        provider_name=primary["provider"],
+    )
     payload = config["payload"]
     user_payload = {config["telemetry_key"]: model_snapshot_view(network_state), **payload}
 
     started = time.monotonic()
+    used = primary
     try:
-        client = client or _client()
-        response = client.chat.completions.create(
-            **args,
-            messages=[
-                {"role": "system", "content": config["system"]},
-                {"role": "user", "content": json.dumps(user_payload, indent=2)},
-            ],
-            response_format=config["response_format"],
+        decision, response, fingerprint, args = _complete_with_provider(
+            primary, config, user_payload, payload, client=client
         )
-        decision = _decision_from_response(response, payload["allowed_action_types"], payload["target"])
-    except Exception as exc:
-        exc.request_fingerprint = fingerprint
-        raise
+    except Exception as primary_exc:
+        if not _is_rate_limited(primary_exc):
+            primary_exc.request_fingerprint = getattr(primary_exc, "request_fingerprint", None)
+            raise
+
+        # 1) Same-provider alternate models (separate free-tier quotas).
+        alts = _alt_models(primary)
+        if alts:
+            try:
+                decision, response, fingerprint, args, used = _try_provider_models(
+                    primary, config, user_payload, payload, alts, "alt-model"
+                )
+            except Exception as alt_exc:
+                if not _is_rate_limited(alt_exc):
+                    alt_exc.request_fingerprint = getattr(alt_exc, "request_fingerprint", None)
+                    raise
+                primary_exc = alt_exc
+            else:
+                decision["_cost"] = _model_cost(response, started)
+                decision["_fingerprint"] = fingerprint
+                decision["_provider"] = used["provider"]
+                decision["_model"] = used["model"]
+                return decision
+
+        # 2) Cross-provider fallback (e.g. groq) plus that provider's alt models.
+        fallback_name = _fallback_provider_name(primary["provider"])
+        if not fallback_name:
+            primary_exc.request_fingerprint = getattr(primary_exc, "request_fingerprint", None)
+            raise
+        fallback = provider_config(fallback_name)
+        if not fallback.get("api_key"):
+            primary_exc.request_fingerprint = getattr(primary_exc, "request_fingerprint", None)
+            raise
+        print(
+            f"  provider fallback: {primary['provider']} -> "
+            f"{fallback['provider']}/{fallback['model']} ({type(primary_exc).__name__})",
+            flush=True,
+        )
+        fb_config = request_config(
+            allowed_actions,
+            policy_context,
+            oam_test_catalog,
+            target,
+            stress_mode,
+            ticket_text,
+            provider_name=fallback["provider"],
+        )
+        fb_payload = fb_config["payload"]
+        fb_user = {fb_config["telemetry_key"]: model_snapshot_view(network_state), **fb_payload}
+        fb_models = [fallback["model"]] + _alt_models(fallback)
+        try:
+            decision, response, fingerprint, args, used = _try_provider_models(
+                fallback, fb_config, fb_user, fb_payload, fb_models, "fallback"
+            )
+        except Exception as fb_exc:
+            # Do not sleep for provider retry hints here: the proposal must
+            # stay inside the 120 s freshness window, so a multi-minute wait
+            # only produces stale invalid_output. Fail the episode fast.
+            fb_exc.request_fingerprint = getattr(fb_exc, "request_fingerprint", None)
+            raise
     decision["_cost"] = _model_cost(response, started)
     decision["_fingerprint"] = fingerprint
+    decision["_provider"] = used["provider"]
+    decision["_model"] = used["model"]
     return decision
 
 

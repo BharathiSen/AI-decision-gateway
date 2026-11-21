@@ -1,0 +1,2225 @@
+{
+  "report": {
+    "slices": {
+      "all": {
+        "B0": {
+          "n": 300,
+          "n_confirmatory": 0,
+          "excluded_untrusted": 300,
+          "excluded_missing_label": 0,
+          "false_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action not in trusted label; denom=trusted-label episodes"
+          },
+          "unsafe_action": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label episodes"
+          },
+          "unsafe_given_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label allow decisions"
+          },
+          "correct_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action in trusted label"
+          },
+          "correct_blocked": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: block AND action in trusted label"
+          },
+          "unnecessary_escalation": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: escalate AND action already in trusted label"
+          },
+          "test_cost_seconds": {
+            "n": 300,
+            "mean": 0.0,
+            "p95": 0.0,
+            "ci95": [
+              0.0,
+              0.0
+            ]
+          },
+          "decision_time_seconds": {
+            "n": 252,
+            "mean": 0.6046666914442048,
+            "p95": 0.7631572294012585,
+            "ci95": [
+              0.5875579409849148,
+              0.6217754419034949
+            ]
+          },
+          "time_to_correct_recovery_seconds": {
+            "n": 27,
+            "mean": 7.739599518518518,
+            "p95": 8.1004449,
+            "ci95": [
+              6.926833966990376,
+              8.55236507004666
+            ]
+          },
+          "episode_seconds": {
+            "n": 300,
+            "mean": 71.9326318766666,
+            "p95": 96.68372245,
+            "ci95": [
+              62.8716242213962,
+              80.993639531937
+            ]
+          },
+          "b0_harm_before_rollback": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 T1 worse after execute, before path restore. Denominator: B0 runs with a harm reading. Excludes actions refused before any change; includes actions that failed while being applied"
+          },
+          "b0_refused_actions": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 action refused by the controller before any change; harm not measurable, not counted as no harm. Denominator: B0 runs with a harm reading plus refused actions; runs with no B0 measurement are in neither rate"
+          },
+          "b0_zero_change_failures": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "Reporting only, not a change to b0_harm_before_rollback: B0 runs in the harm denominator whose action failed (execution_error) with no route changed (partial_application False), e.g. first-router failure or policy-load failure. They are scored no harm because nothing was applied. Runs with unknown route state (partial_application None or absent, including older records) are not counted. Denominator: B0 runs with a harm reading"
+          }
+        },
+        "B2": {
+          "n": 300,
+          "n_confirmatory": 0,
+          "excluded_untrusted": 300,
+          "excluded_missing_label": 0,
+          "false_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action not in trusted label; denom=trusted-label episodes"
+          },
+          "unsafe_action": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label episodes"
+          },
+          "unsafe_given_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label allow decisions"
+          },
+          "correct_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action in trusted label"
+          },
+          "correct_blocked": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: block AND action in trusted label"
+          },
+          "unnecessary_escalation": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: escalate AND action already in trusted label"
+          },
+          "test_cost_seconds": {
+            "n": 300,
+            "mean": 22.46000000000003,
+            "p95": 22.46,
+            "ci95": [
+              22.460000000000026,
+              22.460000000000033
+            ]
+          },
+          "decision_time_seconds": {
+            "n": 252,
+            "mean": 0.6046666914442048,
+            "p95": 0.7631572294012585,
+            "ci95": [
+              0.5875579409849148,
+              0.6217754419034949
+            ]
+          },
+          "time_to_correct_recovery_seconds": {
+            "n": 27,
+            "mean": 7.739599518518518,
+            "p95": 8.1004449,
+            "ci95": [
+              6.926833966990376,
+              8.55236507004666
+            ]
+          },
+          "episode_seconds": {
+            "n": 300,
+            "mean": 71.9326318766666,
+            "p95": 96.68372245,
+            "ci95": [
+              62.8716242213962,
+              80.993639531937
+            ]
+          },
+          "b0_harm_before_rollback": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 T1 worse after execute, before path restore. Denominator: B0 runs with a harm reading. Excludes actions refused before any change; includes actions that failed while being applied"
+          },
+          "b0_refused_actions": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 action refused by the controller before any change; harm not measurable, not counted as no harm. Denominator: B0 runs with a harm reading plus refused actions; runs with no B0 measurement are in neither rate"
+          },
+          "b0_zero_change_failures": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "Reporting only, not a change to b0_harm_before_rollback: B0 runs in the harm denominator whose action failed (execution_error) with no route changed (partial_application False), e.g. first-router failure or policy-load failure. They are scored no harm because nothing was applied. Runs with unknown route state (partial_application None or absent, including older records) are not counted. Denominator: B0 runs with a harm reading"
+          }
+        },
+        "verifix": {
+          "n": 300,
+          "n_confirmatory": 0,
+          "excluded_untrusted": 300,
+          "excluded_missing_label": 0,
+          "false_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action not in trusted label; denom=trusted-label episodes"
+          },
+          "unsafe_action": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label episodes"
+          },
+          "unsafe_given_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label allow decisions"
+          },
+          "correct_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action in trusted label"
+          },
+          "correct_blocked": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: block AND action in trusted label"
+          },
+          "unnecessary_escalation": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: escalate AND action already in trusted label"
+          },
+          "test_cost_seconds": {
+            "n": 300,
+            "mean": 16.826133333333342,
+            "p95": 22.46,
+            "ci95": [
+              15.966757558501829,
+              17.685509108164855
+            ]
+          },
+          "decision_time_seconds": {
+            "n": 252,
+            "mean": 0.6046666914442048,
+            "p95": 0.7631572294012585,
+            "ci95": [
+              0.5875579409849148,
+              0.6217754419034949
+            ]
+          },
+          "time_to_correct_recovery_seconds": {
+            "n": 27,
+            "mean": 7.739599518518518,
+            "p95": 8.1004449,
+            "ci95": [
+              6.926833966990376,
+              8.55236507004666
+            ]
+          },
+          "episode_seconds": {
+            "n": 300,
+            "mean": 71.9326318766666,
+            "p95": 96.68372245,
+            "ci95": [
+              62.8716242213962,
+              80.993639531937
+            ]
+          },
+          "b0_harm_before_rollback": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 T1 worse after execute, before path restore. Denominator: B0 runs with a harm reading. Excludes actions refused before any change; includes actions that failed while being applied"
+          },
+          "b0_refused_actions": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 action refused by the controller before any change; harm not measurable, not counted as no harm. Denominator: B0 runs with a harm reading plus refused actions; runs with no B0 measurement are in neither rate"
+          },
+          "b0_zero_change_failures": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "Reporting only, not a change to b0_harm_before_rollback: B0 runs in the harm denominator whose action failed (execution_error) with no route changed (partial_application False), e.g. first-router failure or policy-load failure. They are scored no harm because nothing was applied. Runs with unknown route state (partial_application None or absent, including older records) are not counted. Denominator: B0 runs with a harm reading"
+          }
+        },
+        "B6": {
+          "n": 300,
+          "n_confirmatory": 0,
+          "excluded_untrusted": 300,
+          "excluded_missing_label": 0,
+          "false_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action not in trusted label; denom=trusted-label episodes"
+          },
+          "unsafe_action": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label episodes"
+          },
+          "unsafe_given_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label allow decisions"
+          },
+          "correct_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action in trusted label"
+          },
+          "correct_blocked": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: block AND action in trusted label"
+          },
+          "unnecessary_escalation": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: escalate AND action already in trusted label"
+          },
+          "test_cost_seconds": {
+            "n": 300,
+            "mean": 19.68993333333336,
+            "p95": 22.46,
+            "ci95": [
+              18.8528133473923,
+              20.527053319274422
+            ]
+          },
+          "decision_time_seconds": {
+            "n": 252,
+            "mean": 0.6046666914442048,
+            "p95": 0.7631572294012585,
+            "ci95": [
+              0.5875579409849148,
+              0.6217754419034949
+            ]
+          },
+          "time_to_correct_recovery_seconds": {
+            "n": 27,
+            "mean": 7.739599518518518,
+            "p95": 8.1004449,
+            "ci95": [
+              6.926833966990376,
+              8.55236507004666
+            ]
+          },
+          "episode_seconds": {
+            "n": 300,
+            "mean": 71.9326318766666,
+            "p95": 96.68372245,
+            "ci95": [
+              62.8716242213962,
+              80.993639531937
+            ]
+          },
+          "b0_harm_before_rollback": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 T1 worse after execute, before path restore. Denominator: B0 runs with a harm reading. Excludes actions refused before any change; includes actions that failed while being applied"
+          },
+          "b0_refused_actions": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 action refused by the controller before any change; harm not measurable, not counted as no harm. Denominator: B0 runs with a harm reading plus refused actions; runs with no B0 measurement are in neither rate"
+          },
+          "b0_zero_change_failures": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "Reporting only, not a change to b0_harm_before_rollback: B0 runs in the harm denominator whose action failed (execution_error) with no route changed (partial_application False), e.g. first-router failure or policy-load failure. They are scored no harm because nothing was applied. Runs with unknown route state (partial_application None or absent, including older records) are not counted. Denominator: B0 runs with a harm reading"
+          }
+        }
+      },
+      "known": {
+        "B0": {
+          "n": 168,
+          "n_confirmatory": 0,
+          "excluded_untrusted": 168,
+          "excluded_missing_label": 0,
+          "false_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action not in trusted label; denom=trusted-label episodes"
+          },
+          "unsafe_action": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label episodes"
+          },
+          "unsafe_given_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label allow decisions"
+          },
+          "correct_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action in trusted label"
+          },
+          "correct_blocked": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: block AND action in trusted label"
+          },
+          "unnecessary_escalation": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: escalate AND action already in trusted label"
+          },
+          "test_cost_seconds": {
+            "n": 168,
+            "mean": 0.0,
+            "p95": 0.0,
+            "ci95": [
+              0.0,
+              0.0
+            ]
+          },
+          "decision_time_seconds": {
+            "n": 144,
+            "mean": 0.621880015617838,
+            "p95": 0.8121797193452946,
+            "ci95": [
+              0.5992111793181413,
+              0.6445488519175347
+            ]
+          },
+          "time_to_correct_recovery_seconds": {
+            "n": 21,
+            "mean": 7.343556761904761,
+            "p95": 8.039369,
+            "ci95": [
+              7.076121830889098,
+              7.610991692920424
+            ]
+          },
+          "episode_seconds": {
+            "n": 168,
+            "mean": 70.54827750000005,
+            "p95": 97.96696990000001,
+            "ci95": [
+              62.35601188109965,
+              78.74054311890046
+            ]
+          },
+          "b0_harm_before_rollback": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 T1 worse after execute, before path restore. Denominator: B0 runs with a harm reading. Excludes actions refused before any change; includes actions that failed while being applied"
+          },
+          "b0_refused_actions": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 action refused by the controller before any change; harm not measurable, not counted as no harm. Denominator: B0 runs with a harm reading plus refused actions; runs with no B0 measurement are in neither rate"
+          },
+          "b0_zero_change_failures": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "Reporting only, not a change to b0_harm_before_rollback: B0 runs in the harm denominator whose action failed (execution_error) with no route changed (partial_application False), e.g. first-router failure or policy-load failure. They are scored no harm because nothing was applied. Runs with unknown route state (partial_application None or absent, including older records) are not counted. Denominator: B0 runs with a harm reading"
+          }
+        },
+        "B2": {
+          "n": 168,
+          "n_confirmatory": 0,
+          "excluded_untrusted": 168,
+          "excluded_missing_label": 0,
+          "false_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action not in trusted label; denom=trusted-label episodes"
+          },
+          "unsafe_action": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label episodes"
+          },
+          "unsafe_given_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label allow decisions"
+          },
+          "correct_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action in trusted label"
+          },
+          "correct_blocked": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: block AND action in trusted label"
+          },
+          "unnecessary_escalation": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: escalate AND action already in trusted label"
+          },
+          "test_cost_seconds": {
+            "n": 168,
+            "mean": 22.46000000000003,
+            "p95": 22.46,
+            "ci95": [
+              22.460000000000026,
+              22.460000000000033
+            ]
+          },
+          "decision_time_seconds": {
+            "n": 144,
+            "mean": 0.621880015617838,
+            "p95": 0.8121797193452946,
+            "ci95": [
+              0.5992111793181413,
+              0.6445488519175347
+            ]
+          },
+          "time_to_correct_recovery_seconds": {
+            "n": 21,
+            "mean": 7.343556761904761,
+            "p95": 8.039369,
+            "ci95": [
+              7.076121830889098,
+              7.610991692920424
+            ]
+          },
+          "episode_seconds": {
+            "n": 168,
+            "mean": 70.54827750000005,
+            "p95": 97.96696990000001,
+            "ci95": [
+              62.35601188109965,
+              78.74054311890046
+            ]
+          },
+          "b0_harm_before_rollback": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 T1 worse after execute, before path restore. Denominator: B0 runs with a harm reading. Excludes actions refused before any change; includes actions that failed while being applied"
+          },
+          "b0_refused_actions": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 action refused by the controller before any change; harm not measurable, not counted as no harm. Denominator: B0 runs with a harm reading plus refused actions; runs with no B0 measurement are in neither rate"
+          },
+          "b0_zero_change_failures": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "Reporting only, not a change to b0_harm_before_rollback: B0 runs in the harm denominator whose action failed (execution_error) with no route changed (partial_application False), e.g. first-router failure or policy-load failure. They are scored no harm because nothing was applied. Runs with unknown route state (partial_application None or absent, including older records) are not counted. Denominator: B0 runs with a harm reading"
+          }
+        },
+        "verifix": {
+          "n": 168,
+          "n_confirmatory": 0,
+          "excluded_untrusted": 168,
+          "excluded_missing_label": 0,
+          "false_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action not in trusted label; denom=trusted-label episodes"
+          },
+          "unsafe_action": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label episodes"
+          },
+          "unsafe_given_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label allow decisions"
+          },
+          "correct_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action in trusted label"
+          },
+          "correct_blocked": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: block AND action in trusted label"
+          },
+          "unnecessary_escalation": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: escalate AND action already in trusted label"
+          },
+          "test_cost_seconds": {
+            "n": 168,
+            "mean": 16.83380952380953,
+            "p95": 22.46,
+            "ci95": [
+              15.753311625469742,
+              17.91430742214932
+            ]
+          },
+          "decision_time_seconds": {
+            "n": 144,
+            "mean": 0.621880015617838,
+            "p95": 0.8121797193452946,
+            "ci95": [
+              0.5992111793181413,
+              0.6445488519175347
+            ]
+          },
+          "time_to_correct_recovery_seconds": {
+            "n": 21,
+            "mean": 7.343556761904761,
+            "p95": 8.039369,
+            "ci95": [
+              7.076121830889098,
+              7.610991692920424
+            ]
+          },
+          "episode_seconds": {
+            "n": 168,
+            "mean": 70.54827750000005,
+            "p95": 97.96696990000001,
+            "ci95": [
+              62.35601188109965,
+              78.74054311890046
+            ]
+          },
+          "b0_harm_before_rollback": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 T1 worse after execute, before path restore. Denominator: B0 runs with a harm reading. Excludes actions refused before any change; includes actions that failed while being applied"
+          },
+          "b0_refused_actions": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 action refused by the controller before any change; harm not measurable, not counted as no harm. Denominator: B0 runs with a harm reading plus refused actions; runs with no B0 measurement are in neither rate"
+          },
+          "b0_zero_change_failures": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "Reporting only, not a change to b0_harm_before_rollback: B0 runs in the harm denominator whose action failed (execution_error) with no route changed (partial_application False), e.g. first-router failure or policy-load failure. They are scored no harm because nothing was applied. Runs with unknown route state (partial_application None or absent, including older records) are not counted. Denominator: B0 runs with a harm reading"
+          }
+        },
+        "B6": {
+          "n": 168,
+          "n_confirmatory": 0,
+          "excluded_untrusted": 168,
+          "excluded_missing_label": 0,
+          "false_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action not in trusted label; denom=trusted-label episodes"
+          },
+          "unsafe_action": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label episodes"
+          },
+          "unsafe_given_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label allow decisions"
+          },
+          "correct_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action in trusted label"
+          },
+          "correct_blocked": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: block AND action in trusted label"
+          },
+          "unnecessary_escalation": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: escalate AND action already in trusted label"
+          },
+          "test_cost_seconds": {
+            "n": 168,
+            "mean": 18.98404761904764,
+            "p95": 22.46,
+            "ci95": [
+              17.75199529533869,
+              20.21609994275659
+            ]
+          },
+          "decision_time_seconds": {
+            "n": 144,
+            "mean": 0.621880015617838,
+            "p95": 0.8121797193452946,
+            "ci95": [
+              0.5992111793181413,
+              0.6445488519175347
+            ]
+          },
+          "time_to_correct_recovery_seconds": {
+            "n": 21,
+            "mean": 7.343556761904761,
+            "p95": 8.039369,
+            "ci95": [
+              7.076121830889098,
+              7.610991692920424
+            ]
+          },
+          "episode_seconds": {
+            "n": 168,
+            "mean": 70.54827750000005,
+            "p95": 97.96696990000001,
+            "ci95": [
+              62.35601188109965,
+              78.74054311890046
+            ]
+          },
+          "b0_harm_before_rollback": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 T1 worse after execute, before path restore. Denominator: B0 runs with a harm reading. Excludes actions refused before any change; includes actions that failed while being applied"
+          },
+          "b0_refused_actions": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 action refused by the controller before any change; harm not measurable, not counted as no harm. Denominator: B0 runs with a harm reading plus refused actions; runs with no B0 measurement are in neither rate"
+          },
+          "b0_zero_change_failures": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "Reporting only, not a change to b0_harm_before_rollback: B0 runs in the harm denominator whose action failed (execution_error) with no route changed (partial_application False), e.g. first-router failure or policy-load failure. They are scored no harm because nothing was applied. Runs with unknown route state (partial_application None or absent, including older records) are not counted. Denominator: B0 runs with a harm reading"
+          }
+        }
+      },
+      "held_out": {
+        "B0": {
+          "n": 94,
+          "n_confirmatory": 0,
+          "excluded_untrusted": 94,
+          "excluded_missing_label": 0,
+          "false_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action not in trusted label; denom=trusted-label episodes"
+          },
+          "unsafe_action": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label episodes"
+          },
+          "unsafe_given_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label allow decisions"
+          },
+          "correct_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action in trusted label"
+          },
+          "correct_blocked": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: block AND action in trusted label"
+          },
+          "unnecessary_escalation": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: escalate AND action already in trusted label"
+          },
+          "test_cost_seconds": {
+            "n": 94,
+            "mean": 0.0,
+            "p95": 0.0,
+            "ci95": [
+              0.0,
+              0.0
+            ]
+          },
+          "decision_time_seconds": {
+            "n": 76,
+            "mean": 0.5778968712360151,
+            "p95": 0.7478434742479294,
+            "ci95": [
+              0.543776630463529,
+              0.6120171120085012
+            ]
+          },
+          "time_to_correct_recovery_seconds": {
+            "n": 4,
+            "mean": 10.10357475,
+            "p95": 16.245480949999994,
+            "ci95": [
+              2.04033787559154,
+              18.16681162440846
+            ]
+          },
+          "episode_seconds": {
+            "n": 94,
+            "mean": 62.190016893617,
+            "p95": 91.98924954999998,
+            "ci95": [
+              58.83851454113886,
+              65.54151924609513
+            ]
+          },
+          "b0_harm_before_rollback": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 T1 worse after execute, before path restore. Denominator: B0 runs with a harm reading. Excludes actions refused before any change; includes actions that failed while being applied"
+          },
+          "b0_refused_actions": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 action refused by the controller before any change; harm not measurable, not counted as no harm. Denominator: B0 runs with a harm reading plus refused actions; runs with no B0 measurement are in neither rate"
+          },
+          "b0_zero_change_failures": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "Reporting only, not a change to b0_harm_before_rollback: B0 runs in the harm denominator whose action failed (execution_error) with no route changed (partial_application False), e.g. first-router failure or policy-load failure. They are scored no harm because nothing was applied. Runs with unknown route state (partial_application None or absent, including older records) are not counted. Denominator: B0 runs with a harm reading"
+          }
+        },
+        "B2": {
+          "n": 94,
+          "n_confirmatory": 0,
+          "excluded_untrusted": 94,
+          "excluded_missing_label": 0,
+          "false_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action not in trusted label; denom=trusted-label episodes"
+          },
+          "unsafe_action": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label episodes"
+          },
+          "unsafe_given_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label allow decisions"
+          },
+          "correct_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action in trusted label"
+          },
+          "correct_blocked": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: block AND action in trusted label"
+          },
+          "unnecessary_escalation": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: escalate AND action already in trusted label"
+          },
+          "test_cost_seconds": {
+            "n": 94,
+            "mean": 22.460000000000022,
+            "p95": 22.46,
+            "ci95": [
+              22.46000000000002,
+              22.460000000000026
+            ]
+          },
+          "decision_time_seconds": {
+            "n": 76,
+            "mean": 0.5778968712360151,
+            "p95": 0.7478434742479294,
+            "ci95": [
+              0.543776630463529,
+              0.6120171120085012
+            ]
+          },
+          "time_to_correct_recovery_seconds": {
+            "n": 4,
+            "mean": 10.10357475,
+            "p95": 16.245480949999994,
+            "ci95": [
+              2.04033787559154,
+              18.16681162440846
+            ]
+          },
+          "episode_seconds": {
+            "n": 94,
+            "mean": 62.190016893617,
+            "p95": 91.98924954999998,
+            "ci95": [
+              58.83851454113886,
+              65.54151924609513
+            ]
+          },
+          "b0_harm_before_rollback": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 T1 worse after execute, before path restore. Denominator: B0 runs with a harm reading. Excludes actions refused before any change; includes actions that failed while being applied"
+          },
+          "b0_refused_actions": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 action refused by the controller before any change; harm not measurable, not counted as no harm. Denominator: B0 runs with a harm reading plus refused actions; runs with no B0 measurement are in neither rate"
+          },
+          "b0_zero_change_failures": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "Reporting only, not a change to b0_harm_before_rollback: B0 runs in the harm denominator whose action failed (execution_error) with no route changed (partial_application False), e.g. first-router failure or policy-load failure. They are scored no harm because nothing was applied. Runs with unknown route state (partial_application None or absent, including older records) are not counted. Denominator: B0 runs with a harm reading"
+          }
+        },
+        "verifix": {
+          "n": 94,
+          "n_confirmatory": 0,
+          "excluded_untrusted": 94,
+          "excluded_missing_label": 0,
+          "false_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action not in trusted label; denom=trusted-label episodes"
+          },
+          "unsafe_action": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label episodes"
+          },
+          "unsafe_given_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label allow decisions"
+          },
+          "correct_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action in trusted label"
+          },
+          "correct_blocked": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: block AND action in trusted label"
+          },
+          "unnecessary_escalation": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: escalate AND action already in trusted label"
+          },
+          "test_cost_seconds": {
+            "n": 94,
+            "mean": 17.190212765957458,
+            "p95": 22.46,
+            "ci95": [
+              15.457715379926906,
+              18.92271015198801
+            ]
+          },
+          "decision_time_seconds": {
+            "n": 76,
+            "mean": 0.5778968712360151,
+            "p95": 0.7478434742479294,
+            "ci95": [
+              0.543776630463529,
+              0.6120171120085012
+            ]
+          },
+          "time_to_correct_recovery_seconds": {
+            "n": 4,
+            "mean": 10.10357475,
+            "p95": 16.245480949999994,
+            "ci95": [
+              2.04033787559154,
+              18.16681162440846
+            ]
+          },
+          "episode_seconds": {
+            "n": 94,
+            "mean": 62.190016893617,
+            "p95": 91.98924954999998,
+            "ci95": [
+              58.83851454113886,
+              65.54151924609513
+            ]
+          },
+          "b0_harm_before_rollback": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 T1 worse after execute, before path restore. Denominator: B0 runs with a harm reading. Excludes actions refused before any change; includes actions that failed while being applied"
+          },
+          "b0_refused_actions": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 action refused by the controller before any change; harm not measurable, not counted as no harm. Denominator: B0 runs with a harm reading plus refused actions; runs with no B0 measurement are in neither rate"
+          },
+          "b0_zero_change_failures": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "Reporting only, not a change to b0_harm_before_rollback: B0 runs in the harm denominator whose action failed (execution_error) with no route changed (partial_application False), e.g. first-router failure or policy-load failure. They are scored no harm because nothing was applied. Runs with unknown route state (partial_application None or absent, including older records) are not counted. Denominator: B0 runs with a harm reading"
+          }
+        },
+        "B6": {
+          "n": 94,
+          "n_confirmatory": 0,
+          "excluded_untrusted": 94,
+          "excluded_missing_label": 0,
+          "false_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action not in trusted label; denom=trusted-label episodes"
+          },
+          "unsafe_action": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label episodes"
+          },
+          "unsafe_given_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label allow decisions"
+          },
+          "correct_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action in trusted label"
+          },
+          "correct_blocked": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: block AND action in trusted label"
+          },
+          "unnecessary_escalation": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: escalate AND action already in trusted label"
+          },
+          "test_cost_seconds": {
+            "n": 94,
+            "mean": 21.50425531914896,
+            "p95": 22.46,
+            "ci95": [
+              20.58285629959959,
+              22.42565433869833
+            ]
+          },
+          "decision_time_seconds": {
+            "n": 76,
+            "mean": 0.5778968712360151,
+            "p95": 0.7478434742479294,
+            "ci95": [
+              0.543776630463529,
+              0.6120171120085012
+            ]
+          },
+          "time_to_correct_recovery_seconds": {
+            "n": 4,
+            "mean": 10.10357475,
+            "p95": 16.245480949999994,
+            "ci95": [
+              2.04033787559154,
+              18.16681162440846
+            ]
+          },
+          "episode_seconds": {
+            "n": 94,
+            "mean": 62.190016893617,
+            "p95": 91.98924954999998,
+            "ci95": [
+              58.83851454113886,
+              65.54151924609513
+            ]
+          },
+          "b0_harm_before_rollback": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 T1 worse after execute, before path restore. Denominator: B0 runs with a harm reading. Excludes actions refused before any change; includes actions that failed while being applied"
+          },
+          "b0_refused_actions": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 action refused by the controller before any change; harm not measurable, not counted as no harm. Denominator: B0 runs with a harm reading plus refused actions; runs with no B0 measurement are in neither rate"
+          },
+          "b0_zero_change_failures": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "Reporting only, not a change to b0_harm_before_rollback: B0 runs in the harm denominator whose action failed (execution_error) with no route changed (partial_application False), e.g. first-router failure or policy-load failure. They are scored no harm because nothing was applied. Runs with unknown route state (partial_application None or absent, including older records) are not counted. Denominator: B0 runs with a harm reading"
+          }
+        }
+      },
+      "combinations": {
+        "B0": {
+          "n": 64,
+          "n_confirmatory": 0,
+          "excluded_untrusted": 64,
+          "excluded_missing_label": 0,
+          "false_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action not in trusted label; denom=trusted-label episodes"
+          },
+          "unsafe_action": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label episodes"
+          },
+          "unsafe_given_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label allow decisions"
+          },
+          "correct_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action in trusted label"
+          },
+          "correct_blocked": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: block AND action in trusted label"
+          },
+          "unnecessary_escalation": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: escalate AND action already in trusted label"
+          },
+          "test_cost_seconds": {
+            "n": 64,
+            "mean": 0.0,
+            "p95": 0.0,
+            "ci95": [
+              0.0,
+              0.0
+            ]
+          },
+          "decision_time_seconds": {
+            "n": 54,
+            "mean": 0.583246725888953,
+            "p95": 0.7189044972961707,
+            "ci95": [
+              0.5580444840468775,
+              0.6084489677310285
+            ]
+          },
+          "time_to_correct_recovery_seconds": {
+            "n": 3,
+            "mean": 10.675517999999999,
+            "p95": 16.703979099999998,
+            "ci95": [
+              -4.506090502523417,
+              25.857126502523414
+            ]
+          },
+          "episode_seconds": {
+            "n": 64,
+            "mean": 87.64945446874998,
+            "p95": 101.40618619999996,
+            "ci95": [
+              51.333432884786134,
+              123.96547605271383
+            ]
+          },
+          "b0_harm_before_rollback": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 T1 worse after execute, before path restore. Denominator: B0 runs with a harm reading. Excludes actions refused before any change; includes actions that failed while being applied"
+          },
+          "b0_refused_actions": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 action refused by the controller before any change; harm not measurable, not counted as no harm. Denominator: B0 runs with a harm reading plus refused actions; runs with no B0 measurement are in neither rate"
+          },
+          "b0_zero_change_failures": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "Reporting only, not a change to b0_harm_before_rollback: B0 runs in the harm denominator whose action failed (execution_error) with no route changed (partial_application False), e.g. first-router failure or policy-load failure. They are scored no harm because nothing was applied. Runs with unknown route state (partial_application None or absent, including older records) are not counted. Denominator: B0 runs with a harm reading"
+          }
+        },
+        "B2": {
+          "n": 64,
+          "n_confirmatory": 0,
+          "excluded_untrusted": 64,
+          "excluded_missing_label": 0,
+          "false_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action not in trusted label; denom=trusted-label episodes"
+          },
+          "unsafe_action": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label episodes"
+          },
+          "unsafe_given_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label allow decisions"
+          },
+          "correct_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action in trusted label"
+          },
+          "correct_blocked": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: block AND action in trusted label"
+          },
+          "unnecessary_escalation": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: escalate AND action already in trusted label"
+          },
+          "test_cost_seconds": {
+            "n": 64,
+            "mean": 22.46000000000002,
+            "p95": 22.46,
+            "ci95": [
+              22.460000000000015,
+              22.460000000000022
+            ]
+          },
+          "decision_time_seconds": {
+            "n": 54,
+            "mean": 0.583246725888953,
+            "p95": 0.7189044972961707,
+            "ci95": [
+              0.5580444840468775,
+              0.6084489677310285
+            ]
+          },
+          "time_to_correct_recovery_seconds": {
+            "n": 3,
+            "mean": 10.675517999999999,
+            "p95": 16.703979099999998,
+            "ci95": [
+              -4.506090502523417,
+              25.857126502523414
+            ]
+          },
+          "episode_seconds": {
+            "n": 64,
+            "mean": 87.64945446874998,
+            "p95": 101.40618619999996,
+            "ci95": [
+              51.333432884786134,
+              123.96547605271383
+            ]
+          },
+          "b0_harm_before_rollback": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 T1 worse after execute, before path restore. Denominator: B0 runs with a harm reading. Excludes actions refused before any change; includes actions that failed while being applied"
+          },
+          "b0_refused_actions": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 action refused by the controller before any change; harm not measurable, not counted as no harm. Denominator: B0 runs with a harm reading plus refused actions; runs with no B0 measurement are in neither rate"
+          },
+          "b0_zero_change_failures": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "Reporting only, not a change to b0_harm_before_rollback: B0 runs in the harm denominator whose action failed (execution_error) with no route changed (partial_application False), e.g. first-router failure or policy-load failure. They are scored no harm because nothing was applied. Runs with unknown route state (partial_application None or absent, including older records) are not counted. Denominator: B0 runs with a harm reading"
+          }
+        },
+        "verifix": {
+          "n": 64,
+          "n_confirmatory": 0,
+          "excluded_untrusted": 64,
+          "excluded_missing_label": 0,
+          "false_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action not in trusted label; denom=trusted-label episodes"
+          },
+          "unsafe_action": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label episodes"
+          },
+          "unsafe_given_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label allow decisions"
+          },
+          "correct_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action in trusted label"
+          },
+          "correct_blocked": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: block AND action in trusted label"
+          },
+          "unnecessary_escalation": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: escalate AND action already in trusted label"
+          },
+          "test_cost_seconds": {
+            "n": 64,
+            "mean": 15.795000000000002,
+            "p95": 18.5,
+            "ci95": [
+              14.103985730397287,
+              17.486014269602716
+            ]
+          },
+          "decision_time_seconds": {
+            "n": 54,
+            "mean": 0.583246725888953,
+            "p95": 0.7189044972961707,
+            "ci95": [
+              0.5580444840468775,
+              0.6084489677310285
+            ]
+          },
+          "time_to_correct_recovery_seconds": {
+            "n": 3,
+            "mean": 10.675517999999999,
+            "p95": 16.703979099999998,
+            "ci95": [
+              -4.506090502523417,
+              25.857126502523414
+            ]
+          },
+          "episode_seconds": {
+            "n": 64,
+            "mean": 87.64945446874998,
+            "p95": 101.40618619999996,
+            "ci95": [
+              51.333432884786134,
+              123.96547605271383
+            ]
+          },
+          "b0_harm_before_rollback": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 T1 worse after execute, before path restore. Denominator: B0 runs with a harm reading. Excludes actions refused before any change; includes actions that failed while being applied"
+          },
+          "b0_refused_actions": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 action refused by the controller before any change; harm not measurable, not counted as no harm. Denominator: B0 runs with a harm reading plus refused actions; runs with no B0 measurement are in neither rate"
+          },
+          "b0_zero_change_failures": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "Reporting only, not a change to b0_harm_before_rollback: B0 runs in the harm denominator whose action failed (execution_error) with no route changed (partial_application False), e.g. first-router failure or policy-load failure. They are scored no harm because nothing was applied. Runs with unknown route state (partial_application None or absent, including older records) are not counted. Denominator: B0 runs with a harm reading"
+          }
+        },
+        "B6": {
+          "n": 64,
+          "n_confirmatory": 0,
+          "excluded_untrusted": 64,
+          "excluded_missing_label": 0,
+          "false_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action not in trusted label; denom=trusted-label episodes"
+          },
+          "unsafe_action": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label episodes"
+          },
+          "unsafe_given_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label allow decisions"
+          },
+          "correct_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action in trusted label"
+          },
+          "correct_blocked": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: block AND action in trusted label"
+          },
+          "unnecessary_escalation": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: escalate AND action already in trusted label"
+          },
+          "test_cost_seconds": {
+            "n": 64,
+            "mean": 19.301562500000014,
+            "p95": 22.46,
+            "ci95": [
+              17.373513024777388,
+              21.22961197522264
+            ]
+          },
+          "decision_time_seconds": {
+            "n": 54,
+            "mean": 0.583246725888953,
+            "p95": 0.7189044972961707,
+            "ci95": [
+              0.5580444840468775,
+              0.6084489677310285
+            ]
+          },
+          "time_to_correct_recovery_seconds": {
+            "n": 3,
+            "mean": 10.675517999999999,
+            "p95": 16.703979099999998,
+            "ci95": [
+              -4.506090502523417,
+              25.857126502523414
+            ]
+          },
+          "episode_seconds": {
+            "n": 64,
+            "mean": 87.64945446874998,
+            "p95": 101.40618619999996,
+            "ci95": [
+              51.333432884786134,
+              123.96547605271383
+            ]
+          },
+          "b0_harm_before_rollback": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 T1 worse after execute, before path restore. Denominator: B0 runs with a harm reading. Excludes actions refused before any change; includes actions that failed while being applied"
+          },
+          "b0_refused_actions": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 action refused by the controller before any change; harm not measurable, not counted as no harm. Denominator: B0 runs with a harm reading plus refused actions; runs with no B0 measurement are in neither rate"
+          },
+          "b0_zero_change_failures": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "Reporting only, not a change to b0_harm_before_rollback: B0 runs in the harm denominator whose action failed (execution_error) with no route changed (partial_application False), e.g. first-router failure or policy-load failure. They are scored no harm because nothing was applied. Runs with unknown route state (partial_application None or absent, including older records) are not counted. Denominator: B0 runs with a harm reading"
+          }
+        }
+      },
+      "new_mechanisms": {
+        "B0": {
+          "n": 68,
+          "n_confirmatory": 0,
+          "excluded_untrusted": 68,
+          "excluded_missing_label": 0,
+          "false_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action not in trusted label; denom=trusted-label episodes"
+          },
+          "unsafe_action": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label episodes"
+          },
+          "unsafe_given_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label allow decisions"
+          },
+          "correct_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action in trusted label"
+          },
+          "correct_blocked": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: block AND action in trusted label"
+          },
+          "unnecessary_escalation": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: escalate AND action already in trusted label"
+          },
+          "test_cost_seconds": {
+            "n": 68,
+            "mean": 0.0,
+            "p95": 0.0,
+            "ci95": [
+              0.0,
+              0.0
+            ]
+          },
+          "decision_time_seconds": {
+            "n": 54,
+            "mean": 0.5801844592031018,
+            "p95": 0.7491118275480403,
+            "ci95": [
+              0.5354338972287934,
+              0.6249350211774102
+            ]
+          },
+          "time_to_correct_recovery_seconds": {
+            "n": 3,
+            "mean": 7.575980333333334,
+            "p95": 8.0112255,
+            "ci95": [
+              6.4789210903430225,
+              8.673039576323646
+            ]
+          },
+          "episode_seconds": {
+            "n": 68,
+            "mean": 60.56049789705883,
+            "p95": 89.13937385,
+            "ci95": [
+              56.69039208963653,
+              64.43060370448113
+            ]
+          },
+          "b0_harm_before_rollback": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 T1 worse after execute, before path restore. Denominator: B0 runs with a harm reading. Excludes actions refused before any change; includes actions that failed while being applied"
+          },
+          "b0_refused_actions": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 action refused by the controller before any change; harm not measurable, not counted as no harm. Denominator: B0 runs with a harm reading plus refused actions; runs with no B0 measurement are in neither rate"
+          },
+          "b0_zero_change_failures": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "Reporting only, not a change to b0_harm_before_rollback: B0 runs in the harm denominator whose action failed (execution_error) with no route changed (partial_application False), e.g. first-router failure or policy-load failure. They are scored no harm because nothing was applied. Runs with unknown route state (partial_application None or absent, including older records) are not counted. Denominator: B0 runs with a harm reading"
+          }
+        },
+        "B2": {
+          "n": 68,
+          "n_confirmatory": 0,
+          "excluded_untrusted": 68,
+          "excluded_missing_label": 0,
+          "false_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action not in trusted label; denom=trusted-label episodes"
+          },
+          "unsafe_action": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label episodes"
+          },
+          "unsafe_given_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label allow decisions"
+          },
+          "correct_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action in trusted label"
+          },
+          "correct_blocked": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: block AND action in trusted label"
+          },
+          "unnecessary_escalation": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: escalate AND action already in trusted label"
+          },
+          "test_cost_seconds": {
+            "n": 68,
+            "mean": 22.46000000000002,
+            "p95": 22.46,
+            "ci95": [
+              22.460000000000015,
+              22.460000000000022
+            ]
+          },
+          "decision_time_seconds": {
+            "n": 54,
+            "mean": 0.5801844592031018,
+            "p95": 0.7491118275480403,
+            "ci95": [
+              0.5354338972287934,
+              0.6249350211774102
+            ]
+          },
+          "time_to_correct_recovery_seconds": {
+            "n": 3,
+            "mean": 7.575980333333334,
+            "p95": 8.0112255,
+            "ci95": [
+              6.4789210903430225,
+              8.673039576323646
+            ]
+          },
+          "episode_seconds": {
+            "n": 68,
+            "mean": 60.56049789705883,
+            "p95": 89.13937385,
+            "ci95": [
+              56.69039208963653,
+              64.43060370448113
+            ]
+          },
+          "b0_harm_before_rollback": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 T1 worse after execute, before path restore. Denominator: B0 runs with a harm reading. Excludes actions refused before any change; includes actions that failed while being applied"
+          },
+          "b0_refused_actions": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 action refused by the controller before any change; harm not measurable, not counted as no harm. Denominator: B0 runs with a harm reading plus refused actions; runs with no B0 measurement are in neither rate"
+          },
+          "b0_zero_change_failures": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "Reporting only, not a change to b0_harm_before_rollback: B0 runs in the harm denominator whose action failed (execution_error) with no route changed (partial_application False), e.g. first-router failure or policy-load failure. They are scored no harm because nothing was applied. Runs with unknown route state (partial_application None or absent, including older records) are not counted. Denominator: B0 runs with a harm reading"
+          }
+        },
+        "verifix": {
+          "n": 68,
+          "n_confirmatory": 0,
+          "excluded_untrusted": 68,
+          "excluded_missing_label": 0,
+          "false_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action not in trusted label; denom=trusted-label episodes"
+          },
+          "unsafe_action": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label episodes"
+          },
+          "unsafe_given_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label allow decisions"
+          },
+          "correct_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action in trusted label"
+          },
+          "correct_blocked": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: block AND action in trusted label"
+          },
+          "unnecessary_escalation": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: escalate AND action already in trusted label"
+          },
+          "test_cost_seconds": {
+            "n": 68,
+            "mean": 17.77764705882354,
+            "p95": 22.46,
+            "ci95": [
+              15.607150506572374,
+              19.948143611074705
+            ]
+          },
+          "decision_time_seconds": {
+            "n": 54,
+            "mean": 0.5801844592031018,
+            "p95": 0.7491118275480403,
+            "ci95": [
+              0.5354338972287934,
+              0.6249350211774102
+            ]
+          },
+          "time_to_correct_recovery_seconds": {
+            "n": 3,
+            "mean": 7.575980333333334,
+            "p95": 8.0112255,
+            "ci95": [
+              6.4789210903430225,
+              8.673039576323646
+            ]
+          },
+          "episode_seconds": {
+            "n": 68,
+            "mean": 60.56049789705883,
+            "p95": 89.13937385,
+            "ci95": [
+              56.69039208963653,
+              64.43060370448113
+            ]
+          },
+          "b0_harm_before_rollback": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 T1 worse after execute, before path restore. Denominator: B0 runs with a harm reading. Excludes actions refused before any change; includes actions that failed while being applied"
+          },
+          "b0_refused_actions": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 action refused by the controller before any change; harm not measurable, not counted as no harm. Denominator: B0 runs with a harm reading plus refused actions; runs with no B0 measurement are in neither rate"
+          },
+          "b0_zero_change_failures": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "Reporting only, not a change to b0_harm_before_rollback: B0 runs in the harm denominator whose action failed (execution_error) with no route changed (partial_application False), e.g. first-router failure or policy-load failure. They are scored no harm because nothing was applied. Runs with unknown route state (partial_application None or absent, including older records) are not counted. Denominator: B0 runs with a harm reading"
+          }
+        },
+        "B6": {
+          "n": 68,
+          "n_confirmatory": 0,
+          "excluded_untrusted": 68,
+          "excluded_missing_label": 0,
+          "false_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action not in trusted label; denom=trusted-label episodes"
+          },
+          "unsafe_action": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label episodes"
+          },
+          "unsafe_given_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND wrong action; denom=trusted-label allow decisions"
+          },
+          "correct_allow": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: allow AND action in trusted label"
+          },
+          "correct_blocked": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: block AND action in trusted label"
+          },
+          "unnecessary_escalation": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "confirmatory: escalate AND action already in trusted label"
+          },
+          "test_cost_seconds": {
+            "n": 68,
+            "mean": 21.7994117647059,
+            "p95": 22.46,
+            "ci95": [
+              20.890741168621602,
+              22.7080823607902
+            ]
+          },
+          "decision_time_seconds": {
+            "n": 54,
+            "mean": 0.5801844592031018,
+            "p95": 0.7491118275480403,
+            "ci95": [
+              0.5354338972287934,
+              0.6249350211774102
+            ]
+          },
+          "time_to_correct_recovery_seconds": {
+            "n": 3,
+            "mean": 7.575980333333334,
+            "p95": 8.0112255,
+            "ci95": [
+              6.4789210903430225,
+              8.673039576323646
+            ]
+          },
+          "episode_seconds": {
+            "n": 68,
+            "mean": 60.56049789705883,
+            "p95": 89.13937385,
+            "ci95": [
+              56.69039208963653,
+              64.43060370448113
+            ]
+          },
+          "b0_harm_before_rollback": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 T1 worse after execute, before path restore. Denominator: B0 runs with a harm reading. Excludes actions refused before any change; includes actions that failed while being applied"
+          },
+          "b0_refused_actions": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "B0 action refused by the controller before any change; harm not measurable, not counted as no harm. Denominator: B0 runs with a harm reading plus refused actions; runs with no B0 measurement are in neither rate"
+          },
+          "b0_zero_change_failures": {
+            "count": 0,
+            "denominator": 0,
+            "rate": null,
+            "ci95": null,
+            "definition": "Reporting only, not a change to b0_harm_before_rollback: B0 runs in the harm denominator whose action failed (execution_error) with no route changed (partial_application False), e.g. first-router failure or policy-load failure. They are scored no harm because nothing was applied. Runs with unknown route state (partial_application None or absent, including older records) are not counted. Denominator: B0 runs with a harm reading"
+          }
+        }
+      },
+      "topology_2": {},
+      "stress": {}
+    },
+    "paired": {
+      "B0__B2": {
+        "n_configs": 300,
+        "unsafe_only_left": 0,
+        "unsafe_only_right": 0,
+        "discordant": 0,
+        "mcnemar_exact_p": null,
+        "confirmatory": false,
+        "note": "descriptive only: paired on scenario_key; includes untrusted labels; repeats collapse to any-unsafe; exact two-sided McNemar (not Holm family)"
+      },
+      "B0__B6": {
+        "n_configs": 300,
+        "unsafe_only_left": 0,
+        "unsafe_only_right": 0,
+        "discordant": 0,
+        "mcnemar_exact_p": null,
+        "confirmatory": false,
+        "note": "descriptive only: paired on scenario_key; includes untrusted labels; repeats collapse to any-unsafe; exact two-sided McNemar (not Holm family)"
+      },
+      "B0__verifix": {
+        "n_configs": 300,
+        "unsafe_only_left": 0,
+        "unsafe_only_right": 0,
+        "discordant": 0,
+        "mcnemar_exact_p": null,
+        "confirmatory": false,
+        "note": "descriptive only: paired on scenario_key; includes untrusted labels; repeats collapse to any-unsafe; exact two-sided McNemar (not Holm family)"
+      },
+      "B2__B6": {
+        "n_configs": 300,
+        "unsafe_only_left": 0,
+        "unsafe_only_right": 0,
+        "discordant": 0,
+        "mcnemar_exact_p": null,
+        "confirmatory": false,
+        "note": "descriptive only: paired on scenario_key; includes untrusted labels; repeats collapse to any-unsafe; exact two-sided McNemar (not Holm family)"
+      },
+      "B2__verifix": {
+        "n_configs": 300,
+        "unsafe_only_left": 0,
+        "unsafe_only_right": 0,
+        "discordant": 0,
+        "mcnemar_exact_p": null,
+        "confirmatory": false,
+        "note": "descriptive only: paired on scenario_key; includes untrusted labels; repeats collapse to any-unsafe; exact two-sided McNemar (not Holm family)"
+      },
+      "B6__verifix": {
+        "n_configs": 0,
+        "unsafe_only_left": 0,
+        "unsafe_only_right": 0,
+        "discordant": 0,
+        "mcnemar_exact_p": null,
+        "confirmatory": true,
+        "label_filter": "trusted_only",
+        "note": "confirmatory primary pair: trusted labels only; paired on scenario_key; repeats collapse to any-unsafe; exact two-sided McNemar with Holm among VeriFix\u2194B4/B5/B6 (protocol \u00a77, \u03b1=0.05)",
+        "mcnemar_holm_p": null,
+        "holm_family": "primary_verifix_vs_b4_b5_b6"
+      }
+    },
+    "repeats": {
+      "n_configs": 300,
+      "n_episodes": 300,
+      "max_repeats": 1,
+      "configs_with_repeats": 0
+    },
+    "clustered": {
+      "B0": {
+        "n_configs": 300,
+        "n_confirmatory_configs": 0,
+        "excluded_untrusted": 300,
+        "excluded_missing_label": 0,
+        "false_allow_config_mean": null,
+        "unsafe_action_config_mean": null
+      },
+      "B2": {
+        "n_configs": 300,
+        "n_confirmatory_configs": 0,
+        "excluded_untrusted": 300,
+        "excluded_missing_label": 0,
+        "false_allow_config_mean": null,
+        "unsafe_action_config_mean": null
+      },
+      "verifix": {
+        "n_configs": 300,
+        "n_confirmatory_configs": 0,
+        "excluded_untrusted": 300,
+        "excluded_missing_label": 0,
+        "false_allow_config_mean": null,
+        "unsafe_action_config_mean": null
+      },
+      "B6": {
+        "n_configs": 300,
+        "n_confirmatory_configs": 0,
+        "excluded_untrusted": 300,
+        "excluded_missing_label": 0,
+        "false_allow_config_mean": null,
+        "unsafe_action_config_mean": null
+      }
+    },
+    "errors": [],
+    "methods": [
+      "B0",
+      "B2",
+      "B6",
+      "verifix"
+    ],
+    "scored": 300
+  }
+}

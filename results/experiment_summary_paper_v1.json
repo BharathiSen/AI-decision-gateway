@@ -1,0 +1,554 @@
+{
+  "count": 300,
+  "paired": true,
+  "budget_seconds": 8.0,
+  "permitted_actions": [
+    "REROUTE",
+    "DO_NOTHING",
+    "ESCALATE"
+  ],
+  "methods": {
+    "B0": {
+      "false_allow": 0,
+      "total": 300,
+      "false_allow_rate": 0.0
+    },
+    "B1": {
+      "false_allow": 0,
+      "total": 300,
+      "false_allow_rate": 0.0
+    },
+    "B2": {
+      "false_allow": 0,
+      "total": 300,
+      "false_allow_rate": 0.0
+    },
+    "B3": {
+      "false_allow": 0,
+      "total": 300,
+      "false_allow_rate": 0.0
+    },
+    "B4": {
+      "false_allow": 0,
+      "total": 300,
+      "false_allow_rate": 0.0
+    },
+    "B5": {
+      "false_allow": 0,
+      "total": 300,
+      "false_allow_rate": 0.0
+    },
+    "B6": {
+      "false_allow": 0,
+      "total": 300,
+      "false_allow_rate": 0.0
+    },
+    "verifix": {
+      "false_allow": 0,
+      "total": 300,
+      "false_allow_rate": 0.0
+    },
+    "gate_full": {
+      "false_allow": 0,
+      "total": 300,
+      "false_allow_rate": 0.0
+    },
+    "gate_v0": {
+      "false_allow": 0,
+      "total": 300,
+      "false_allow_rate": 0.0
+    },
+    "gate_no_predictions": {
+      "false_allow": 0,
+      "total": 300,
+      "false_allow_rate": 0.0
+    },
+    "gate_no_discrimination": {
+      "false_allow": 0,
+      "total": 300,
+      "false_allow_rate": 0.0
+    },
+    "gate_no_grader": {
+      "false_allow": 0,
+      "total": 300,
+      "false_allow_rate": 0.0
+    }
+  },
+  "recovery": {
+    "recorded": 300,
+    "attempted": 55,
+    "succeeded": 29
+  },
+  "research_grade": true,
+  "paper_primary_arms": [
+    "verifix",
+    "B6",
+    "B2",
+    "B0"
+  ],
+  "paper_primary": {
+    "verifix": {
+      "n": 300,
+      "unsafe_allow": {
+        "rate": 0.03333333333333333,
+        "count": 10,
+        "denom": 300,
+        "ci95": [
+          0.018204749873650852,
+          0.0602624514575691
+        ]
+      },
+      "false_allow": {
+        "rate": 0.03333333333333333,
+        "count": 10,
+        "denom": 300,
+        "ci95": [
+          0.018204749873650852,
+          0.0602624514575691
+        ]
+      },
+      "correct_allow": {
+        "rate": 0.3815789473684211,
+        "count": 58,
+        "denom": 152,
+        "ci95": [
+          0.3081731464856329,
+          0.46082306505223636
+        ]
+      },
+      "unnecessary_escalation": {
+        "rate": 0.19078947368421054,
+        "count": 29,
+        "denom": 152,
+        "ci95": [
+          0.13625154529439665,
+          0.26057189594337304
+        ]
+      },
+      "escalate_rate_raw": 0.43,
+      "allow_rate_raw": 0.22666666666666666,
+      "block_rate_raw": 0.3433333333333333,
+      "test_cost_seconds_mean": 16.826133333333342,
+      "mean_tests_run": 6.98,
+      "recovery_seconds_mean": 7.739599518518518,
+      "label": "descriptive_measured_labels_untrusted",
+      "note": "Confirmatory rates unavailable: results/ground_truth.json has no trusted=true scenarios (label_trust False for all). score_arm blanks GT flags when untrusted. These rates apply the measured expected_actions formula descriptively over all scored episodes; they are NOT confirmatory.",
+      "n_correct_proposal": 152
+    },
+    "B6": {
+      "n": 300,
+      "unsafe_allow": {
+        "rate": 0.03333333333333333,
+        "count": 10,
+        "denom": 300,
+        "ci95": [
+          0.018204749873650852,
+          0.0602624514575691
+        ]
+      },
+      "false_allow": {
+        "rate": 0.03333333333333333,
+        "count": 10,
+        "denom": 300,
+        "ci95": [
+          0.018204749873650852,
+          0.0602624514575691
+        ]
+      },
+      "correct_allow": {
+        "rate": 0.48366013071895425,
+        "count": 74,
+        "denom": 153,
+        "ci95": [
+          0.40584912416819274,
+          0.5622715785025274
+        ]
+      },
+      "unnecessary_escalation": {
+        "rate": 0.5163398692810458,
+        "count": 79,
+        "denom": 153,
+        "ci95": [
+          0.4377284214974727,
+          0.5941508758318074
+        ]
+      },
+      "escalate_rate_raw": 0.7133333333333334,
+      "allow_rate_raw": 0.28,
+      "block_rate_raw": 0.006666666666666667,
+      "test_cost_seconds_mean": 19.68993333333336,
+      "mean_tests_run": 7.89,
+      "recovery_seconds_mean": 7.739599518518518,
+      "label": "descriptive_measured_labels_untrusted",
+      "note": "Confirmatory rates unavailable: results/ground_truth.json has no trusted=true scenarios (label_trust False for all). score_arm blanks GT flags when untrusted. These rates apply the measured expected_actions formula descriptively over all scored episodes; they are NOT confirmatory.",
+      "n_correct_proposal": 153
+    },
+    "B2": {
+      "n": 300,
+      "unsafe_allow": {
+        "rate": 0.38333333333333336,
+        "count": 115,
+        "denom": 300,
+        "ci95": [
+          0.33011889302772734,
+          0.43949790730507765
+        ]
+      },
+      "false_allow": {
+        "rate": 0.38333333333333336,
+        "count": 115,
+        "denom": 300,
+        "ci95": [
+          0.33011889302772734,
+          0.43949790730507765
+        ]
+      },
+      "correct_allow": {
+        "rate": 1.0,
+        "count": 185,
+        "denom": 185,
+        "ci95": [
+          0.9796570247233661,
+          1.0
+        ]
+      },
+      "unnecessary_escalation": {
+        "rate": 0.0,
+        "count": 0,
+        "denom": 185,
+        "ci95": [
+          0.0,
+          0.02034297527663396
+        ]
+      },
+      "escalate_rate_raw": 0.0,
+      "allow_rate_raw": 1.0,
+      "block_rate_raw": 0.0,
+      "test_cost_seconds_mean": 22.46000000000003,
+      "mean_tests_run": 9.0,
+      "recovery_seconds_mean": 7.739599518518518,
+      "label": "descriptive_measured_labels_untrusted",
+      "note": "Confirmatory rates unavailable: results/ground_truth.json has no trusted=true scenarios (label_trust False for all). score_arm blanks GT flags when untrusted. These rates apply the measured expected_actions formula descriptively over all scored episodes; they are NOT confirmatory.",
+      "n_correct_proposal": 185
+    },
+    "B0": {
+      "n": 300,
+      "unsafe_allow": {
+        "rate": 0.3333333333333333,
+        "count": 100,
+        "denom": 300,
+        "ci95": [
+          0.2823925597902556,
+          0.3884885835423229
+        ]
+      },
+      "false_allow": {
+        "rate": 0.3333333333333333,
+        "count": 100,
+        "denom": 300,
+        "ci95": [
+          0.2823925597902556,
+          0.3884885835423229
+        ]
+      },
+      "correct_allow": {
+        "rate": 1.0,
+        "count": 152,
+        "denom": 152,
+        "ci95": [
+          0.9753493290623299,
+          1.0
+        ]
+      },
+      "unnecessary_escalation": {
+        "rate": 0.0,
+        "count": 0,
+        "denom": 152,
+        "ci95": [
+          0.0,
+          0.024650670937670042
+        ]
+      },
+      "escalate_rate_raw": 0.0,
+      "allow_rate_raw": 1.0,
+      "block_rate_raw": 0.0,
+      "test_cost_seconds_mean": 0.0,
+      "mean_tests_run": 0.0,
+      "recovery_seconds_mean": 7.739599518518518,
+      "label": "descriptive_measured_labels_untrusted",
+      "note": "Confirmatory rates unavailable: results/ground_truth.json has no trusted=true scenarios (label_trust False for all). score_arm blanks GT flags when untrusted. These rates apply the measured expected_actions formula descriptively over all scored episodes; they are NOT confirmatory.",
+      "n_correct_proposal": 152
+    }
+  },
+  "full_battery": "B2",
+  "paper_held_out": {
+    "verifix": {
+      "n": 68,
+      "unsafe_allow": {
+        "rate": 0.029411764705882353,
+        "count": 2,
+        "denom": 68,
+        "ci95": [
+          0.008103009605045342,
+          0.10104823424253043
+        ]
+      },
+      "false_allow": {
+        "rate": 0.029411764705882353,
+        "count": 2,
+        "denom": 68,
+        "ci95": [
+          0.008103009605045342,
+          0.10104823424253043
+        ]
+      },
+      "correct_allow": {
+        "rate": 0.7352941176470589,
+        "count": 25,
+        "denom": 34,
+        "ci95": [
+          0.5688253783710155,
+          0.8539897245844621
+        ]
+      },
+      "unnecessary_escalation": {
+        "rate": 0.058823529411764705,
+        "count": 2,
+        "denom": 34,
+        "ci95": [
+          0.016282313063842452,
+          0.1909393688946371
+        ]
+      },
+      "escalate_rate_raw": 0.4264705882352941,
+      "allow_rate_raw": 0.39705882352941174,
+      "block_rate_raw": 0.17647058823529413,
+      "test_cost_seconds_mean": 17.77764705882354,
+      "mean_tests_run": 7.132352941176471,
+      "recovery_seconds_mean": 7.575980333333334,
+      "label": "descriptive_measured_labels_untrusted",
+      "note": "Confirmatory rates unavailable: results/ground_truth.json has no trusted=true scenarios (label_trust False for all). score_arm blanks GT flags when untrusted. These rates apply the measured expected_actions formula descriptively over all scored episodes; they are NOT confirmatory.",
+      "n_correct_proposal": 34
+    },
+    "B6": {
+      "n": 68,
+      "unsafe_allow": {
+        "rate": 0.029411764705882353,
+        "count": 2,
+        "denom": 68,
+        "ci95": [
+          0.008103009605045342,
+          0.10104823424253043
+        ]
+      },
+      "false_allow": {
+        "rate": 0.029411764705882353,
+        "count": 2,
+        "denom": 68,
+        "ci95": [
+          0.008103009605045342,
+          0.10104823424253043
+        ]
+      },
+      "correct_allow": {
+        "rate": 0.75,
+        "count": 33,
+        "denom": 44,
+        "ci95": [
+          0.6055915019158504,
+          0.8542593391931426
+        ]
+      },
+      "unnecessary_escalation": {
+        "rate": 0.25,
+        "count": 11,
+        "denom": 44,
+        "ci95": [
+          0.1457406608068574,
+          0.39440849808414946
+        ]
+      },
+      "escalate_rate_raw": 0.4852941176470588,
+      "allow_rate_raw": 0.5147058823529411,
+      "block_rate_raw": 0.0,
+      "test_cost_seconds_mean": 21.7994117647059,
+      "mean_tests_run": 8.735294117647058,
+      "recovery_seconds_mean": 7.575980333333334,
+      "label": "descriptive_measured_labels_untrusted",
+      "note": "Confirmatory rates unavailable: results/ground_truth.json has no trusted=true scenarios (label_trust False for all). score_arm blanks GT flags when untrusted. These rates apply the measured expected_actions formula descriptively over all scored episodes; they are NOT confirmatory.",
+      "n_correct_proposal": 44
+    },
+    "B2": {
+      "n": 68,
+      "unsafe_allow": {
+        "rate": 0.35294117647058826,
+        "count": 24,
+        "denom": 68,
+        "ci95": [
+          0.2500181058015448,
+          0.4715916579008227
+        ]
+      },
+      "false_allow": {
+        "rate": 0.35294117647058826,
+        "count": 24,
+        "denom": 68,
+        "ci95": [
+          0.2500181058015448,
+          0.4715916579008227
+        ]
+      },
+      "correct_allow": {
+        "rate": 1.0,
+        "count": 44,
+        "denom": 44,
+        "ci95": [
+          0.9197016822179859,
+          0.9999999999999999
+        ]
+      },
+      "unnecessary_escalation": {
+        "rate": 0.0,
+        "count": 0,
+        "denom": 44,
+        "ci95": [
+          6.938893903907228e-18,
+          0.08029831778201396
+        ]
+      },
+      "escalate_rate_raw": 0.0,
+      "allow_rate_raw": 1.0,
+      "block_rate_raw": 0.0,
+      "test_cost_seconds_mean": 22.46000000000002,
+      "mean_tests_run": 9.0,
+      "recovery_seconds_mean": 7.575980333333334,
+      "label": "descriptive_measured_labels_untrusted",
+      "note": "Confirmatory rates unavailable: results/ground_truth.json has no trusted=true scenarios (label_trust False for all). score_arm blanks GT flags when untrusted. These rates apply the measured expected_actions formula descriptively over all scored episodes; they are NOT confirmatory.",
+      "n_correct_proposal": 44
+    },
+    "B0": {
+      "n": 68,
+      "unsafe_allow": {
+        "rate": 0.29411764705882354,
+        "count": 20,
+        "denom": 68,
+        "ci95": [
+          0.19918862654604713,
+          0.41106504263726723
+        ]
+      },
+      "false_allow": {
+        "rate": 0.29411764705882354,
+        "count": 20,
+        "denom": 68,
+        "ci95": [
+          0.19918862654604713,
+          0.41106504263726723
+        ]
+      },
+      "correct_allow": {
+        "rate": 1.0,
+        "count": 34,
+        "denom": 34,
+        "ci95": [
+          0.8984820937803899,
+          1.0
+        ]
+      },
+      "unnecessary_escalation": {
+        "rate": 0.0,
+        "count": 0,
+        "denom": 34,
+        "ci95": [
+          0.0,
+          0.10151790621961015
+        ]
+      },
+      "escalate_rate_raw": 0.0,
+      "allow_rate_raw": 1.0,
+      "block_rate_raw": 0.0,
+      "test_cost_seconds_mean": 0.0,
+      "mean_tests_run": 0.0,
+      "recovery_seconds_mean": 7.575980333333334,
+      "label": "descriptive_measured_labels_untrusted",
+      "note": "Confirmatory rates unavailable: results/ground_truth.json has no trusted=true scenarios (label_trust False for all). score_arm blanks GT flags when untrusted. These rates apply the measured expected_actions formula descriptively over all scored episodes; they are NOT confirmatory.",
+      "n_correct_proposal": 34
+    }
+  },
+  "paper_mcnemar_verifix_vs_b6": {
+    "n_episodes": 300,
+    "n_configs": 300,
+    "unsafe_only_left": 3,
+    "unsafe_only_right": 3,
+    "discordant": 6,
+    "mcnemar_exact_p": 1.0,
+    "confirmatory": false,
+    "label_filter": "all_labels_descriptive_measured",
+    "pair": "B6__verifix",
+    "note": "Descriptive McNemar on unsafe_allow using measured expected_actions from ground_truth.json; labels remain untrusted (not Holm-confirmatory)."
+  },
+  "paper_stage_g": "/mnt/c/Users/Admin/Projects/AI-decision-gateway/results/paper/paper_v1_stage_g.json",
+  "paper_label_caveat": "Confirmatory rates unavailable: results/ground_truth.json has no trusted=true scenarios (label_trust False for all). score_arm blanks GT flags when untrusted. These rates apply the measured expected_actions formula descriptively over all scored episodes; they are NOT confirmatory.",
+  "paper_mcnemar_verifix_vs_b6_confirmatory": {
+    "confirmatory": true,
+    "n_configs": 0,
+    "mcnemar_exact_p": null,
+    "mcnemar_holm_p": null,
+    "label_filter": "trusted_only",
+    "note": "No confirmatory McNemar: all ground_truth labels are untrusted."
+  },
+  "paper_confirmatory_blocked": {
+    "reason": "All scenarios in results/ground_truth.json are untrusted (no trusted flag; label_trust returns False). metrics.py confirmatory buckets require label_trusted=True, so unsafe/correct denoms are null and confirmatory McNemar B6__verifix has n_configs=0.",
+    "label_provenance": {
+      "source": "results/ground_truth.json",
+      "sha256": "b19e33d2a09d01e498c94d452f28206c148034662b08489254c3e7f2f558e434",
+      "generated_at": "2026-10-28T15:20:40.629864+00:00",
+      "noise_id": "N0",
+      "seed": 42,
+      "scenarios": 23,
+      "rule": "DO_NOTHING alone if traffic is fine unchanged; else each remediation that recovered; else ESCALATE",
+      "action_space": [
+        "REROUTE",
+        "DO_NOTHING",
+        "ESCALATE"
+      ],
+      "trusted_scenarios": [],
+      "untrusted_scenarios": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5",
+        "F1",
+        "F10",
+        "F11",
+        "F12",
+        "F2",
+        "F3",
+        "F4",
+        "F5",
+        "F6",
+        "F7",
+        "F8",
+        "F9",
+        "H0",
+        "U1",
+        "U2",
+        "U3",
+        "U4",
+        "U5"
+      ]
+    },
+    "n_trusted_scenarios": 0,
+    "n_untrusted_scenarios": 23
+  },
+  "paper_proposition_test_aware_vs_cause_aware": {
+    "verifix_test_cost_seconds_mean": 16.826133333333342,
+    "B6_test_cost_seconds_mean": 19.68993333333336,
+    "savings_seconds_mean": 2.863800000000019,
+    "verifix_mean_tests": 6.98,
+    "B6_mean_tests": 7.89,
+    "savings_tests_mean": 0.9099999999999993,
+    "verifix_not_more_tests_than_b6": true
+  }
+}

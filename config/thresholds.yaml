@@ -1,23 +1,89 @@
 version: 2
-# Research grading thresholds (protocol v1 §3, §8).
-#
-# accepted_by_noise_level holds ONLY levels written by
-#   calibrate_healthy.py --write-thresholds
-# after ready_to_write accepted them. Each entry keeps the acceptance evidence
-# it was written with ({thresholds, acceptance}); bench/outcomes.py re-checks
-# that evidence with the same ready_to_write contract before grading.
-# A level that is absent or fails the check is unavailable: research grading
-# raises ThresholdsUnavailable (fail closed). There is no fallback.
-#
-# The former by_noise_level values (2026-10-27 calibration) were withdrawn on
-# 2026-11-06 after VM evidence and are no longer research configuration.
-# Historical record (unchanged): results/calibration_report.json.
-# Offline self-checks use bench/test_thresholds.yaml (test-only).
-accepted_by_noise_level: {}
-
-# Fixed protocol policy, not a fitted number and not a floor. Calibration
-# copies it into each proposed level. TCP must succeed at every noise level
-# (including N2 with background traffic): a TCP connect failure is a fault signal.
+accepted_by_noise_level:
+  N0:
+    thresholds:
+      T1_e2e_ping:
+        max_loss_percent: 10.0
+        max_latency_ms: 47.57775
+      T2_hop_ping:
+        max_loss_percent: 10.0
+        max_latency_ms: 12.32
+      T8_tcp_vs_ping:
+        tcp_must_succeed: true
+      T10_speed:
+        min_mbit: 8.262
+    acceptance:
+      noise_id: N0
+      full_battery: true
+      calibration_runs: 200
+      eval_runs: 50
+      used_evaluation_faults: false
+      episode_aligned_battery: true
+      eval_error_inclusive_false_alarm_rate: 0.0
+      false_alarm_rate_target: 0.05
+      first_try_t10_completeness: 1.0
+      first_try_t10_target: 0.95
+      report_sha256: 1995113126a1c94df4f74e51ae5616ef329c68c5f3292997c8b1b413599f9544
+      samples_sha256: 108de0f29e398b265a3d0e92985a118f6d7eb95b845c6dfc837c8d63e9a3b376
+      report_path: /mnt/c/Users/Admin/Projects/AI-decision-gateway/results/calibration/wsl-all.json
+      samples_path: /mnt/c/Users/Admin/Projects/AI-decision-gateway/results/calibration_samples_episode.jsonl
+    acceptance_sha256: 58ccdfbd290753190694079d013cd6df1ad7dff80b7fb52463aa12dae5e95a51
+  N1:
+    thresholds:
+      T1_e2e_ping:
+        max_loss_percent: 10.0
+        max_latency_ms: 70.12775
+      T2_hop_ping:
+        max_loss_percent: 10.0
+        max_latency_ms: 23.375000000000004
+      T8_tcp_vs_ping:
+        tcp_must_succeed: true
+      T10_speed:
+        min_mbit: 6.615
+    acceptance:
+      noise_id: N1
+      full_battery: true
+      calibration_runs: 200
+      eval_runs: 50
+      used_evaluation_faults: false
+      episode_aligned_battery: true
+      eval_error_inclusive_false_alarm_rate: 0.0
+      false_alarm_rate_target: 0.05
+      first_try_t10_completeness: 1.0
+      first_try_t10_target: 0.95
+      report_sha256: 1995113126a1c94df4f74e51ae5616ef329c68c5f3292997c8b1b413599f9544
+      samples_sha256: 108de0f29e398b265a3d0e92985a118f6d7eb95b845c6dfc837c8d63e9a3b376
+      report_path: /mnt/c/Users/Admin/Projects/AI-decision-gateway/results/calibration/wsl-all.json
+      samples_path: /mnt/c/Users/Admin/Projects/AI-decision-gateway/results/calibration_samples_episode.jsonl
+    acceptance_sha256: c2c782dd7fa28565d682303056aedafa9aff8021525f964ea1cee55de9a42821
+  N2:
+    thresholds:
+      T1_e2e_ping:
+        max_loss_percent: 10.0
+        max_latency_ms: 160.05
+      T2_hop_ping:
+        max_loss_percent: 10.0
+        max_latency_ms: 68.31
+      T8_tcp_vs_ping:
+        tcp_must_succeed: true
+      T10_speed:
+        min_mbit: 4.059
+    acceptance:
+      noise_id: N2
+      full_battery: true
+      calibration_runs: 200
+      eval_runs: 50
+      used_evaluation_faults: false
+      episode_aligned_battery: true
+      eval_error_inclusive_false_alarm_rate: 0.0
+      false_alarm_rate_target: 0.05
+      first_try_t10_completeness: 1.0
+      first_try_t10_target: 0.95
+      report_sha256: 1995113126a1c94df4f74e51ae5616ef329c68c5f3292997c8b1b413599f9544
+      samples_sha256: 108de0f29e398b265a3d0e92985a118f6d7eb95b845c6dfc837c8d63e9a3b376
+      report_path: /mnt/c/Users/Admin/Projects/AI-decision-gateway/results/calibration/wsl-all.json
+      samples_path: /mnt/c/Users/Admin/Projects/AI-decision-gateway/results/calibration_samples_episode.jsonl
+    acceptance_sha256: f6871552b86ec364f9254a9e8cbf9679738e9cac2e0d32a446745d61df78928d
 policy_by_noise_level:
   N0:
     T8_tcp_vs_ping:
@@ -28,12 +94,9 @@ policy_by_noise_level:
   N2:
     T8_tcp_vs_ping:
       tcp_must_succeed: true
-
 calibration:
   healthy_runs_target: 200
   false_alarm_rate_target: 0.05
-  # Withdrawn report values must not grade. Accepted levels live only under
-  # accepted_by_noise_level after --write-thresholds.
   grading_from_report: false
   battery:
     ping_count: 10
@@ -61,5 +124,48 @@ calibration:
       calibration_runs: 200
       eval_runs: 50
       eval_false_alarm_rate: 0.0
+      fit_quantile: p95
+      threshold_notes: []
+  last_run:
+    N0:
+      calibration_runs: 200
+      eval_runs: 50
+      eval_false_alarm_rate: 0.0
+      eval_error_inclusive_false_alarm_rate: 0.0
+      write_decision_metric: eval_error_inclusive_false_alarm_rate
+      write_decision_false_alarm_rate: 0.0
+      first_try_t10_completeness: 1.0
+      t10_backfilled_runs: 0
+      checkpoint_skipped_lines: 0
+      episode_aligned_battery: true
+      full_battery: true
+      fit_quantile: p95
+      threshold_notes: []
+    N1:
+      calibration_runs: 200
+      eval_runs: 50
+      eval_false_alarm_rate: 0.0
+      eval_error_inclusive_false_alarm_rate: 0.0
+      write_decision_metric: eval_error_inclusive_false_alarm_rate
+      write_decision_false_alarm_rate: 0.0
+      first_try_t10_completeness: 1.0
+      t10_backfilled_runs: 0
+      checkpoint_skipped_lines: 0
+      episode_aligned_battery: true
+      full_battery: true
+      fit_quantile: p95
+      threshold_notes: []
+    N2:
+      calibration_runs: 200
+      eval_runs: 50
+      eval_false_alarm_rate: 0.0
+      eval_error_inclusive_false_alarm_rate: 0.0
+      write_decision_metric: eval_error_inclusive_false_alarm_rate
+      write_decision_false_alarm_rate: 0.0
+      first_try_t10_completeness: 1.0
+      t10_backfilled_runs: 0
+      checkpoint_skipped_lines: 0
+      episode_aligned_battery: true
+      full_battery: true
       fit_quantile: p95
       threshold_notes: []

@@ -1,6 +1,10 @@
 version: 1
 
 agents:
+  - id: gemini_flash
+    provider: gemini
+    model: gemini-3.8-flash
+    temperature: 0.2
   - id: groq_gpt_oss_120b
     provider: groq
     model: openai/gpt-oss-120b

@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="380">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="360.0" y="24" text-anchor="middle" font-size="14">Topology 1 versus topology 2</text>
+<text x="18" y="165.0" font-size="11" transform="rotate(-90 18,165.0)">false-allow rate</text>
+<line x1="70" y1="40" x2="70" y2="290" stroke="#333"/>
+<line x1="70" y1="290" x2="696" y2="290" stroke="#333"/>
+<rect x="105.2" y="290.0" width="86.1" height="0.0" fill="#334155"/>
+<text x="148.2" y="306.0" text-anchor="middle" font-size="10" transform="rotate(32 148.2,306.0)">B0 diamond</text>
+<text x="148.2" y="286.0" text-anchor="middle" font-size="9">0</text>
+<rect x="261.7" y="290.0" width="86.1" height="0.0" fill="#334155"/>
+<text x="304.8" y="306.0" text-anchor="middle" font-size="10" transform="rotate(32 304.8,306.0)">B2 diamond</text>
+<text x="304.8" y="286.0" text-anchor="middle" font-size="9">0</text>
+<rect x="418.2" y="290.0" width="86.1" height="0.0" fill="#334155"/>
+<text x="461.2" y="306.0" text-anchor="middle" font-size="10" transform="rotate(32 461.2,306.0)">B6 diamond</text>
+<text x="461.2" y="286.0" text-anchor="middle" font-size="9">0</text>
+<rect x="574.7" y="290.0" width="86.1" height="0.0" fill="#334155"/>
+<text x="617.8" y="306.0" text-anchor="middle" font-size="10" transform="rotate(32 617.8,306.0)">verifix diamond</text>
+<text x="617.8" y="286.0" text-anchor="middle" font-size="9">0</text>
+</svg>

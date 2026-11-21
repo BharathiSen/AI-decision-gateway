@@ -1,9 +1,10 @@
 {
   "freeze_id": "paper_v1",
-  "generated_at": "2026-11-19T06:48:22.218635+00:00",
+  "generated_at": "2026-11-20T04:37:49.661454+00:00",
+  "live_host": "wsl:Ubuntu-22.04",
   "note": "Live host is WSL Ubuntu-22.04 (not VirtualBox). No further gate/baseline logic changes before or during the live paper batch.",
   "git": {
-    "head": "d0d26d1070db80fb9f1b1458393a3e387f9ea3cd",
+    "head": "1836c4082684523f2b5674b7999d908b7774951c",
     "tag": null
   },
   "seed": 1,
@@ -34,13 +35,13 @@
     "N2"
   ],
   "prompt_version": "v3",
-  "prompt_sha256": "6c67154ad8355bed4bb2c24348f8ef466dcfcb3c2507d5de3c133860cdb2176f",
-  "model_id": "openai/gpt-oss-120b",
-  "config_fingerprint": "d2c054130f94fd8907547dde3a4f3424c5250661e46cfe6c427b4607449ffd00",
+  "prompt_sha256": "232ba3face9813bf316b3c9e464a7308de949324dd582fa385a90964f233f212",
+  "model_id": "gemini-3.8-flash",
+  "config_fingerprint": "6a4e11fed82ee4d92abd45477376bf437f6169a00ef172fbdd4545a2e0a9075a",
   "artifacts": {
     "thresholds.yaml": {
       "path": "config/thresholds.yaml",
-      "sha256": "8e10e6c6f37d21c12b8a835c6ef9ab0bacb388ae3587e0d9b0142be89634e872"
+      "sha256": "afb6f8eb4808ed879f5b7e96de5eb54a0507ffae71045fff70d6302d0b350872"
     },
     "correct_fixes.yaml": {
       "path": "config/correct_fixes.yaml",
@@ -76,5 +77,6 @@
       }
     }
   },
-  "live_host": "wsl:Ubuntu-22.04"
+  "fallback_model": "openai/gpt-oss-20b",
+  "reasoning_effort": "none(omit)"
 }

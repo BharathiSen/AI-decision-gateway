@@ -2,9 +2,17 @@
 
 .vscode/settings.json
 
+.env
+.env.*
+!.env.example
+
 __pycache__/
 *.pyc
 
+*.log
+results/calibration/_*.sh
+results/calibration/_*.py
+results/acceptance/_smoke/
 
 results/episodes/*.json 
 
@@ -12,7 +20,6 @@ checklist.md
 
 
 /.cursor
-
 
 Engineering_notebook_private.md
 ENGINEERING_NOTEBOOK_PRIVATE.md

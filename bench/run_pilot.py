@@ -217,17 +217,30 @@ def paper_stratified_scenarios(episodes, seed=1):
                 }
             )
         for uid in held:
-            strata.append(
-                {
-                    "kind": "normal",
-                    "fault_id": uid,
-                    "compound_id": None,
-                    "noise_id": noise_id,
-                    "stress_mode": None,
-                    "ticket_text": None,
-                    "slice": "held_out",
-                }
-            )
+            if uid in inj._COMPOUNDS:
+                strata.append(
+                    {
+                        "kind": "stress",
+                        "fault_id": "H0",
+                        "compound_id": uid,
+                        "noise_id": noise_id,
+                        "stress_mode": "misleading_ticket",
+                        "ticket_text": STRESS_TICKET,
+                        "slice": "held_out",
+                    }
+                )
+            else:
+                strata.append(
+                    {
+                        "kind": "normal",
+                        "fault_id": uid,
+                        "compound_id": None,
+                        "noise_id": noise_id,
+                        "stress_mode": None,
+                        "ticket_text": None,
+                        "slice": "held_out",
+                    }
+                )
     rng = random.Random(seed)
     order = list(range(len(strata)))
     rng.shuffle(order)
@@ -285,6 +298,9 @@ def _provider():
 
 
 def resolve_agent(stub=False, require_model=False):
+    from agent.decision_agent import load_dotenv
+
+    load_dotenv()
     if stub and require_model:
         raise ValueError("cannot combine --stub with --require-model")
     if stub:

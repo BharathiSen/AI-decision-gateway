@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="380">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="360.0" y="24" text-anchor="middle" font-size="14">Ablation false allows</text>
+<text x="18" y="165.0" font-size="11" transform="rotate(-90 18,165.0)">false-allow rate</text>
+<line x1="70" y1="40" x2="70" y2="290" stroke="#333"/>
+<line x1="70" y1="290" x2="696" y2="290" stroke="#333"/>
+<rect x="210.8" y="290.0" width="344.3" height="0.0" fill="#334155"/>
+<text x="383.0" y="306.0" text-anchor="middle" font-size="10" transform="rotate(32 383.0,306.0)">verifix</text>
+<text x="383.0" y="286.0" text-anchor="middle" font-size="9">0</text>
+</svg>

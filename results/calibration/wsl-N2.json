@@ -1,0 +1,205 @@
+{
+  "version": 1,
+  "levels": {
+    "N2": {
+      "noise_id": "N2",
+      "calibration_runs": 200,
+      "eval_runs": 50,
+      "full_battery": true,
+      "seed": 0,
+      "used_evaluation_faults": false,
+      "battery_profile": {
+        "ping_count": 10,
+        "ping_interval": 0.2,
+        "speed_seconds": 3
+      },
+      "episode_aligned_battery": true,
+      "checkpoint_skipped_lines": 0,
+      "tests": {
+        "T1_e2e_ping": {
+          "n": 200,
+          "latency_ms": {
+            "n": 200,
+            "min": 140.0,
+            "p005": 140.0,
+            "p01": 140.0,
+            "p05": 140.0,
+            "p50": 141.0,
+            "p95": 145.5,
+            "p99": 146.01,
+            "p995": 147.0,
+            "max": 147.0
+          },
+          "packet_loss_percent": {
+            "n": 200,
+            "min": 0.0,
+            "p005": 0.0,
+            "p01": 0.0,
+            "p05": 0.0,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "p995": 0.0,
+            "max": 0.0
+          }
+        },
+        "T2_hop_ping": {
+          "n": 200,
+          "latency_ms": {
+            "n": 200,
+            "min": 60.1,
+            "p005": 60.1,
+            "p01": 60.1,
+            "p05": 60.1,
+            "p50": 60.150000000000006,
+            "p95": 62.1,
+            "p99": 62.8,
+            "p995": 62.80699999999999,
+            "max": 64.19999999999999
+          },
+          "packet_loss_percent": {
+            "n": 200,
+            "min": 0.0,
+            "p005": 0.0,
+            "p01": 0.0,
+            "p05": 0.0,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "p995": 0.0,
+            "max": 0.0
+          }
+        },
+        "T4_mtu": {
+          "n": 200,
+          "df_ping_ok": {
+            "True": 200
+          }
+        },
+        "T5_if_errors": {
+          "n": 200,
+          "errors": {
+            "n": 200,
+            "min": 0,
+            "p005": 0.0,
+            "p01": 0.0,
+            "p05": 0.0,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "p995": 0.0,
+            "max": 0
+          }
+        },
+        "T6_queue_stats": {
+          "n": 200,
+          "drops": {
+            "n": 200,
+            "min": 0,
+            "p005": 0.0,
+            "p01": 0.0,
+            "p05": 0.0,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "p995": 0.0,
+            "max": 0
+          }
+        },
+        "T7_route_check": {
+          "n": 200,
+          "active_path": {
+            "primary": 200
+          }
+        },
+        "T8_tcp_vs_ping": {
+          "n": 200,
+          "ping_ok": {
+            "True": 200
+          },
+          "tcp_ok": {
+            "True": 200
+          }
+        },
+        "T9_oneway_loss": {
+          "n": 200,
+          "a2b_loss": {
+            "n": 200,
+            "min": 0.0,
+            "p005": 0.0,
+            "p01": 0.0,
+            "p05": 0.0,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "p995": 0.0,
+            "max": 0.0
+          },
+          "b2a_loss": {
+            "n": 200,
+            "min": 0.0,
+            "p005": 0.0,
+            "p01": 0.0,
+            "p05": 0.0,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "p995": 0.0,
+            "max": 0.0
+          }
+        },
+        "T10_speed": {
+          "n": 200,
+          "mbit_per_sec": {
+            "n": 200,
+            "min": 4.51,
+            "p005": 4.51,
+            "p01": 4.51,
+            "p05": 4.51,
+            "p50": 4.51,
+            "p95": 7.76,
+            "p99": 7.770299999999999,
+            "p995": 7.8,
+            "max": 7.8
+          }
+        }
+      },
+      "proposed_thresholds": {
+        "T1_e2e_ping": {
+          "max_loss_percent": 10.0,
+          "max_latency_ms": 160.05
+        },
+        "T2_hop_ping": {
+          "max_loss_percent": 10.0,
+          "max_latency_ms": 68.31
+        },
+        "T8_tcp_vs_ping": {
+          "tcp_must_succeed": true
+        },
+        "T10_speed": {
+          "min_mbit": 4.059
+        }
+      },
+      "fit_quantile": "p95",
+      "fit_false_alarm_rate": 0.0,
+      "latency_average_runs": 0,
+      "failed_read_runs": 0,
+      "t10_backfilled_runs": 0,
+      "threshold_notes": [],
+      "eval_false_alarms": 0,
+      "eval_false_alarm_rate": 0.0,
+      "eval_no_reading_runs": 0,
+      "eval_no_reading_tests": {},
+      "fit_no_reading_runs": 0,
+      "eval_error_inclusive_alarms": 0,
+      "eval_error_inclusive_false_alarm_rate": 0.0,
+      "write_decision_metric": "eval_error_inclusive_false_alarm_rate",
+      "write_decision_false_alarm_rate": 0.0,
+      "first_try_t10_completeness": 1.0,
+      "first_try_t10_target": 0.95,
+      "eval_alarm_tests": {},
+      "eval_alarm_runs": [],
+      "false_alarm_rate_target": 0.05
+    }
+  }
+}

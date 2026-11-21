@@ -87,7 +87,8 @@ def write_paper_freeze(run_name="paper_v1", seed=1, episodes=300):
     manifest = {
         "freeze_id": run_name,
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "note": "No further gate/baseline logic changes before or during the live paper batch.",
+        "live_host": "wsl:Ubuntu-22.04",
+        "note": "Live host is WSL Ubuntu-22.04 (not VirtualBox). No further gate/baseline logic changes before or during the live paper batch.",
         "git": {
             "head": software_version(),
             "tag": None,
